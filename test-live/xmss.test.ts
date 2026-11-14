@@ -71,6 +71,7 @@ describeLive('XMSS', () => {
     const indices = [0, 1, 2, 29, 30, 31];
     const used: number[] = [];
     const store: XmssIndexStore = {
+      peek: () => 0,
       reserve() {
         used.push(indices[used.length]!);
         return used.at(-1)!;

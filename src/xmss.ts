@@ -8,7 +8,8 @@
 // for a different message lets anyone forge signatures under the key.
 // Pearl's library also returns an unverifiable signature at index 31 while
 // reporting success, because the reference code wipes the key before using
-// its last leaf; xmssSign refuses that index, leaving 31 signatures per key.
+// its last leaf; xmssSign refuses that index, leaving 31 signatures per key
+// (XMSS_MAX_SIGNATURES), at indices 0 to 30 (XMSS_LAST_INDEX).
 
 /**
  * XMSS signatures with Pearl's parameters: keys, signing, verification, and
@@ -33,8 +34,14 @@ export const XMSS_SECRET_KEY_LENGTH = 128;
 export const XMSS_MESSAGE_LENGTH = 32;
 /** Bytes in an XMSS signature. The first four are its index, big-endian. */
 export const XMSS_SIGNATURE_LENGTH = 2340;
-/** Indices 0 to 30 produce valid signatures; see the note at the top. */
+/** Signatures one key can make: one for each index from 0 to XMSS_LAST_INDEX. */
 export const XMSS_MAX_SIGNATURES = 31;
+/**
+ * The highest index that signs. The tree has a leaf for index 31 too, but
+ * Pearl's library returns a signature that does not verify there; see the
+ * note at the top.
+ */
+export const XMSS_LAST_INDEX = XMSS_MAX_SIGNATURES - 1;
 
 const N = 32;
 const PADDING_LEN = 32;
@@ -332,7 +339,7 @@ function keyPairWithTree(
 }
 
 /**
- * Sign a 32-byte message with the one-time leaf at msgUid (0 to 30). The
+ * Sign a 32-byte message with the one-time leaf at index, 0 to XMSS_LAST_INDEX (30). The
  * caller must make sure no index is ever used twice for the same key. A
  * secret key whose root does not belong to its seeds is refused, and the
  * signature is verified before it is returned.
@@ -341,13 +348,13 @@ function keyPairWithTree(
  * secret key that is not 128 bytes. Rebuilds the tree on every call;
  * createXmssSigner keeps it.
  */
-export function xmssSign(secretKey: Uint8Array, msgUid: number, message: Uint8Array): Uint8Array {
+export function xmssSign(secretKey: Uint8Array, index: number, message: Uint8Array): Uint8Array {
   checkLength(secretKey, XMSS_SECRET_KEY_LENGTH, 'XMSS secret key');
   const levels = buildTree(secretKey.subarray(0, N), secretKey.subarray(3 * N, 4 * N));
   if (!equalBytes(levels[TREE_HEIGHT]![0]!, secretKey.subarray(2 * N, 3 * N))) {
     throw new XmssError('XMSS_KEY_INVALID', 'XMSS secret key is inconsistent: its root does not match its seeds');
   }
-  const signature = signWithTree(secretKey, levels, msgUid, message);
+  const signature = signWithTree(secretKey, levels, index, message);
   if (!xmssVerify(secretKey.subarray(2 * N), message, signature)) {
     throw new XmssError('XMSS_SIGNATURE_INVALID', 'XMSS signature failed verification');
   }
@@ -357,25 +364,25 @@ export function xmssSign(secretKey: Uint8Array, msgUid: number, message: Uint8Ar
 function signWithTree(
   secretKey: Uint8Array,
   levels: Uint8Array[][],
-  msgUid: number,
+  index: number,
   message: Uint8Array,
 ): Uint8Array {
   checkLength(message, XMSS_MESSAGE_LENGTH, 'XMSS message');
-  if (!Number.isInteger(msgUid) || msgUid < 0 || msgUid >= XMSS_MAX_SIGNATURES) {
-    throw new RangeError(`XMSS index must be an integer from 0 to ${XMSS_MAX_SIGNATURES - 1}`);
+  if (!Number.isInteger(index) || index < 0 || index > XMSS_LAST_INDEX) {
+    throw new RangeError(`XMSS index must be an integer from 0 to ${XMSS_LAST_INDEX}`);
   }
   // Views, so no further copies of the secret halves are left behind.
   const skSeed = secretKey.subarray(0, N);
   const skPrf = secretKey.subarray(N, 2 * N);
   const root = secretKey.subarray(2 * N, 3 * N);
   const pubSeed = secretKey.subarray(3 * N, 4 * N);
-  const r = prf(skPrf, toBytes(msgUid, 32));
-  const mhash = hashMessage(r, root, msgUid, message);
+  const r = prf(skPrf, toBytes(index, 32));
+  const mhash = hashMessage(r, root, index, message);
   const otsAddr = newAddress(ADDR_TYPE_OTS);
   setTreeAddr(otsAddr, 0);
-  otsAddr[4] = msgUid;
+  otsAddr[4] = index;
   const wotsSig = wotsSign(mhash, skSeed, pubSeed, otsAddr);
-  return concat([toBytes(msgUid, INDEX_BYTES), r, ...wotsSig, ...authPath(levels, msgUid)]);
+  return concat([toBytes(index, INDEX_BYTES), r, ...wotsSig, ...authPath(levels, index)]);
 }
 
 /**
@@ -429,8 +436,14 @@ export function xmssVerify(publicKey: Uint8Array, message: Uint8Array, signature
  * a backup repeats the indices used since the backup was taken.
  */
 export interface XmssIndexStore {
-  /** Returns the next unused index for publicKey, having recorded it as used. May be asynchronous. */
+  /**
+   * Returns the next unused index for publicKey, having recorded it as used.
+   * May be asynchronous. Once XMSS_LAST_INDEX has been handed out it should
+   * throw and record nothing, as the stores here do.
+   */
   reserve(publicKey: Uint8Array): number | Promise<number>;
+  /** The index reserve would return next, without recording anything: how many signatures the key has made. */
+  peek(publicKey: Uint8Array): number | Promise<number>;
 }
 
 /** An XMSS key that signs, taking each one-time index from its store. */
@@ -442,6 +455,11 @@ export interface XmssSigner {
    * a time, in the order they were made.
    */
   sign(message: Uint8Array): Promise<Uint8Array>;
+  /**
+   * How many more signatures the key can make, from the store's count: 31
+   * for a new key, 0 once it is used up.
+   */
+  remaining(): Promise<number>;
   /**
    * Overwrites the signer's copy of the secret key with zeros; sign rejects
    * afterwards. The seeds passed to createXmssSigner belong to the caller and
@@ -494,9 +512,7 @@ export function createXmssSigner(
     if (!Number.isInteger(index) || index < 0) {
       throw new XmssError('XMSS_STORE_INVALID', `XMSS index store returned ${String(index)}`);
     }
-    if (index >= XMSS_MAX_SIGNATURES) {
-      throw new XmssError('XMSS_INDEX_EXHAUSTED', `this XMSS key has used all ${XMSS_MAX_SIGNATURES} of its signatures`);
-    }
+    if (index > XMSS_LAST_INDEX) throw exhausted();
     if (index <= lastIndex) {
       throw new XmssError('XMSS_INDEX_REUSE',
         `XMSS index store returned index ${index} after index ${lastIndex}; refusing to reuse a one-time index`,
@@ -536,11 +552,22 @@ export function createXmssSigner(
       queue = result.catch(() => undefined);
       return result;
     },
+    async remaining(): Promise<number> {
+      const used = await store.peek(Uint8Array.from(publicKey));
+      if (!Number.isInteger(used) || used < 0) {
+        throw new XmssError('XMSS_STORE_INVALID', `XMSS index store returned ${String(used)}`);
+      }
+      return Math.max(0, XMSS_MAX_SIGNATURES - used);
+    },
     destroy(): void {
       destroyed = true;
       secretKey.fill(0);
     },
   };
+}
+
+function exhausted(): XmssError {
+  return new XmssError('XMSS_INDEX_EXHAUSTED', `this XMSS key has used all ${XMSS_MAX_SIGNATURES} of its signatures`);
 }
 
 /**
@@ -555,8 +582,10 @@ export function createMemoryXmssIndexStore(): XmssIndexStore {
     reserve(publicKey: Uint8Array): number {
       const key = toHex(publicKey);
       const index = next.get(key) ?? 0;
+      if (index > XMSS_LAST_INDEX) throw exhausted();
       next.set(key, index + 1);
       return index;
     },
+    peek: (publicKey: Uint8Array): number => next.get(toHex(publicKey)) ?? 0,
   };
 }

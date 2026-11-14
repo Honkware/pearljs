@@ -24,7 +24,7 @@ describe('pearl-research-labs/pearl#111 mainnet spend', () => {
     const keyA = createXmssSigner(
       hexToBytes(recorded.seedA.privateSeed),
       hexToBytes(recorded.seedA.publicSeed),
-      { reserve: () => recorded.msgUid },
+      { reserve: () => recorded.msgUid, peek: () => 0 },
     );
     const keyB = xmssKeygen(hexToBytes(recorded.seedB.privateSeed), hexToBytes(recorded.seedB.publicSeed));
     const treeA = assembleScriptTree([xmssLeafScript(keyA.publicKey)]);

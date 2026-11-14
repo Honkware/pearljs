@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createXmssSigner, xmssVerify } from '../src/index.js';
-import { createFileXmssIndexStore } from '../src/xmss-file-store.js';
+import { createFileXmssIndexStore, readXmssIndexFile } from '../src/xmss-file-store.js';
 
 const keyA = new Uint8Array(64).fill(0xa1);
 const keyB = new Uint8Array(64).fill(0xb2);
@@ -35,6 +35,33 @@ describe('file-backed XMSS index store', () => {
     store.close();
   });
 
+  it('can be inspected through the store and, without the lock, from the file', () => {
+    const store = createFileXmssIndexStore(path, { create: true });
+    expect(store.peek()).toBe(0);
+    expect(readXmssIndexFile(path)).toEqual({ publicKey: null, next: 0, remaining: 31, locked: true });
+    store.reserve(keyA);
+    expect(store.peek(keyA)).toBe(1);
+    expect(() => store.peek(keyB)).toThrow('belongs to a different key');
+    expect(nextOnDisk()).toBe(1);
+    store.close();
+    expect(readXmssIndexFile(path)).toEqual({ publicKey: 'a1'.repeat(64), next: 1, remaining: 30, locked: false });
+    expect(() => store.peek()).toThrow('is closed');
+    expect(() => readXmssIndexFile(join(dir, 'missing'))).toThrow('does not exist');
+  });
+
+  it('stops at index 30 and writes nothing more', () => {
+    writeFileSync(path, `${JSON.stringify({ version: 1, publicKey: 'a1'.repeat(64), next: 30 })}\n`);
+    const store = createFileXmssIndexStore(path);
+    expect(store.reserve(keyA)).toBe(30);
+    expect(nextOnDisk()).toBe(31);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect(() => store.reserve(keyA)).toThrow('used all 31 of its signatures');
+    }
+    expect(nextOnDisk()).toBe(31);
+    expect(readXmssIndexFile(path).remaining).toBe(0);
+    store.close();
+  });
+
   it('continues after a restart instead of starting again', () => {
     const first = createFileXmssIndexStore(path, { create: true });
     first.reserve(keyA);
@@ -51,6 +78,7 @@ describe('file-backed XMSS index store', () => {
     const store = createFileXmssIndexStore(path, { create: true });
     // The process dies between reserving index 0 and signing with it.
     const dying = createXmssSigner(privateSeed, publicSeed, {
+      peek: () => 0,
       reserve(publicKey) {
         store.reserve(publicKey);
         throw new Error('power cut');

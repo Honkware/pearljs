@@ -72,7 +72,7 @@ describeLive('signer safeguards', () => {
   });
 
   it('refuses to sign a P2MR spend that forgot its change, before an XMSS index is used', async () => {
-    const store = { next: 0, reserve: () => store.next++ };
+    const store = { next: 0, reserve: () => store.next++, peek: () => store.next };
     const signer = createXmssSigner(randomBytes(XMSS_PRIVATE_SEED_LENGTH), randomBytes(XMSS_PUBLIC_SEED_LENGTH), store);
     const checksigTree = assembleScriptTree([checksigScript(account.derivePublicKey(0))]);
     const xmssTree = assembleScriptTree([xmssLeafScript(signer.publicKey)]);

@@ -135,6 +135,7 @@ describe('returned bytes are copies', () => {
     const seen: Uint8Array[] = [];
     const memory = createMemoryXmssIndexStore();
     const signer = createXmssSigner(new Uint8Array(64).fill(0x61), new Uint8Array(32).fill(0x62), {
+      peek: () => 0,
       reserve(publicKey) {
         seen.push(publicKey);
         const index = memory.reserve(publicKey);

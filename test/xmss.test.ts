@@ -2,7 +2,7 @@
 // must match byte for byte, since both sides are deterministic.
 
 import { describe, expect, it } from 'vitest';
-import { XMSS_MAX_SIGNATURES, xmssKeygen, xmssSign, xmssVerify } from '../src/index.js';
+import { XMSS_LAST_INDEX, XMSS_MAX_SIGNATURES, xmssKeygen, xmssSign, xmssVerify } from '../src/index.js';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
 import { bytesToHex, hexToBytes } from './vector-helpers.js';
 
@@ -42,6 +42,7 @@ describe('XMSS', () => {
     const broken = vectors.xmss.signatures.find((item) => item.msgUid === 31)!;
     expect(broken.valid).toBe(false);
     expect(XMSS_MAX_SIGNATURES).toBe(31);
+    expect(XMSS_LAST_INDEX).toBe(30);
     const key = keyVector(broken.key);
     expect(() => xmssSign(hexToBytes(key.secretKey), 31, hexToBytes(broken.message))).toThrow('0 to 30');
     expect(() => xmssSign(hexToBytes(key.secretKey), -1, hexToBytes(broken.message))).toThrow('0 to 30');

@@ -182,6 +182,7 @@ describe('fee guard of the raw-transaction signers', () => {
     let reserved = 0;
     const signer = createXmssSigner(new Uint8Array(64).fill(0x21), new Uint8Array(32).fill(0x22), {
       reserve: () => reserved++,
+      peek: () => 0,
     });
     const xmssTree = assembleScriptTree([xmssLeafScript(signer.publicKey)]);
     const script = p2mr({ merkleRoot: xmssTree.root }).output;

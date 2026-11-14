@@ -25,9 +25,9 @@
  * @module
  */
 
-import { closeSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { XMSS_PUBLIC_KEY_LENGTH } from './xmss.js';
+import { XMSS_LAST_INDEX, XMSS_MAX_SIGNATURES, XMSS_PUBLIC_KEY_LENGTH } from './xmss.js';
 import type { XmssIndexStore } from './xmss.js';
 import { toHex } from './internal/bytes.js';
 import { XmssError } from './errors.js';
@@ -45,8 +45,14 @@ export interface FileXmssIndexStoreOptions {
 }
 
 export interface FileXmssIndexStore extends XmssIndexStore {
-  /** Reserves the next index for the key this file belongs to; synchronous and durable. */
+  /**
+   * Reserves the next index for the key this file belongs to; synchronous and
+   * durable. Throws XMSS_INDEX_EXHAUSTED, writing nothing, once index 30 has
+   * been handed out.
+   */
   reserve(publicKey: Uint8Array): number;
+  /** The index reserve would return next. The key may be left out; given, it must be the file's. */
+  peek(publicKey?: Uint8Array): number;
   /** Releases the lock file. The store cannot be used afterwards. */
   close(): void;
 }
@@ -117,6 +123,39 @@ function readState(path: string): State {
  * create is not set, when it exists and create is set, and when it cannot be
  * parsed. reserve throws for a key other than the one the file belongs to.
  */
+/** What an XMSS index state file holds, as readXmssIndexFile reports it. */
+export interface XmssIndexFileState {
+  /** The key the file belongs to as 128 hex characters, or null before its first signature. */
+  publicKey: string | null;
+  /** The next unused index: how many signatures the key has made. */
+  next: number;
+  /** Signatures the key has left. */
+  remaining: number;
+  /** Whether a store holds the file's lock right now, or a process died holding it. */
+  locked: boolean;
+}
+
+/**
+ * Reads an XMSS index state file without locking or changing it, so it works
+ * while a signer has the file open. Throws XMSS_STORE_INVALID when the file is
+ * missing or damaged.
+ */
+export function readXmssIndexFile(path: string): XmssIndexFileState {
+  let state: State;
+  try {
+    state = readState(path);
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+    throw new XmssError('XMSS_STORE_INVALID', `XMSS index state file ${path} does not exist`);
+  }
+  return {
+    publicKey: state.publicKey,
+    next: state.next,
+    remaining: Math.max(0, XMSS_MAX_SIGNATURES - state.next),
+    locked: existsSync(`${path}.lock`),
+  };
+}
+
 export function createFileXmssIndexStore(path: string, options: FileXmssIndexStoreOptions = {}): FileXmssIndexStore {
   if (typeof path !== 'string' || path.length === 0) {
     throw new TypeError('XMSS index state file path must be a non-empty string');
@@ -175,17 +214,25 @@ export function createFileXmssIndexStore(path: string, options: FileXmssIndexSto
   }
   process.once('exit', release);
 
+  const checked = (publicKey: Uint8Array): string => {
+    if (!open) throw new XmssError('XMSS_STORE_INVALID', 'this XMSS index store is closed');
+    if (!(publicKey instanceof Uint8Array) || publicKey.length !== XMSS_PUBLIC_KEY_LENGTH) {
+      throw new Error(`XMSS public key must be ${XMSS_PUBLIC_KEY_LENGTH} bytes`);
+    }
+    const key = toHex(publicKey);
+    if (state.publicKey !== null && state.publicKey !== key) {
+      throw new XmssError('XMSS_STORE_INVALID', `XMSS index state file ${path} belongs to a different key`);
+    }
+    return key;
+  };
+
   return {
     reserve(publicKey: Uint8Array): number {
-      if (!open) throw new XmssError('XMSS_STORE_INVALID', 'this XMSS index store is closed');
-      if (!(publicKey instanceof Uint8Array) || publicKey.length !== XMSS_PUBLIC_KEY_LENGTH) {
-        throw new Error(`XMSS public key must be ${XMSS_PUBLIC_KEY_LENGTH} bytes`);
-      }
-      const key = toHex(publicKey);
-      if (state.publicKey !== null && state.publicKey !== key) {
-        throw new XmssError('XMSS_STORE_INVALID', `XMSS index state file ${path} belongs to a different key`);
-      }
+      const key = checked(publicKey);
       const index = state.next;
+      if (index > XMSS_LAST_INDEX) {
+        throw new XmssError('XMSS_INDEX_EXHAUSTED', `this XMSS key has used all ${XMSS_MAX_SIGNATURES} of its signatures`);
+      }
       const advanced: State = { version: STATE_VERSION, publicKey: key, next: index + 1 };
       const temporary = `${path}.tmp`;
       writeDurably(temporary, `${JSON.stringify(advanced)}\n`, 'w');
@@ -193,6 +240,11 @@ export function createFileXmssIndexStore(path: string, options: FileXmssIndexSto
       syncDirectory(path);
       state = advanced;
       return index;
+    },
+    peek(publicKey?: Uint8Array): number {
+      if (publicKey !== undefined) checked(publicKey);
+      else if (!open) throw new XmssError('XMSS_STORE_INVALID', 'this XMSS index store is closed');
+      return state.next;
     },
     close: release,
   };

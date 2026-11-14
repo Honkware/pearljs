@@ -26,6 +26,7 @@ function keyVector(name: string) {
 function fixedStore(index: number): XmssIndexStore & { calls: number } {
   return {
     calls: 0,
+    peek: () => 0,
     reserve() {
       this.calls += 1;
       return index;

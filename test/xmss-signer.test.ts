@@ -4,7 +4,7 @@
 // one process share what they have signed.
 
 import { describe, expect, it } from 'vitest';
-import { createMemoryXmssIndexStore, createXmssSigner, xmssKeygen, xmssSign, xmssVerify } from '../src/index.js';
+import { XMSS_LAST_INDEX, XmssError, createMemoryXmssIndexStore, createXmssSigner, xmssKeygen, xmssSign, xmssVerify } from '../src/index.js';
 import type { XmssIndexStore, XmssSigner } from '../src/index.js';
 import { bytesToHex } from './vector-helpers.js';
 
@@ -35,22 +35,40 @@ describe('XMSS signer indices', () => {
       expect(xmssVerify(signer.publicKey, message, signature)).toBe(true);
     }
     await expect(signer.sign(message)).rejects.toThrow('used all 31 of its signatures');
+    expect(await signer.remaining()).toBe(0);
+  });
+
+  it('counts the signatures a key has left from its store, and the store stops at the last index', async () => {
+    const store = createMemoryXmssIndexStore();
+    const signer = signerFor(12, store);
+    expect(await signer.remaining()).toBe(31);
+    await signer.sign(message);
+    await signer.sign(message);
+    expect(await signer.remaining()).toBe(29);
+    expect(store.peek(signer.publicKey)).toBe(2);
+    for (let index = 2; index <= XMSS_LAST_INDEX; index += 1) store.reserve(signer.publicKey);
+    expect(store.peek(signer.publicKey)).toBe(31);
+    // A refused reservation records nothing, so the count cannot run away.
+    expect(() => store.reserve(signer.publicKey)).toThrow(XmssError);
+    expect(() => store.reserve(signer.publicKey)).toThrow('used all 31 of its signatures');
+    expect(store.peek(signer.publicKey)).toBe(31);
+    expect(await signer.remaining()).toBe(0);
   });
 
   it('refuses once the key has used its 31 signatures', async () => {
-    const signer = signerFor(3, { reserve: () => 31 });
+    const signer = signerFor(3, { reserve: () => 31, peek: () => 0 });
     await expect(signer.sign(message)).rejects.toThrow('used all 31 of its signatures');
   });
 
   it('refuses an index the store did not reserve properly', async () => {
     for (const bad of [-1, 1.5, Number.NaN, '2', null, undefined, 2n]) {
-      const signer = signerFor(3, { reserve: () => bad as number });
+      const signer = signerFor(3, { reserve: () => bad as number, peek: () => 0 });
       await expect(signer.sign(message)).rejects.toThrow(`index store returned ${String(bad)}`);
     }
   });
 
   it('refuses a store that returns the same index twice', async () => {
-    const signer = signerFor(4, { reserve: () => 3 });
+    const signer = signerFor(4, { reserve: () => 3, peek: () => 0 });
     expect(indexOf(await signer.sign(message))).toBe(3);
     await expect(signer.sign(otherMessage)).rejects.toThrow('returned index 3 after index 3');
     // Not even for the message it already signed: the store is broken.
@@ -59,7 +77,7 @@ describe('XMSS signer indices', () => {
 
   it('refuses a store that goes backwards', async () => {
     const indices = [5, 2, 6];
-    const signer = signerFor(5, { reserve: () => indices.shift()! });
+    const signer = signerFor(5, { reserve: () => indices.shift()!, peek: () => 0 });
     expect(indexOf(await signer.sign(message))).toBe(5);
     await expect(signer.sign(otherMessage)).rejects.toThrow('returned index 2 after index 5');
     expect(indexOf(await signer.sign(otherMessage))).toBe(6);
@@ -68,6 +86,7 @@ describe('XMSS signer indices', () => {
   it('serializes concurrent sign calls over a store that reads, waits and writes', async () => {
     let next = 0;
     const racy: XmssIndexStore = {
+      peek: () => 0,
       async reserve() {
         const index = next;
         await new Promise((resolve) => setTimeout(resolve, 2));
@@ -85,6 +104,7 @@ describe('XMSS signer indices', () => {
   it('keeps the queue moving after a failed signature', async () => {
     let calls = 0;
     const flaky: XmssIndexStore = {
+      peek: () => 0,
       reserve() {
         calls += 1;
         if (calls === 1) throw new Error('disk full');
@@ -112,7 +132,7 @@ describe('XMSS signer indices', () => {
     await expect(second.sign(otherMessage)).rejects.toThrow('already signed a different message');
     // The same message at the same index is the same signature, which is harmless.
     const third = signerFor(9, createMemoryXmssIndexStore());
-    expect(bytesToHex(await third.sign(message))).toBe(bytesToHex(await signerFor(9, { reserve: () => 0 }).sign(message)));
+    expect(bytesToHex(await third.sign(message))).toBe(bytesToHex(await signerFor(9, { reserve: () => 0, peek: () => 0 }).sign(message)));
   });
 
   it('burns the index when the caller abandons a reserved signature', async () => {
