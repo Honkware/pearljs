@@ -1970,6 +1970,7 @@ func main() {
 	vectors.Leaves = leafBuilderVectors(account, internalPub)
 	vectors.Mempool = mempoolVectors()
 	vectors.Consensus = consensusVectors(nets)
+
 	vectors.CoinSelection = coinSelectionVectors()
 
 	data, err := json.MarshalIndent(vectors, "", "  ")
@@ -2654,6 +2655,10 @@ func consensusVectors(nets []*chaincfg.Params) ConsensusVectors {
 		new(big.Int).Lsh(one, 255), new(big.Int).Sub(new(big.Int).Lsh(one, 256), one),
 	} {
 		out.Targets = append(out.Targets, TargetVector{target.String(), blockchain.BigToCompact(target)})
+	}
+	return out
+}
+
 // accumulatingInputSource is makeInputSource from wallet/wallet/createtx.go,
 // which is unexported: it adds coins in order until the target is covered
 // and keeps them across calls.
@@ -2662,19 +2667,27 @@ func accumulatingInputSource(eligible []wallet.Coin) txauthor.InputSource {
 	currentInputs := make([]*wire.TxIn, 0, len(eligible))
 	currentScripts := make([][]byte, 0, len(eligible))
 	currentInputValues := make([]btcutil.Amount, 0, len(eligible))
+
 	return func(target btcutil.Amount) (btcutil.Amount, []*wire.TxIn,
 		[]btcutil.Amount, [][]byte, error) {
+
 		for currentTotal < target && len(eligible) != 0 {
 			nextCredit := eligible[0]
 			prevOut := nextCredit.TxOut
 			outpoint := nextCredit.OutPoint
 			eligible = eligible[1:]
+
 			nextInput := wire.NewTxIn(&outpoint, nil, nil)
 			currentTotal += btcutil.Amount(prevOut.Value)
 			currentInputs = append(currentInputs, nextInput)
 			currentScripts = append(currentScripts, prevOut.PkScript)
 			currentInputValues = append(currentInputValues, btcutil.Amount(prevOut.Value))
+		}
+
 		return currentTotal, currentInputs, currentInputValues, currentScripts, nil
+	}
+}
+
 // constantInputSource is the one in createtx.go, also unexported, over Coins:
 // every selected output is spent whatever the target.
 func constantInputSource(eligible []wallet.Coin) txauthor.InputSource {
@@ -2688,31 +2701,48 @@ func constantInputSource(eligible []wallet.Coin) txauthor.InputSource {
 		currentInputs = append(currentInputs, wire.NewTxIn(&outpoint, nil, nil))
 		currentScripts = append(currentScripts, coin.PkScript)
 		currentInputValues = append(currentInputValues, btcutil.Amount(coin.Value))
+	}
 	return func(btcutil.Amount) (btcutil.Amount, []*wire.TxIn, []btcutil.Amount, [][]byte, error) {
 		return currentTotal, currentInputs, currentInputValues, currentScripts, nil
+	}
+}
+
 func coinSelectionVectors() CoinSelectionVectors {
 	p2tr := func(b byte) []byte { return append([]byte{txscript.OP_1, 32}, bytes.Repeat([]byte{b}, 32)...) }
 	p2mr := func(b byte) []byte { return append([]byte{txscript.OP_2, 32}, bytes.Repeat([]byte{b}, 32)...) }
 	nullData, err := txscript.NullDataScript([]byte("pearljs"))
+	check(err)
 	changeScript := p2tr(0xcc)
 	pay := func(script []byte, value int64) *wire.TxOut { return wire.NewTxOut(value, script) }
+
 	out := CoinSelectionVectors{
 		CoinbaseMaturity: chaincfg.MainNetParams.CoinbaseMaturity,
 		MinInputVsize:    txsizes.GetMinInputVirtualSize(p2tr(0x01)),
+	}
 	for _, net := range []*chaincfg.Params{
 		&chaincfg.TestNetParams, &chaincfg.TestNet2Params, &chaincfg.RegressionNetParams, &chaincfg.SimNetParams,
+	} {
 		if net.CoinbaseMaturity != out.CoinbaseMaturity {
 			panic("coinbase maturity differs between networks")
+		}
+	}
+
 	for _, outputs := range [][]*wire.TxOut{
 		{pay(p2tr(0xa1), 1)},
 		{pay(p2tr(0xa1), 1), pay(p2mr(0xa2), 1), pay(nullData, 0)},
+	} {
 		for _, inputs := range []int{0, 1, 2, 3, 4, 5, 6, 7, 252, 253, 254} {
 			scripts := make([]string, len(outputs))
 			for i, output := range outputs {
 				scripts[i] = hex.EncodeToString(output.PkScript)
+			}
 			out.SizeEstimates = append(out.SizeEstimates, SizeEstimateVector{
 				Inputs: inputs, Outputs: scripts,
 				Vsize: txsizes.EstimateVirtualSize(0, inputs, 0, 0, outputs, txsizes.P2TRPkScriptSize),
+			})
+		}
+	}
+
 	type selectionCase struct {
 		name       string
 		strategy   string
@@ -2721,6 +2751,7 @@ func coinSelectionVectors() CoinSelectionVectors {
 		coinScript func(i int) []byte
 		outputs    []*wire.TxOut
 		scriptSize int
+	}
 	keyPathCoin := func(i int) []byte { return p2tr(byte(i + 1)) }
 	cases := []selectionCase{
 		{name: "one input with change", strategy: "largest", feeRate: 1000,
@@ -2761,60 +2792,84 @@ func coinSelectionVectors() CoinSelectionVectors {
 		{name: "P2MR coins priced as key paths", strategy: "largest", feeRate: 1000,
 			coins: []int64{200_000, 300_000}, coinScript: func(i int) []byte { return p2mr(byte(i + 1)) },
 			outputs: []*wire.TxOut{pay(p2tr(0xa1), 400_000)}},
+	}
+
 	for _, item := range cases {
 		if item.coinScript == nil {
 			item.coinScript = keyPathCoin
+		}
 		if item.scriptSize == 0 {
 			item.scriptSize = txsizes.P2TRPkScriptSize
+		}
 		vector := CoinSelectionVector{
 			Name: item.name, Strategy: item.strategy, FeeRate: item.feeRate,
 			ChangeScript: hex.EncodeToString(changeScript), ChangeScriptSize: item.scriptSize,
 			Outputs: []PrevoutVector{}, Arranged: []string{}, Inputs: []string{}, ChangeIndex: -1,
+		}
 		for _, output := range item.outputs {
 			check(txrules.CheckOutput(output, txrules.DefaultRelayFeePerKb))
 			vector.Outputs = append(vector.Outputs, PrevoutVector{
 				Script: hex.EncodeToString(output.PkScript), Value: output.Value,
+			})
+		}
 		coins := make([]wallet.Coin, len(item.coins))
 		for i, value := range item.coins {
 			hash := chainhash.HashH([]byte(fmt.Sprintf("pearljs coin %s %d", item.name, i)))
 			coins[i] = wallet.Coin{
 				TxOut:    wire.TxOut{Value: value, PkScript: item.coinScript(i)},
 				OutPoint: wire.OutPoint{Hash: hash, Index: uint32(i)},
+			}
 			vector.Coins = append(vector.Coins, CoinVector{
 				TxID: hash.String(), Vout: uint32(i), Value: value, Script: hex.EncodeToString(coins[i].PkScript),
+			})
+		}
+
 		var source txauthor.InputSource
 		arranged := coins
 		switch item.strategy {
 		case "largest":
 			arranged, err = wallet.CoinSelectionLargest.ArrangeCoins(coins, btcutil.Amount(item.feeRate))
+			check(err)
 			source = accumulatingInputSource(arranged)
 		case "random":
 			arranged, err = wallet.CoinSelectionRandom.ArrangeCoins(coins, btcutil.Amount(item.feeRate))
+			check(err)
 			sort.Slice(arranged, func(i, j int) bool {
 				return arranged[i].OutPoint.String() < arranged[j].OutPoint.String()
+			})
 			source = accumulatingInputSource(arranged)
 		case "all":
 			source = constantInputSource(coins)
+		}
 		for _, coin := range arranged {
 			vector.Arranged = append(vector.Arranged, coin.OutPoint.String())
+		}
+
 		authored, err := txauthor.NewUnsignedTransaction(
 			item.outputs, btcutil.Amount(item.feeRate), source,
 			&txauthor.ChangeSource{
 				NewScript:  func() ([]byte, error) { return changeScript, nil },
 				ScriptSize: item.scriptSize,
+			},
+		)
+		if err != nil {
 			vector.Error = err.Error()
 			out.Cases = append(out.Cases, vector)
 			continue
+		}
 		spent := int64(0)
 		for _, output := range authored.Tx.TxOut {
 			spent += output.Value
+		}
 		for _, input := range authored.Tx.TxIn {
 			vector.Inputs = append(vector.Inputs, input.PreviousOutPoint.String())
+		}
 		vector.TotalInput = int64(authored.TotalInput)
 		vector.Fee = int64(authored.TotalInput) - spent
 		vector.ChangeIndex = authored.ChangeIndex
 		if authored.ChangeIndex >= 0 {
 			vector.Change = authored.Tx.TxOut[authored.ChangeIndex].Value
+		}
 		vector.UnsignedTxHex = serializeTx(authored.Tx, false)
 		out.Cases = append(out.Cases, vector)
 	}

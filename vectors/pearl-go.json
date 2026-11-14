@@ -10021,5 +10021,997 @@
         "bits": 553713663
       }
     ]
+  },
+  "coinSelection": {
+    "coinbaseMaturity": 100,
+    "minInputVsize": 58,
+    "sizeEstimates": [
+      {
+        "inputs": 0,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        ],
+        "vsize": 96
+      },
+      {
+        "inputs": 1,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        ],
+        "vsize": 155
+      },
+      {
+        "inputs": 2,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        ],
+        "vsize": 213
+      },
+      {
+        "inputs": 3,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        ],
+        "vsize": 270
+      },
+      {
+        "inputs": 4,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        ],
+        "vsize": 328
+      },
+      {
+        "inputs": 5,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        ],
+        "vsize": 386
+      },
+      {
+        "inputs": 6,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        ],
+        "vsize": 444
+      },
+      {
+        "inputs": 7,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        ],
+        "vsize": 501
+      },
+      {
+        "inputs": 252,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        ],
+        "vsize": 14650
+      },
+      {
+        "inputs": 253,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        ],
+        "vsize": 14710
+      },
+      {
+        "inputs": 254,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        ],
+        "vsize": 14768
+      },
+      {
+        "inputs": 0,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "5220a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "6a07706561726c6a73"
+        ],
+        "vsize": 157
+      },
+      {
+        "inputs": 1,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "5220a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "6a07706561726c6a73"
+        ],
+        "vsize": 216
+      },
+      {
+        "inputs": 2,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "5220a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "6a07706561726c6a73"
+        ],
+        "vsize": 274
+      },
+      {
+        "inputs": 3,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "5220a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "6a07706561726c6a73"
+        ],
+        "vsize": 331
+      },
+      {
+        "inputs": 4,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "5220a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "6a07706561726c6a73"
+        ],
+        "vsize": 389
+      },
+      {
+        "inputs": 5,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "5220a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "6a07706561726c6a73"
+        ],
+        "vsize": 447
+      },
+      {
+        "inputs": 6,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "5220a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "6a07706561726c6a73"
+        ],
+        "vsize": 505
+      },
+      {
+        "inputs": 7,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "5220a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "6a07706561726c6a73"
+        ],
+        "vsize": 562
+      },
+      {
+        "inputs": 252,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "5220a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "6a07706561726c6a73"
+        ],
+        "vsize": 14711
+      },
+      {
+        "inputs": 253,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "5220a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "6a07706561726c6a73"
+        ],
+        "vsize": 14771
+      },
+      {
+        "inputs": 254,
+        "outputs": [
+          "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "5220a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+          "6a07706561726c6a73"
+        ],
+        "vsize": 14829
+      }
+    ],
+    "cases": [
+      {
+        "name": "one input with change",
+        "strategy": "largest",
+        "feeRate": "1000",
+        "coins": [
+          {
+            "txid": "455395d50f280fa94e619b1e480d19345847fca9f7642c1fcddf661c6edccbe1",
+            "vout": 0,
+            "value": "50000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "txid": "ab422ca200e2161bd649243c484d3834ad79211b7e6ee921ce22e9662ef183a3",
+            "vout": 1,
+            "value": "2000000",
+            "script": "51200202020202020202020202020202020202020202020202020202020202020202"
+          },
+          {
+            "txid": "8599ec3b992cbbea7f2e6a50c6396b9ab9b772971109a433ac364b4507ac610e",
+            "vout": 2,
+            "value": "300000",
+            "script": "51200303030303030303030303030303030303030303030303030303030303030303"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 1500000
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "ab422ca200e2161bd649243c484d3834ad79211b7e6ee921ce22e9662ef183a3:1",
+          "8599ec3b992cbbea7f2e6a50c6396b9ab9b772971109a433ac364b4507ac610e:2",
+          "455395d50f280fa94e619b1e480d19345847fca9f7642c1fcddf661c6edccbe1:0"
+        ],
+        "inputs": [
+          "ab422ca200e2161bd649243c484d3834ad79211b7e6ee921ce22e9662ef183a3:1"
+        ],
+        "totalInput": "2000000",
+        "fee": "155",
+        "change": "499845",
+        "changeIndex": 1,
+        "unsignedTxHex": "0100000001a383f12e66e922ce21e96e7e1b2179ad34384d483c2449d61b16e200a22c42ab0100000000ffffffff0260e3160000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a185a0070000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      },
+      {
+        "name": "three inputs",
+        "strategy": "largest",
+        "feeRate": "1000",
+        "coins": [
+          {
+            "txid": "d4fc4ab3c71a30c97f4b5a4b6a4b98b79335d32546120d62f1cebb0dd32e5a86",
+            "vout": 0,
+            "value": "400000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "txid": "dd9a33f16d9d712430417a46867b621415058f5663696101d721c8e4c6e96523",
+            "vout": 1,
+            "value": "100000",
+            "script": "51200202020202020202020202020202020202020202020202020202020202020202"
+          },
+          {
+            "txid": "1f92efb86a64376e78cfcb8f49a21b43651fbc970acd69d0f531553b314e32ae",
+            "vout": 2,
+            "value": "700000",
+            "script": "51200303030303030303030303030303030303030303030303030303030303030303"
+          },
+          {
+            "txid": "a896486dca529d66e61b1d3e2cc031edda8a9c5a0a3e55ed5705a803c3b8d5d4",
+            "vout": 3,
+            "value": "250000",
+            "script": "51200404040404040404040404040404040404040404040404040404040404040404"
+          },
+          {
+            "txid": "59a90d0e0d2baf5ac9b636385d512fd0698fa389bbb3820fb947937a9187427e",
+            "vout": 4,
+            "value": "600000",
+            "script": "51200505050505050505050505050505050505050505050505050505050505050505"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 1500000
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "1f92efb86a64376e78cfcb8f49a21b43651fbc970acd69d0f531553b314e32ae:2",
+          "59a90d0e0d2baf5ac9b636385d512fd0698fa389bbb3820fb947937a9187427e:4",
+          "d4fc4ab3c71a30c97f4b5a4b6a4b98b79335d32546120d62f1cebb0dd32e5a86:0",
+          "a896486dca529d66e61b1d3e2cc031edda8a9c5a0a3e55ed5705a803c3b8d5d4:3",
+          "dd9a33f16d9d712430417a46867b621415058f5663696101d721c8e4c6e96523:1"
+        ],
+        "inputs": [
+          "1f92efb86a64376e78cfcb8f49a21b43651fbc970acd69d0f531553b314e32ae:2",
+          "59a90d0e0d2baf5ac9b636385d512fd0698fa389bbb3820fb947937a9187427e:4",
+          "d4fc4ab3c71a30c97f4b5a4b6a4b98b79335d32546120d62f1cebb0dd32e5a86:0"
+        ],
+        "totalInput": "1700000",
+        "fee": "270",
+        "change": "199730",
+        "changeIndex": 1,
+        "unsignedTxHex": "0100000003ae324e313b5531f5d069cd0a97bc1f65431ba2498fcbcf786e37646ab8ef921f0200000000ffffffff7e4287917a9347b90f82b3bb89a38f69d02f515d3836b6c95aaf2b0d0e0da9590400000000ffffffff865a2ed30dbbcef1620d124625d33593b7984b6a4b5a4b7fc9301ac7b34afcd40000000000ffffffff0260e3160000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1320c030000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      },
+      {
+        "name": "two inputs after the fee needs another coin",
+        "strategy": "largest",
+        "feeRate": "1000",
+        "coins": [
+          {
+            "txid": "253cf3c84d0ecb60b6b08eed9b988ed3f5872d962bf929c0306b098ebe15b17d",
+            "vout": 0,
+            "value": "5000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "txid": "0a4e88ace026f59587db37832beef107fb00e7850c6d925097a6b1c4dc297a2a",
+            "vout": 1,
+            "value": "10000",
+            "script": "51200202020202020202020202020202020202020202020202020202020202020202"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 9900
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "0a4e88ace026f59587db37832beef107fb00e7850c6d925097a6b1c4dc297a2a:1",
+          "253cf3c84d0ecb60b6b08eed9b988ed3f5872d962bf929c0306b098ebe15b17d:0"
+        ],
+        "inputs": [
+          "0a4e88ace026f59587db37832beef107fb00e7850c6d925097a6b1c4dc297a2a:1",
+          "253cf3c84d0ecb60b6b08eed9b988ed3f5872d962bf929c0306b098ebe15b17d:0"
+        ],
+        "totalInput": "15000",
+        "fee": "213",
+        "change": "4887",
+        "changeIndex": 1,
+        "unsignedTxHex": "01000000022a7a29dcc4b1a69750926d0c85e700fb07f1ee2b8337db8795f526e0ac884e0a0100000000ffffffff7db115be8e096b30c029f92b962d87f5d38e989bed8eb0b660cb0e4dc8f33c250000000000ffffffff02ac26000000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a11713000000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      },
+      {
+        "name": "six inputs",
+        "strategy": "largest",
+        "feeRate": "1000",
+        "coins": [
+          {
+            "txid": "60807150308cbcc14f479ab808fda233c6d53428af20f3a62b2c32727b623eb3",
+            "vout": 0,
+            "value": "10100",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "txid": "6006afd7903a877fc685b07bfb13cda6546b8fee1d233ea25591c5e4a175e764",
+            "vout": 1,
+            "value": "10200",
+            "script": "51200202020202020202020202020202020202020202020202020202020202020202"
+          },
+          {
+            "txid": "375489a0efd5a090d281c576d84ae33cdc1ed207d041add2ffece24651fa478a",
+            "vout": 2,
+            "value": "10300",
+            "script": "51200303030303030303030303030303030303030303030303030303030303030303"
+          },
+          {
+            "txid": "6b08e3be426a3d817811173b97328288ffafd24a009c7b1cfc84858a781509e1",
+            "vout": 3,
+            "value": "10400",
+            "script": "51200404040404040404040404040404040404040404040404040404040404040404"
+          },
+          {
+            "txid": "2de397f3389334c988c6a0ca5cf5cda4cf321cfa5ddf4838b91029a4544efd95",
+            "vout": 4,
+            "value": "10500",
+            "script": "51200505050505050505050505050505050505050505050505050505050505050505"
+          },
+          {
+            "txid": "b2f890f8b31f76f04720c3a286966cf38466bd9983c2ee384b3018ad6cf8ef05",
+            "vout": 5,
+            "value": "10600",
+            "script": "51200606060606060606060606060606060606060606060606060606060606060606"
+          },
+          {
+            "txid": "eb987b193c0e14ca8fdaa625acc4cd8395b390e1a6a0a599209c41ec0524f123",
+            "vout": 6,
+            "value": "10700",
+            "script": "51200707070707070707070707070707070707070707070707070707070707070707"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 61000
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "eb987b193c0e14ca8fdaa625acc4cd8395b390e1a6a0a599209c41ec0524f123:6",
+          "b2f890f8b31f76f04720c3a286966cf38466bd9983c2ee384b3018ad6cf8ef05:5",
+          "2de397f3389334c988c6a0ca5cf5cda4cf321cfa5ddf4838b91029a4544efd95:4",
+          "6b08e3be426a3d817811173b97328288ffafd24a009c7b1cfc84858a781509e1:3",
+          "375489a0efd5a090d281c576d84ae33cdc1ed207d041add2ffece24651fa478a:2",
+          "6006afd7903a877fc685b07bfb13cda6546b8fee1d233ea25591c5e4a175e764:1",
+          "60807150308cbcc14f479ab808fda233c6d53428af20f3a62b2c32727b623eb3:0"
+        ],
+        "inputs": [
+          "eb987b193c0e14ca8fdaa625acc4cd8395b390e1a6a0a599209c41ec0524f123:6",
+          "b2f890f8b31f76f04720c3a286966cf38466bd9983c2ee384b3018ad6cf8ef05:5",
+          "2de397f3389334c988c6a0ca5cf5cda4cf321cfa5ddf4838b91029a4544efd95:4",
+          "6b08e3be426a3d817811173b97328288ffafd24a009c7b1cfc84858a781509e1:3",
+          "375489a0efd5a090d281c576d84ae33cdc1ed207d041add2ffece24651fa478a:2",
+          "6006afd7903a877fc685b07bfb13cda6546b8fee1d233ea25591c5e4a175e764:1"
+        ],
+        "totalInput": "62700",
+        "fee": "444",
+        "change": "1256",
+        "changeIndex": 1,
+        "unsignedTxHex": "010000000623f12405ec419c2099a5a0a6e190b39583cdc4ac25a6da8fca140e3c197b98eb0600000000ffffffff05eff86cad18304b38eec28399bd6684f36c9686a2c32047f0761fb3f890f8b20500000000ffffffff95fd4e54a42910b93848df5dfa1c32cfa4cdf55ccaa0c688c9349338f397e32d0400000000ffffffffe10915788a8584fc1c7b9c004ad2afff888232973b171178813d6a42bee3086b0300000000ffffffff8a47fa5146e2ecffd2ad41d007d21edc3ce34ad876c581d290a0d5efa08954370200000000ffffffff64e775a1e4c59155a23e231dee8f6b54a6cd13fb7bb085c67f873a90d7af06600100000000ffffffff0248ee000000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1e804000000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      },
+      {
+        "name": "change of zero",
+        "strategy": "largest",
+        "feeRate": "1000",
+        "coins": [
+          {
+            "txid": "a840b7b3a49f5ede897a28ac69a90a97026b5601e1820875de7e3e89a9b8b0c8",
+            "vout": 0,
+            "value": "10000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 9845
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "a840b7b3a49f5ede897a28ac69a90a97026b5601e1820875de7e3e89a9b8b0c8:0"
+        ],
+        "inputs": [
+          "a840b7b3a49f5ede897a28ac69a90a97026b5601e1820875de7e3e89a9b8b0c8:0"
+        ],
+        "totalInput": "10000",
+        "fee": "155",
+        "change": "0",
+        "changeIndex": -1,
+        "unsignedTxHex": "0100000001c8b0b8a9893e7ede750882e101566b02970aa969ac287a89de5e9fa4b3b740a80000000000ffffffff017526000000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a100000000",
+        "error": ""
+      },
+      {
+        "name": "change one grain under the dust limit",
+        "strategy": "largest",
+        "feeRate": "1000",
+        "coins": [
+          {
+            "txid": "f38fac3c23336035e806e4ed8cb2787d3e5e8d9e142a2b9d37abd0f11fa9edbc",
+            "vout": 0,
+            "value": "10000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 9513
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "f38fac3c23336035e806e4ed8cb2787d3e5e8d9e142a2b9d37abd0f11fa9edbc:0"
+        ],
+        "inputs": [
+          "f38fac3c23336035e806e4ed8cb2787d3e5e8d9e142a2b9d37abd0f11fa9edbc:0"
+        ],
+        "totalInput": "10000",
+        "fee": "487",
+        "change": "0",
+        "changeIndex": -1,
+        "unsignedTxHex": "0100000001bceda91ff1d0ab379d2b2a149e8d5e3e7d78b28cede406e8356033233cac8ff30000000000ffffffff012925000000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a100000000",
+        "error": ""
+      },
+      {
+        "name": "change at the dust limit",
+        "strategy": "largest",
+        "feeRate": "1000",
+        "coins": [
+          {
+            "txid": "09f26cfd3fc75da31e338629d8c3357879b9033735541a649837b9c509c8db92",
+            "vout": 0,
+            "value": "10000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 9512
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "09f26cfd3fc75da31e338629d8c3357879b9033735541a649837b9c509c8db92:0"
+        ],
+        "inputs": [
+          "09f26cfd3fc75da31e338629d8c3357879b9033735541a649837b9c509c8db92:0"
+        ],
+        "totalInput": "10000",
+        "fee": "155",
+        "change": "333",
+        "changeIndex": 1,
+        "unsignedTxHex": "010000000192dbc809c5b93798641a54353703b9797835c3d82986331ea35dc73ffd6cf2090000000000ffffffff022825000000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a14d01000000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      },
+      {
+        "name": "dust limit does not follow the fee rate",
+        "strategy": "largest",
+        "feeRate": "50000",
+        "coins": [
+          {
+            "txid": "a78d01ed34ec8db5a976b56b3841067fb283a3cbd19b78bc4c039304b86cc272",
+            "vout": 0,
+            "value": "100000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 91850
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "a78d01ed34ec8db5a976b56b3841067fb283a3cbd19b78bc4c039304b86cc272:0"
+        ],
+        "inputs": [
+          "a78d01ed34ec8db5a976b56b3841067fb283a3cbd19b78bc4c039304b86cc272:0"
+        ],
+        "totalInput": "100000",
+        "fee": "7750",
+        "change": "400",
+        "changeIndex": 1,
+        "unsignedTxHex": "010000000172c26cb80493034cbc789bd1cba383b27f0641386bb576a9b58dec34ed018da70000000000ffffffff02ca66010000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a19001000000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      },
+      {
+        "name": "fee rate that does not divide evenly",
+        "strategy": "largest",
+        "feeRate": "1234",
+        "coins": [
+          {
+            "txid": "1fa6d940796b024f84d62eed61a99fb13caff813137605ba61335e5b89d49e02",
+            "vout": 0,
+            "value": "900000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "txid": "13b5051b95b808364c8aacb7d569243e0a9d4568d2a8255e84c1b230feda7238",
+            "vout": 1,
+            "value": "800000",
+            "script": "51200202020202020202020202020202020202020202020202020202020202020202"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 1000000
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "1fa6d940796b024f84d62eed61a99fb13caff813137605ba61335e5b89d49e02:0",
+          "13b5051b95b808364c8aacb7d569243e0a9d4568d2a8255e84c1b230feda7238:1"
+        ],
+        "inputs": [
+          "1fa6d940796b024f84d62eed61a99fb13caff813137605ba61335e5b89d49e02:0",
+          "13b5051b95b808364c8aacb7d569243e0a9d4568d2a8255e84c1b230feda7238:1"
+        ],
+        "totalInput": "1700000",
+        "fee": "262",
+        "change": "699738",
+        "changeIndex": 1,
+        "unsignedTxHex": "0100000002029ed4895b5e3361ba05761313f8af3cb19fa961ed2ed6844f026b7940d9a61f0000000000ffffffff3872dafe30b2c1845e25a8d268459d0a3e2469d5b7ac8a4c3608b8951b05b5130100000000ffffffff0240420f0000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a15aad0a0000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      },
+      {
+        "name": "fee rate under one grain per transaction",
+        "strategy": "largest",
+        "feeRate": "3",
+        "coins": [
+          {
+            "txid": "26a42774bf59bca46f6a81ea43794316676ff0b95c6eb15d1be7772e88f6f90f",
+            "vout": 0,
+            "value": "900000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 100000
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "26a42774bf59bca46f6a81ea43794316676ff0b95c6eb15d1be7772e88f6f90f:0"
+        ],
+        "inputs": [
+          "26a42774bf59bca46f6a81ea43794316676ff0b95c6eb15d1be7772e88f6f90f:0"
+        ],
+        "totalInput": "900000",
+        "fee": "3",
+        "change": "799997",
+        "changeIndex": 1,
+        "unsignedTxHex": "01000000010ff9f6882e77e71b5db16e5cb9f06f6716437943ea816a6fa4bc59bf7427a4260000000000ffffffff02a086010000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1fd340c0000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      },
+      {
+        "name": "several outputs with P2MR and OP_RETURN",
+        "strategy": "largest",
+        "feeRate": "2500",
+        "coins": [
+          {
+            "txid": "85376b3c44e9e4f34333989d80c4f0ed3e84d215c9b272323dc5cb8698e2401e",
+            "vout": 0,
+            "value": "900000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "txid": "46427e890d3e2d197cfd5c256756ce5cdeeb2cd35bcc53e18d980f4023051702",
+            "vout": 1,
+            "value": "800000",
+            "script": "51200202020202020202020202020202020202020202020202020202020202020202"
+          },
+          {
+            "txid": "4cf1cf9235457316db042ca1a3a8095dc055191eb111c237d05029d2b48993fd",
+            "vout": 2,
+            "value": "700000",
+            "script": "51200303030303030303030303030303030303030303030303030303030303030303"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 500000
+          },
+          {
+            "script": "5220a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2",
+            "value": 600000
+          },
+          {
+            "script": "6a07706561726c6a73",
+            "value": 0
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "85376b3c44e9e4f34333989d80c4f0ed3e84d215c9b272323dc5cb8698e2401e:0",
+          "46427e890d3e2d197cfd5c256756ce5cdeeb2cd35bcc53e18d980f4023051702:1",
+          "4cf1cf9235457316db042ca1a3a8095dc055191eb111c237d05029d2b48993fd:2"
+        ],
+        "inputs": [
+          "85376b3c44e9e4f34333989d80c4f0ed3e84d215c9b272323dc5cb8698e2401e:0",
+          "46427e890d3e2d197cfd5c256756ce5cdeeb2cd35bcc53e18d980f4023051702:1"
+        ],
+        "totalInput": "1700000",
+        "fee": "685",
+        "change": "599315",
+        "changeIndex": 3,
+        "unsignedTxHex": "01000000021e40e29886cbc53d3272b2c915d2843eedf0c4809d983343f3e4e9443c6b37850000000000ffffffff02170523400f988de153cc5bd32cebde5cce5667255cfd7c192d3e0d897e42460100000000ffffffff0420a1070000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1c027090000000000225220a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a20000000000000000096a07706561726c6a731325090000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      },
+      {
+        "name": "not enough coins",
+        "strategy": "largest",
+        "feeRate": "1000",
+        "coins": [
+          {
+            "txid": "f09ffff35caddc732a9912239618c29cd02cbfa703f66bc2c1bf27cf397f517c",
+            "vout": 0,
+            "value": "1000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "txid": "c107339195f8bd307e4df532ca8b7c34dfab2c2dc7fbef290aa067d8cc324abf",
+            "vout": 1,
+            "value": "2000",
+            "script": "51200202020202020202020202020202020202020202020202020202020202020202"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 5000
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "c107339195f8bd307e4df532ca8b7c34dfab2c2dc7fbef290aa067d8cc324abf:1",
+          "f09ffff35caddc732a9912239618c29cd02cbfa703f66bc2c1bf27cf397f517c:0"
+        ],
+        "inputs": [],
+        "totalInput": "0",
+        "fee": "0",
+        "change": "0",
+        "changeIndex": -1,
+        "unsignedTxHex": "",
+        "error": "insufficient funds available to construct transaction"
+      },
+      {
+        "name": "enough for the output but not the fee",
+        "strategy": "largest",
+        "feeRate": "1000",
+        "coins": [
+          {
+            "txid": "dc973f05a97dd338bfe2cb7b8a141d49b50f9e2b7e03615c5d9e4eb9a1ac87f5",
+            "vout": 0,
+            "value": "10000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 9950
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "dc973f05a97dd338bfe2cb7b8a141d49b50f9e2b7e03615c5d9e4eb9a1ac87f5:0"
+        ],
+        "inputs": [],
+        "totalInput": "0",
+        "fee": "0",
+        "change": "0",
+        "changeIndex": -1,
+        "unsignedTxHex": "",
+        "error": "insufficient funds available to construct transaction"
+      },
+      {
+        "name": "random skips coins that cost more than they add",
+        "strategy": "random",
+        "feeRate": "100000",
+        "coins": [
+          {
+            "txid": "274bf17fe33254db1ed680ccfcc2a258f3e0ab5c2d7963f1fd7e57488f677bf1",
+            "vout": 0,
+            "value": "5800",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "txid": "3482a6cac9d95794a70be1ac9a11bb608fd8203fee5bba33436d3ad7dbc78f2d",
+            "vout": 1,
+            "value": "5801",
+            "script": "51200202020202020202020202020202020202020202020202020202020202020202"
+          },
+          {
+            "txid": "6abb87041290b8fb3697133808ea90266b05aa2af10ec072b85bad3ea6e67742",
+            "vout": 2,
+            "value": "3000",
+            "script": "51200303030303030303030303030303030303030303030303030303030303030303"
+          },
+          {
+            "txid": "524ce97f2c9195bc19b6a22911524a2df790b42af55363db97eed8464e4f1630",
+            "vout": 3,
+            "value": "50000",
+            "script": "51200404040404040404040404040404040404040404040404040404040404040404"
+          },
+          {
+            "txid": "82303e7befb77d803ab6c205814bc536b8d117dc0fec6b15a86013f74c51bd84",
+            "vout": 4,
+            "value": "80000",
+            "script": "51200505050505050505050505050505050505050505050505050505050505050505"
+          },
+          {
+            "txid": "c40191d5f31f84e0326677a1435bc28614882a4a519fffe65788d955a8958149",
+            "vout": 5,
+            "value": "120000",
+            "script": "51200606060606060606060606060606060606060606060606060606060606060606"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 100000
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "3482a6cac9d95794a70be1ac9a11bb608fd8203fee5bba33436d3ad7dbc78f2d:1",
+          "524ce97f2c9195bc19b6a22911524a2df790b42af55363db97eed8464e4f1630:3",
+          "82303e7befb77d803ab6c205814bc536b8d117dc0fec6b15a86013f74c51bd84:4",
+          "c40191d5f31f84e0326677a1435bc28614882a4a519fffe65788d955a8958149:5"
+        ],
+        "inputs": [
+          "3482a6cac9d95794a70be1ac9a11bb608fd8203fee5bba33436d3ad7dbc78f2d:1",
+          "524ce97f2c9195bc19b6a22911524a2df790b42af55363db97eed8464e4f1630:3",
+          "82303e7befb77d803ab6c205814bc536b8d117dc0fec6b15a86013f74c51bd84:4"
+        ],
+        "totalInput": "135801",
+        "fee": "27000",
+        "change": "8801",
+        "changeIndex": 1,
+        "unsignedTxHex": "01000000032d8fc7dbd73a6d4333ba5bee3f20d88f60bb119aace10ba79457d9c9caa682340100000000ffffffff30164f4e46d8ee97db6353f52ab490f72d4a521129a2b619bc95912c7fe94c520300000000ffffffff84bd514cf71360a8156bec0fdc17d1b836c54b8105c2b63a807db7ef7b3e30820400000000ffffffff02a086010000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a16122000000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      },
+      {
+        "name": "every selected coin is spent",
+        "strategy": "all",
+        "feeRate": "1000",
+        "coins": [
+          {
+            "txid": "1d7410c0077ca65169607f96a7ff253cc816502cbe34719743db34f973cdfa0e",
+            "vout": 0,
+            "value": "50000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "txid": "504c0c73cd668761209eb0af36fa5eb5a9187cf7a6415818d6d8e04d6da5ddaa",
+            "vout": 1,
+            "value": "60000",
+            "script": "51200202020202020202020202020202020202020202020202020202020202020202"
+          },
+          {
+            "txid": "db25ede041b7a0ba226863e5f54f3f7e936cc2cbd45e8a8de8c8c5a891bcd2bb",
+            "vout": 2,
+            "value": "70000",
+            "script": "51200303030303030303030303030303030303030303030303030303030303030303"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 20000
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "1d7410c0077ca65169607f96a7ff253cc816502cbe34719743db34f973cdfa0e:0",
+          "504c0c73cd668761209eb0af36fa5eb5a9187cf7a6415818d6d8e04d6da5ddaa:1",
+          "db25ede041b7a0ba226863e5f54f3f7e936cc2cbd45e8a8de8c8c5a891bcd2bb:2"
+        ],
+        "inputs": [
+          "1d7410c0077ca65169607f96a7ff253cc816502cbe34719743db34f973cdfa0e:0",
+          "504c0c73cd668761209eb0af36fa5eb5a9187cf7a6415818d6d8e04d6da5ddaa:1",
+          "db25ede041b7a0ba226863e5f54f3f7e936cc2cbd45e8a8de8c8c5a891bcd2bb:2"
+        ],
+        "totalInput": "180000",
+        "fee": "270",
+        "change": "159730",
+        "changeIndex": 1,
+        "unsignedTxHex": "01000000030efacd73f934db43977134be2c5016c83c25ffa7967f606951a67c07c010741d0000000000ffffffffaadda56d4de0d8d6185841a6f77c18a9b55efa36afb09e20618766cd730c4c500100000000ffffffffbbd2bc91a8c5c8e88d8a5ed4cbc26c937e3f4ff5e5636822baa0b741e0ed25db0200000000ffffffff02204e000000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1f26f020000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      },
+      {
+        "name": "sweep to one output",
+        "strategy": "all",
+        "feeRate": "1000",
+        "coins": [
+          {
+            "txid": "60185e88d7384fe7bd21f69a70a6b8164eaa4dbf00ce2f1a75e2c58af02a06ac",
+            "vout": 0,
+            "value": "50000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "txid": "e159290054a6c0198385dfaf393c04ecf083548376285971cf21e2cbf790b905",
+            "vout": 1,
+            "value": "60000",
+            "script": "51200202020202020202020202020202020202020202020202020202020202020202"
+          },
+          {
+            "txid": "1031533018dde0f584b757554683268993be13a89bcefdf6aea96366829b3f29",
+            "vout": 2,
+            "value": "70000",
+            "script": "51200303030303030303030303030303030303030303030303030303030303030303"
+          }
+        ],
+        "outputs": [],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "60185e88d7384fe7bd21f69a70a6b8164eaa4dbf00ce2f1a75e2c58af02a06ac:0",
+          "e159290054a6c0198385dfaf393c04ecf083548376285971cf21e2cbf790b905:1",
+          "1031533018dde0f584b757554683268993be13a89bcefdf6aea96366829b3f29:2"
+        ],
+        "inputs": [
+          "60185e88d7384fe7bd21f69a70a6b8164eaa4dbf00ce2f1a75e2c58af02a06ac:0",
+          "e159290054a6c0198385dfaf393c04ecf083548376285971cf21e2cbf790b905:1",
+          "1031533018dde0f584b757554683268993be13a89bcefdf6aea96366829b3f29:2"
+        ],
+        "totalInput": "180000",
+        "fee": "227",
+        "change": "179773",
+        "changeIndex": 0,
+        "unsignedTxHex": "0100000003ac062af08ac5e2751a2fce00bf4daa4e16b8a6709af621bde74f38d7885e18600000000000ffffffff05b990f7cbe221cf71592876835483f0ec043c39afdf858319c0a654002959e10100000000ffffffff293f9b826663a9aef6fdce9ba813be93892683465557b784f5e0dd18305331100200000000ffffffff013dbe020000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      },
+      {
+        "name": "sweep as sweepaccount sizes it",
+        "strategy": "all",
+        "feeRate": "1000",
+        "coins": [
+          {
+            "txid": "dd4b4a1c0478c80c9cba8e702bfe58a0cca8a16cb3939cf866ec69cac2c4db08",
+            "vout": 0,
+            "value": "50000",
+            "script": "51200101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "txid": "bdd2f12340b9a550c9e2977542e47ab9e56343171712d0e8d76b85ce4fc03227",
+            "vout": 1,
+            "value": "60000",
+            "script": "51200202020202020202020202020202020202020202020202020202020202020202"
+          },
+          {
+            "txid": "a9aba14d1593558a35f7257b0026ec0c12e19e578ea7234630c12af9453927f6",
+            "vout": 2,
+            "value": "70000",
+            "script": "51200303030303030303030303030303030303030303030303030303030303030303"
+          }
+        ],
+        "outputs": [],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 43,
+        "arranged": [
+          "dd4b4a1c0478c80c9cba8e702bfe58a0cca8a16cb3939cf866ec69cac2c4db08:0",
+          "bdd2f12340b9a550c9e2977542e47ab9e56343171712d0e8d76b85ce4fc03227:1",
+          "a9aba14d1593558a35f7257b0026ec0c12e19e578ea7234630c12af9453927f6:2"
+        ],
+        "inputs": [
+          "dd4b4a1c0478c80c9cba8e702bfe58a0cca8a16cb3939cf866ec69cac2c4db08:0",
+          "bdd2f12340b9a550c9e2977542e47ab9e56343171712d0e8d76b85ce4fc03227:1",
+          "a9aba14d1593558a35f7257b0026ec0c12e19e578ea7234630c12af9453927f6:2"
+        ],
+        "totalInput": "180000",
+        "fee": "236",
+        "change": "179764",
+        "changeIndex": 0,
+        "unsignedTxHex": "010000000308dbc4c2ca69ec66f89c93b36ca1a8cca058fe2b708eba9c0cc878041c4a4bdd0000000000ffffffff2732c04fce856bd7e8d01217174363e5b97ae4427597e2c950a5b94023f1d2bd0100000000fffffffff6273945f92ac1304623a78e579ee1120cec26007b25f7358a5593154da1aba90200000000ffffffff0134be020000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      },
+      {
+        "name": "P2MR coins priced as key paths",
+        "strategy": "largest",
+        "feeRate": "1000",
+        "coins": [
+          {
+            "txid": "b077eac20692524346b2d57dadc212f3fa57b2db2869547a026e6201a09e7da7",
+            "vout": 0,
+            "value": "200000",
+            "script": "52200101010101010101010101010101010101010101010101010101010101010101"
+          },
+          {
+            "txid": "c115f0f8f715d0f043e6a86d580cc0e185f1c44b9ee84173688870f3b01438fd",
+            "vout": 1,
+            "value": "300000",
+            "script": "52200202020202020202020202020202020202020202020202020202020202020202"
+          }
+        ],
+        "outputs": [
+          {
+            "script": "5120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "value": 400000
+          }
+        ],
+        "changeScript": "5120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "changeScriptSize": 34,
+        "arranged": [
+          "c115f0f8f715d0f043e6a86d580cc0e185f1c44b9ee84173688870f3b01438fd:1",
+          "b077eac20692524346b2d57dadc212f3fa57b2db2869547a026e6201a09e7da7:0"
+        ],
+        "inputs": [
+          "c115f0f8f715d0f043e6a86d580cc0e185f1c44b9ee84173688870f3b01438fd:1",
+          "b077eac20692524346b2d57dadc212f3fa57b2db2869547a026e6201a09e7da7:0"
+        ],
+        "totalInput": "500000",
+        "fee": "213",
+        "change": "99787",
+        "changeIndex": 1,
+        "unsignedTxHex": "0100000002fd3814b0f37088687341e89e4bc4f185e1c00c586da8e643f0d015f7f8f015c10100000000ffffffffa77d9ea001626e027a546928dbb257faf312c2ad7dd5b24643529206c2ea77b00000000000ffffffff02801a060000000000225120a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1cb85010000000000225120cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc00000000",
+        "error": ""
+      }
+    ]
   }
 }

@@ -7,12 +7,10 @@
 
 import { Transaction } from 'bitcoinjs-lib';
 import { formatPearl, MAX_GRAIN } from './amount.js';
+import { COINBASE_MATURITY } from './consensus.js';
 import { DEFAULT_MIN_RELAY_FEE, estimateVsize, isDust, minRelayFee } from './policy.js';
 import type { SpendEstimate } from './policy.js';
 import { classifyOutputScript } from './script.js';
-
-/** chaincfg.Params.CoinbaseMaturity (node/chaincfg/params.go:356), the same on every network. */
-export const COINBASE_MATURITY = 100;
 
 export interface Utxo {
   /** Transaction id as explorers and RPC show it. */

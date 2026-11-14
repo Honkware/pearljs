@@ -27,9 +27,17 @@
       "types": "./dist/blockheader.d.ts",
       "default": "./dist/blockheader.js"
     },
+    "./builder": {
+      "types": "./dist/builder.d.ts",
+      "default": "./dist/builder.js"
+    },
     "./client": {
       "types": "./dist/client.d.ts",
       "default": "./dist/client.js"
+    },
+    "./coinselect": {
+      "types": "./dist/coinselect.d.ts",
+      "default": "./dist/coinselect.js"
     },
     "./consensus": {
       "types": "./dist/consensus.d.ts",
@@ -38,6 +46,10 @@
     "./crypto": {
       "types": "./dist/crypto.d.ts",
       "default": "./dist/crypto.js"
+    },
+    "./inspect": {
+      "types": "./dist/inspect.d.ts",
+      "default": "./dist/inspect.js"
     },
     "./invoice": {
       "types": "./dist/invoice.d.ts",
@@ -94,6 +106,10 @@
     "./scripttree": {
       "types": "./dist/scripttree.d.ts",
       "default": "./dist/scripttree.js"
+    },
+    "./sweep": {
+      "types": "./dist/sweep.d.ts",
+      "default": "./dist/sweep.js"
     },
     "./transaction": {
       "types": "./dist/transaction.d.ts",
