@@ -8,32 +8,125 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
+      "default": "./dist/index.js"
+    },
+    "./address": {
+      "types": "./dist/address.d.ts",
+      "default": "./dist/address.js"
+    },
+    "./amount": {
+      "types": "./dist/amount.d.ts",
+      "default": "./dist/amount.js"
+    },
+    "./block": {
+      "types": "./dist/block.d.ts",
+      "default": "./dist/block.js"
+    },
+    "./blockheader": {
+      "types": "./dist/blockheader.d.ts",
+      "default": "./dist/blockheader.js"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "default": "./dist/client.js"
+    },
+    "./crypto": {
+      "types": "./dist/crypto.d.ts",
+      "default": "./dist/crypto.js"
+    },
+    "./invoice": {
+      "types": "./dist/invoice.d.ts",
+      "default": "./dist/invoice.js"
+    },
+    "./keys": {
+      "types": "./dist/keys.d.ts",
+      "default": "./dist/keys.js"
+    },
+    "./message": {
+      "types": "./dist/message.d.ts",
+      "default": "./dist/message.js"
+    },
+    "./mnemonic": {
+      "types": "./dist/mnemonic.d.ts",
+      "default": "./dist/mnemonic.js"
+    },
+    "./networks": {
+      "types": "./dist/networks.d.ts",
+      "default": "./dist/networks.js"
+    },
+    "./payments": {
+      "types": "./dist/payments.d.ts",
+      "default": "./dist/payments.js"
+    },
+    "./policy": {
+      "types": "./dist/policy.d.ts",
+      "default": "./dist/policy.js"
+    },
+    "./rpc": {
+      "types": "./dist/rpc.d.ts",
+      "default": "./dist/rpc.js"
+    },
+    "./script": {
+      "types": "./dist/script.d.ts",
+      "default": "./dist/script.js"
+    },
+    "./scriptpath": {
+      "types": "./dist/scriptpath.d.ts",
+      "default": "./dist/scriptpath.js"
+    },
+    "./scripttools": {
+      "types": "./dist/scripttools.d.ts",
+      "default": "./dist/scripttools.js"
+    },
+    "./scripttree": {
+      "types": "./dist/scripttree.d.ts",
+      "default": "./dist/scripttree.js"
+    },
+    "./transaction": {
+      "types": "./dist/transaction.d.ts",
+      "default": "./dist/transaction.js"
+    },
+    "./wif": {
+      "types": "./dist/wif.d.ts",
+      "default": "./dist/wif.js"
+    },
+    "./xmss": {
+      "types": "./dist/xmss.d.ts",
+      "default": "./dist/xmss.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "NOTICE"
   ],
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node scripts/build.mjs",
     "demo": "tsc -p tsconfig.examples.json && node dist-examples/examples/invoice-demo.js",
     "test": "vitest run",
     "test:live": "vitest run --config vitest.live.config.ts",
-    "lint": "eslint src test test-live examples",
+    "test:browser": "node scripts/browser-smoke.mjs",
+    "lint": "eslint src test test-live examples scripts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check": "npm run lint && npm run typecheck && npm run build && npm test"
+    "verify:pack": "node scripts/verify-pack.mjs",
+    "check": "npm run lint && npm run typecheck && npm run build && npm test",
+    "prepack": "npm run build"
   },
   "keywords": [
     "pearl",
-    "bitcoinjs",
     "taproot",
-    "psbt"
+    "psbt",
+    "p2mr",
+    "xmss",
+    "bip39",
+    "bip32",
+    "bip86"
   ],
   "license": "MIT",
   "dependencies": {
@@ -46,9 +139,13 @@
   },
   "devDependencies": {
     "@types/node": "20.19.25",
+    "esbuild": "0.28.2",
     "eslint": "9.39.1",
     "typescript": "5.9.3",
     "typescript-eslint": "8.48.0",
+    "vite": "7.3.8",
+    "vite-plugin-wasm": "3.6.0",
     "vitest": "4.0.16"
-  }
+  },
+  "sideEffects": false
 }

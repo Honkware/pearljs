@@ -1,0 +1,169 @@
+// Packs the package, installs the tarball into a fresh project and checks what a
+// consumer sees: file list, export map, Node ESM and require(), types under
+// nodenext and bundler resolution, tree shaking, publint and attw.
+import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { join } from 'node:path';
+import { build } from 'esbuild';
+import { installTarball, pack, root, run } from './lib/pack.mjs';
+
+const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+const tsc = createRequire(import.meta.url).resolve('typescript/bin/tsc');
+const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+const failures = [];
+const fail = (msg) => {
+  failures.push(msg);
+  console.error(`FAIL ${msg}`);
+};
+const ok = (msg) => console.log(`ok   ${msg}`);
+
+// 1. Every module the barrel re-exports has a subpath, and every target is packed.
+const barrel = readFileSync(join(root, 'src/index.ts'), 'utf8');
+const modules = [...barrel.matchAll(/from '\.\/(\w+)\.js'/g)].map((m) => m[1]);
+for (const m of modules) {
+  if (!pkg.exports[`./${m}`]) fail(`src/index.ts re-exports ${m} but package.json has no ./${m} subpath`);
+}
+const { dir: packDir, tarball, files } = pack();
+const allowed = /^(dist\/.+|package\.json|README\.md|CHANGELOG\.md|LICENSE|NOTICE)$/;
+for (const f of files) if (!allowed.test(f)) fail(`unexpected file in package: ${f}`);
+for (const f of ['README.md', 'LICENSE', 'NOTICE', 'CHANGELOG.md', 'dist/index.js', 'dist/index.d.ts']) {
+  if (!files.includes(f)) fail(`missing from package: ${f}`);
+}
+const mapSources = files.filter((f) => f.endsWith('.map'));
+for (const f of mapSources) {
+  const map = JSON.parse(readFileSync(join(root, f), 'utf8'));
+  if (!map.sourcesContent || map.sourcesContent.some((c) => c == null)) fail(`${f} does not embed its sources`);
+}
+for (const [sub, target] of Object.entries(pkg.exports)) {
+  if (typeof target === 'string') continue;
+  for (const t of Object.values(target)) {
+    if (!files.includes(t.replace(/^\.\//, ''))) fail(`export ${sub} points at ${t}, which is not packed`);
+  }
+}
+ok(`${files.length} files packed, ${(JSON.parse(run('npm', ['pack', '--dry-run', '--json'], { cwd: root }))[0].size / 1024).toFixed(0)} kB`);
+
+// 2. Install the tarball into a fresh project.
+const dir = installTarball(tarball);
+const specs = ['pearljs', ...Object.keys(pkg.exports).filter((s) => s !== '.' && s !== './package.json').map((s) => `pearljs/${s.slice(2)}`)];
+
+// 3. Node ESM import of every subpath, and require().
+writeFileSync(
+  join(dir, 'esm.mjs'),
+  `const specs = ${JSON.stringify(specs)};
+for (const s of specs) {
+  await import(s);
+}
+const root = await import('pearljs');
+for (const [name, value] of Object.entries(root)) if (value === undefined) throw new Error(name + ' is undefined');
+console.log('esm', specs.length, 'specifiers,', Object.keys(root).length, 'root exports');
+`,
+);
+try {
+  process.stdout.write(run(process.execPath, ['esm.mjs'], { cwd: dir }));
+  ok('Node ESM import of every subpath');
+} catch {
+  fail('Node ESM import');
+}
+writeFileSync(
+  join(dir, 'cjs.cjs'),
+  `const p = require('pearljs');
+const a = require('pearljs/amount');
+if (typeof p.parsePearl !== 'function' || p.parsePearl !== a.parsePearl) throw new Error('require(esm) mismatch');
+console.log('require(esm) ok');
+`,
+);
+try {
+  process.stdout.write(run(process.execPath, ['cjs.cjs'], { cwd: dir }));
+  ok('require() of the ESM package');
+} catch {
+  fail('require() of the ESM package');
+}
+
+// 4. Types under nodenext and bundler resolution, with lib checking on.
+writeFileSync(
+  join(dir, 'src/types.ts'),
+  `import { parsePearl, networks, mnemonicToSeed, type PearlNetwork } from 'pearljs';
+${modules.map((m, i) => `import * as m${i} from 'pearljs/${m}';`).join('\n')}
+const n: PearlNetwork = networks.mainnet;
+const grain: bigint = parsePearl('1');
+const seed: Uint8Array = mnemonicToSeed('abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about');
+export { n, grain, seed, ${modules.map((_, i) => `m${i}`).join(', ')} };
+`,
+);
+for (const [name, moduleResolution, module] of [
+  ['nodenext', 'NodeNext', 'NodeNext'],
+  ['bundler', 'Bundler', 'ESNext'],
+]) {
+  writeFileSync(
+    join(dir, `tsconfig.${name}.json`),
+    JSON.stringify({
+      compilerOptions: { module, moduleResolution, target: 'ES2022', strict: true, noEmit: true, types: [], skipLibCheck: false },
+      include: ['src'],
+    }),
+  );
+  try {
+    run(process.execPath, [tsc, '-p', `tsconfig.${name}.json`], { cwd: dir });
+    ok(`types resolve under ${name}`);
+  } catch {
+    fail(`types under ${name}`);
+  }
+}
+
+// 5. Tree shaking: light entry points must not pull in tiny-secp256k1.
+const light = ['pearljs', 'pearljs/amount', 'pearljs/address', 'pearljs/rpc', 'pearljs/block', 'pearljs/xmss', 'pearljs/policy', 'pearljs/mnemonic', 'pearljs/keys'];
+const names = { pearljs: 'parsePearl', 'pearljs/amount': 'parsePearl', 'pearljs/address': 'decodeAddress', 'pearljs/rpc': 'PearldClient', 'pearljs/block': 'parseBlock', 'pearljs/xmss': 'xmssVerify', 'pearljs/policy': 'estimateVsize', 'pearljs/mnemonic': 'generateMnemonic', 'pearljs/keys': 'deriveAccountFromSeed' };
+for (const spec of light) {
+  const entry = join(dir, 'src/light.js');
+  writeFileSync(entry, `import { ${names[spec]} } from '${spec}';\nconsole.log(${names[spec]});\n`);
+  const result = await build({
+    entryPoints: [entry],
+    bundle: true,
+    write: false,
+    metafile: true,
+    format: 'esm',
+    platform: 'browser',
+    loader: { '.wasm': 'empty' },
+    logLevel: 'silent',
+    absWorkingDir: dir,
+  }).catch((e) => ({ errors: [e] }));
+  if (result.errors?.length) {
+    fail(`bundling ${spec}: ${result.errors[0].message ?? result.errors[0]}`);
+    continue;
+  }
+  // Modules parsed but fully tree-shaken have no bytes in the output.
+  const [output] = Object.values(result.metafile.outputs);
+  const inputs = Object.entries(output.inputs).filter(([, v]) => v.bytesInOutput > 0).map(([k]) => k);
+  const secp = inputs.filter((i) => i.includes('tiny-secp256k1'));
+  if (spec === 'pearljs/keys') {
+    // Control: the check must be able to see tiny-secp256k1 when it is used.
+    if (secp.length) ok('control: pearljs/keys does include tiny-secp256k1');
+    else fail('tree-shake check cannot see tiny-secp256k1 in pearljs/keys');
+  } else if (secp.length) fail(`${spec} (${names[spec]}) pulls in tiny-secp256k1`);
+  else ok(`${spec} bundles without tiny-secp256k1 (${inputs.length} modules)`);
+}
+rmSync(join(dir, 'src/light.js'));
+
+// 6. publint and attw on the tarball.
+if (process.env.PEARLJS_SKIP_LINT_TOOLS) {
+  console.log('skip publint and attw (PEARLJS_SKIP_LINT_TOOLS set)');
+} else {
+  for (const [name, args] of [
+    ['publint', ['--yes', 'publint@0.3.25', '--strict', tarball]],
+    ['attw', ['--yes', '@arethetypeswrong/cli@0.18.5', '--profile', 'esm-only', tarball]],
+  ]) {
+    try {
+      run(npx, args, { cwd: packDir });
+      ok(name);
+    } catch (e) {
+      process.stdout.write(String(e.stdout ?? ''));
+      fail(name);
+    }
+  }
+}
+
+if (!existsSync(tarball)) fail('tarball vanished');
+if (failures.length) {
+  console.error(`\n${failures.length} check(s) failed`);
+  process.exit(1);
+}
+console.log('\npack verification passed');
