@@ -131,6 +131,10 @@
       "types": "./dist/xmss.d.ts",
       "default": "./dist/xmss.js"
     },
+    "./xmss-file-store": {
+      "types": "./dist/xmss-file-store.d.ts",
+      "default": "./dist/xmss-file-store.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
