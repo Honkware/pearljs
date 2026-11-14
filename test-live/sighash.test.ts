@@ -82,7 +82,7 @@ describeLive('sighash types', () => {
     const estimate = addChange(tx, VALUE, [{ type: 'keyPath', sighashType }]);
     const psbt = createPsbt(tx);
     account.prepareInput(psbt, 0, { index: KEY_BASE + i, value: VALUE, sighashType });
-    account.signInput(psbt, 0, { index: KEY_BASE + i });
+    account.signInput(psbt, 0, { index: KEY_BASE + i, allowedSighashTypes: [sighashType] });
     await verify(finalizePsbt(psbt), sighashType, estimate);
   });
 

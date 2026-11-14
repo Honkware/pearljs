@@ -65,7 +65,7 @@ describeLive('reorganization', () => {
     await other.call('node', ['disconnect', live!.p2p]);
     await until('the nodes to part', async () => (await pearld.call<unknown[]>('getpeerinfo')).length === 0);
 
-    const monitor = new InvoiceMonitor(pearldChainClient(pearld));
+    const monitor = new InvoiceMonitor(pearldChainClient(pearld), network);
     const invoiceAddress = account.deriveAddress(191);
     let invoice = monitor.createInvoice({
       id: 'reorg',

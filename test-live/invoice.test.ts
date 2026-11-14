@@ -28,7 +28,7 @@ const script = (index: number): Uint8Array => toOutputScript(address(index), net
 
 describeLive('invoices over pearld', () => {
   const chain = pearldChainClient(pearld);
-  const monitor = new InvoiceMonitor(chain);
+  const monitor = new InvoiceMonitor(chain, network);
   let funding: Transaction;
   let nextPayer = 0;
 
