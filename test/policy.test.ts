@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   assembleScriptTree,
+  checkSanity,
   checkStandard,
   checksigScript,
   deriveSigningAccountFromSeed,
@@ -12,6 +13,7 @@ import {
   estimateVsize,
   feeForVsize,
   isDust,
+  MAX_GRAIN,
   minRelayFee,
   networks,
   parseTransaction,
@@ -98,6 +100,82 @@ describe('checkStandard', () => {
     expect(() => checkStandard(tx, { prevouts: prevouts(p2tr, outputs - 1n) })).toThrow(
       'less than the amount spent of 15000',
     );
+  });
+
+  it('reports spending more than the inputs before a non-standard version or dust, as pearld does', () => {
+    const tx = parseTransaction(standard('standard').txHex);
+    tx.version = 3;
+    tx.outs[0]!.value = 1n;
+    const spent = tx.outs.reduce((sum, output) => sum + output.value, 0n);
+    expect(() => checkStandard(tx, { prevouts: [{ script: p2tr, value: spent - 1n }] })).toThrow(
+      `total value of all transaction inputs for transaction ${tx.getId()} is ${spent - 1n} which is less than the amount spent of ${spent}`,
+    );
+  });
+});
+
+// Messages confirmed against a regtest pearld by test-live/policy.test.ts.
+describe('checkSanity', () => {
+  const fresh = (): Transaction => parseTransaction(standard('standard').txHex);
+
+  it('accepts a standard transaction', () => {
+    expect(() => checkSanity(fresh())).not.toThrow();
+  });
+
+  it('refuses an output above the maximum amount, with the trailing space pearld prints', () => {
+    const tx = fresh();
+    tx.outs[0]!.value = MAX_GRAIN + 1n;
+    const message = 'transaction output value is higher than max allowed value: 2100000000000000001 > 2.1e+18 ';
+    expect(() => checkSanity(tx)).toThrow(new Error(message));
+    // checkStandard used to call this output dust.
+    expect(() => checkStandard(tx)).toThrow(new Error(message));
+  });
+
+  it('refuses a negative output and outputs that sum above the maximum', () => {
+    const negative = fresh();
+    negative.outs[0]!.value = -1n;
+    expect(() => checkSanity(negative)).toThrow('transaction output has negative value of -1');
+    const tx = fresh();
+    tx.outs[0]!.value = MAX_GRAIN;
+    tx.outs[1]!.value = 1n;
+    expect(() => checkSanity(tx)).toThrow(
+      'total value of all transaction outputs is 2100000000000000001 which is higher than max allowed value of 2.1e+18',
+    );
+  });
+
+  it('refuses duplicate inputs, which checkStandard used to accept', () => {
+    const tx = fresh();
+    tx.addInput(tx.ins[0]!.hash, tx.ins[0]!.index);
+    tx.setWitness(tx.ins.length - 1, tx.ins[0]!.witness);
+    expect(() => checkSanity(tx)).toThrow('transaction contains duplicate inputs');
+    expect(() => checkStandard(tx)).toThrow('transaction contains duplicate inputs');
+  });
+
+  it('refuses a null previous output and a coinbase', () => {
+    const tx = fresh();
+    tx.addInput(new Uint8Array(32), 0xffffffff);
+    expect(() => checkSanity(tx)).toThrow('transaction input refers to previous output that is null');
+
+    const coinbase = fresh();
+    coinbase.ins.splice(1);
+    coinbase.ins[0]!.hash = new Uint8Array(32);
+    coinbase.ins[0]!.index = 0xffffffff;
+    expect(() => checkSanity(coinbase)).toThrow(
+      'coinbase transaction script length of 0 is out of range (min: 2, max: 100)',
+    );
+    coinbase.ins[0]!.script = Uint8Array.of(0x51, 0x51);
+    expect(() => checkSanity(coinbase)).toThrow(`transaction is an individual coinbase ${coinbase.getId()}`);
+  });
+
+  it('refuses a transaction with no inputs, no outputs or more vbytes than a block', () => {
+    const noInputs = fresh();
+    noInputs.ins.splice(0);
+    expect(() => checkSanity(noInputs)).toThrow('transaction has no inputs');
+    const noOutputs = fresh();
+    noOutputs.outs.splice(0);
+    expect(() => checkSanity(noOutputs)).toThrow('transaction has no outputs');
+    const huge = fresh();
+    huge.outs[0]!.script = Uint8Array.from([0x6a, ...new Uint8Array(1_000_000)]);
+    expect(() => checkSanity(huge)).toThrow(/^transaction vsize is too big - got \d+, max 1000000$/);
   });
 });
 

@@ -25,6 +25,10 @@ export const MAX_STANDARD_TX_VERSION = 2;
 export const MIN_STANDARD_TX_NON_WITNESS_SIZE = 65;
 const MAX_STANDARD_SIG_SCRIPT_SIZE = 1650;
 const MAX_SCRIPT_SIZE = 10_000;
+/** blockchain.MaxBlockVsize. */
+const MAX_BLOCK_VSIZE = 1_000_000;
+const MIN_COINBASE_SCRIPT_LEN = 2;
+const MAX_COINBASE_SCRIPT_LEN = 100;
 const LOCK_TIME_THRESHOLD = 500_000_000;
 const MAX_INT64 = (1n << 63n) - 1n;
 
@@ -73,8 +77,9 @@ export interface StandardOptions {
 
 /**
  * Throws with pearld's reason if its mempool would refuse the transaction as
- * non-standard, dust or under the relay fee. Consensus rules, signatures,
- * sequence locks and mempool conflicts are not checked.
+ * insane, non-standard, dust or under the relay fee, checking in pearld's
+ * order. Signatures, sequence locks, coinbase maturity and mempool conflicts
+ * are not checked.
  */
 export function checkStandard(tx: Transaction, options: StandardOptions = {}): void {
   const feeRate = options.minRelayFee ?? DEFAULT_MIN_RELAY_FEE;
@@ -83,13 +88,14 @@ export function checkStandard(tx: Transaction, options: StandardOptions = {}): v
   if (!tx.hasWitnesses()) throw new Error('transaction has no witness data');
   if (tx.byteLength(false) < MIN_STANDARD_TX_NON_WITNESS_SIZE) throw new Error(`tx ${tx.getId()} is too small`);
 
-  // CheckTransactionSanity refuses other outputs as a consensus rule before
-  // the mempool reaches CheckTransactionStandard; Pearl has no other class.
-  tx.outs.forEach((output, i) => {
-    if (classifyOutputScript(output.script) === 'nonstandard') {
-      throw new Error(`transaction output ${i} has unsupported script type nonstandard`);
-    }
-  });
+  checkSanity(tx);
+
+  // CheckTransactionInputs runs before the standardness checks.
+  const prevouts = options.prevouts;
+  if (prevouts !== undefined) {
+    if (prevouts.length !== tx.ins.length) throw new Error('prevouts must match the transaction inputs');
+    checkInputValues(tx, prevouts);
+  }
 
   // CheckTransactionStandard, in its order.
   if (tx.version > maxVersion || tx.version < 1) {
@@ -117,9 +123,8 @@ export function checkStandard(tx: Transaction, options: StandardOptions = {}): v
   });
   if (nullData > 1) throw new Error('more than one transaction output in a nulldata script');
 
-  const prevouts = options.prevouts;
   if (prevouts === undefined) return;
-  if (prevouts.length !== tx.ins.length) throw new Error('prevouts must match the transaction inputs');
+  // Unreachable on a real chain: sanity keeps every other script class out of the UTXO set.
   prevouts.forEach((prevout, i) => {
     if (classifyOutputScript(prevout.script) === 'nonstandard') {
       throw new Error(`transaction input #${i} has a non-standard script form`);
@@ -127,15 +132,79 @@ export function checkStandard(tx: Transaction, options: StandardOptions = {}): v
   });
   const inputValue = prevouts.reduce((sum, prevout) => sum + prevout.value, 0n);
   const outputValue = tx.outs.reduce((sum, output) => sum + output.value, 0n);
-  if (inputValue < outputValue) {
-    throw new Error(
-      `total value of all transaction inputs for transaction ${tx.getId()} is ${inputValue} which is less than the amount spent of ${outputValue}`,
-    );
-  }
   const fee = inputValue - outputValue;
   const required = minRelayFee(vsize, feeRate);
   if (fee < required) {
     throw new Error(`transaction ${tx.getId()} has ${fee} fees which is under the required amount of ${required}`);
+  }
+}
+
+// Go prints btcutil.MaxGrain, an untyped float constant, this way.
+const MAX_GRAIN_TEXT = '2.1e+18';
+
+/**
+ * blockchain.CheckTransactionSanity, the consensus checks pearld's mempool
+ * runs before anything else, with its messages. checkStandard calls it.
+ */
+export function checkSanity(tx: Transaction): void {
+  if (tx.ins.length === 0) throw new Error('transaction has no inputs');
+  if (tx.outs.length === 0) throw new Error('transaction has no outputs');
+  const vsize = tx.virtualSize();
+  if (vsize > MAX_BLOCK_VSIZE) {
+    throw new Error(`transaction vsize is too big - got ${vsize}, max ${MAX_BLOCK_VSIZE}`);
+  }
+  let total = 0n;
+  tx.outs.forEach((output, i) => {
+    // Pearl has no other output class; this is a consensus rule, not policy.
+    if (classifyOutputScript(output.script) === 'nonstandard') {
+      throw new Error(`transaction output ${i} has unsupported script type nonstandard`);
+    }
+    if (output.value < 0n) throw new Error(`transaction output has negative value of ${output.value}`);
+    if (output.value > MAX_GRAIN) {
+      // The trailing space is pearld's.
+      throw new Error(
+        `transaction output value is higher than max allowed value: ${output.value} > ${MAX_GRAIN_TEXT} `,
+      );
+    }
+    total += output.value;
+    if (total > MAX_GRAIN) {
+      throw new Error(
+        `total value of all transaction outputs is ${total} which is higher than max allowed value of ${MAX_GRAIN_TEXT}`,
+      );
+    }
+  });
+  const seen = new Set<string>();
+  for (const input of tx.ins) {
+    const outpoint = `${input.hash.join(',')}:${input.index}`;
+    if (seen.has(outpoint)) throw new Error('transaction contains duplicate inputs');
+    seen.add(outpoint);
+  }
+  const isNull = (input: { hash: Uint8Array; index: number }): boolean =>
+    input.index === 0xffffffff && input.hash.every((byte) => byte === 0);
+  if (tx.ins.length === 1 && isNull(tx.ins[0]!)) {
+    const length = tx.ins[0]!.script.length;
+    if (length < MIN_COINBASE_SCRIPT_LEN || length > MAX_COINBASE_SCRIPT_LEN) {
+      throw new Error(
+        `coinbase transaction script length of ${length} is out of range (min: ${MIN_COINBASE_SCRIPT_LEN}, max: ${MAX_COINBASE_SCRIPT_LEN})`,
+      );
+    }
+    throw new Error(`transaction is an individual coinbase ${tx.getId()}`);
+  }
+  if (tx.ins.some(isNull)) throw new Error('transaction input refers to previous output that is null');
+}
+
+/**
+ * The spend check of blockchain.CheckTransactionInputs. Its other checks
+ * (existence, coinbase maturity, input value ranges) need the chain or cannot
+ * fail for outputs that are in it.
+ */
+function checkInputValues(tx: Transaction, prevouts: readonly Prevout[]): void {
+  const inputValue = prevouts.reduce((sum, prevout) => sum + prevout.value, 0n);
+  const outputValue = tx.outs.reduce((sum, output) => sum + output.value, 0n);
+  if (inputValue < outputValue) {
+    throw new Error(
+      `total value of all transaction inputs for transaction ${tx.getId()} is ${inputValue} which is less than the amount spent of ${outputValue}`,
+    );
   }
 }
 
