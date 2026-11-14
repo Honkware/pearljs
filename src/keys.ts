@@ -4,7 +4,6 @@
 
 import { BIP32Factory } from 'bip32';
 import type { BIP32Interface } from 'bip32';
-import { mnemonicToSeedSync, validateMnemonic } from 'bip39';
 import { crypto as bitcoinCrypto, Transaction } from 'bitcoinjs-lib';
 import type { Psbt } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
@@ -21,6 +20,8 @@ import {
   signTaprootScriptPathInput,
 } from './scriptpath.js';
 import type { P2mrPsbtSignOptions, P2mrSignOptions } from './scriptpath.js';
+
+export { mnemonicToSeed } from './mnemonic.js';
 
 const bip32 = BIP32Factory(ecc);
 
@@ -380,17 +381,4 @@ export function importWatchOnlyAccount(
     );
   }
   return toWatchOnlyAccount(node, null, network);
-}
-
-/**
- * Validate a BIP39 mnemonic and convert it to a 64-byte seed.
- *
- * Throws if the mnemonic is not part of the English BIP39 wordlist or its
- * checksum is invalid.
- */
-export function mnemonicToSeed(mnemonic: string, passphrase = ''): Uint8Array {
-  if (!validateMnemonic(mnemonic)) {
-    throw new Error('invalid BIP39 mnemonic');
-  }
-  return new Uint8Array(mnemonicToSeedSync(mnemonic, passphrase));
 }
