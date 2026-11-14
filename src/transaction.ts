@@ -268,19 +268,14 @@ function pearlScriptPathWitness(psbt: Psbt, inputIndex: number): Uint8Array[] | 
     if (!leafKeys.has(key)) return false;
     const { signature } = sig;
     const sighashType = signature.length === 65 ? signature[64]! : Transaction.SIGHASH_DEFAULT;
-    if (
-      (signature.length !== 64 && signature.length !== 65) ||
-      (signature.length === 65 && sighashType === Transaction.SIGHASH_DEFAULT) ||
-      !ecc.isXOnlyPoint(sig.pubkey) ||
-      !ecc.verifySchnorr(
-        tapscriptSighash(tx, inputIndex, { prevouts, leafHash: sig.leafHash, sighashType }),
-        sig.pubkey,
-        signature.subarray(0, 64),
-      )
-    ) {
-      throw new SigningError('SIGNATURE_INVALID', `PSBT input ${inputIndex} has an invalid script-path signature for key ${key}`);
-    }
-    return true;
+    const wellFormed =
+      (signature.length === 64 || (signature.length === 65 && sighashType !== Transaction.SIGHASH_DEFAULT)) &&
+      ecc.isXOnlyPoint(sig.pubkey);
+    const verifies =
+      wellFormed &&
+      ecc.verifySchnorr(tapscriptSighash(tx, inputIndex, { prevouts, leafHash: sig.leafHash, sighashType }), sig.pubkey, signature.subarray(0, 64));
+    if (verifies) return true;
+    throw new SigningError('SIGNATURE_INVALID', `PSBT input ${inputIndex} has an invalid script-path signature for key ${key}`);
   });
 
   if (multiA === null) {
