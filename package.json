@@ -140,12 +140,12 @@
   "devDependencies": {
     "@types/node": "20.19.25",
     "esbuild": "0.28.2",
-    "eslint": "9.39.1",
+    "eslint": "9.39.5",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.48.0",
+    "typescript-eslint": "8.72.2",
     "vite": "7.3.8",
     "vite-plugin-wasm": "3.6.0",
-    "vitest": "4.0.16"
+    "vitest": "4.1.12"
   },
   "sideEffects": false
 }
