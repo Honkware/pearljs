@@ -177,6 +177,10 @@ describe('PSBT helpers', () => {
     expect(parseTransaction(tx.toHex()).outs.at(-1)!.value).toBe(MAX_GRAIN);
     tx.outs.at(-1)!.value = MAX_GRAIN + 1n;
     expect(() => parseTransaction(tx.toHex())).toThrow(`holds ${MAX_GRAIN + 1n} grain, more than the largest Pearl amount`);
+    // The wire field is a signed 64-bit integer, so the top bit makes a negative amount.
+    tx.outs.at(-1)!.value = 0x0123456789abcdefn;
+    const negative = tx.toHex().replace('efcdab8967452301', 'ffffffffffffffff');
+    expect(() => parseTransaction(negative)).toThrow('has a negative value');
   });
 
   it('rejects invalid output values', () => {

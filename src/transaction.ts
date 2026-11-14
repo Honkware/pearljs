@@ -45,8 +45,9 @@ function checkHex(hex: string, what: string): void {
 
 /**
  * Parses a serialized transaction from hex. Throws TX_MALFORMED for input
- * that is not a transaction, and for an output above MAX_GRAIN, which no
- * Pearl transaction can carry and Transaction.fromHex alone lets through.
+ * that is not a transaction, and for an output that is negative or above
+ * MAX_GRAIN, which no Pearl transaction can carry and Transaction.fromHex
+ * alone lets through.
  */
 export function parseTransaction(hex: string): Transaction {
   checkHex(hex, 'transaction');
@@ -57,6 +58,8 @@ export function parseTransaction(hex: string): Transaction {
     throw new PearlError('TX_MALFORMED', err instanceof Error ? err.message : 'transaction could not be decoded', { cause: err });
   }
   tx.outs.forEach((output, i) => {
+    // The wire value is a signed 64-bit integer.
+    if (output.value < 0n) throw new PearlError('TX_MALFORMED', `transaction output ${i} has a negative value`);
     if (output.value > MAX_GRAIN) {
       throw new PearlError('TX_MALFORMED', `transaction output ${i} holds ${output.value} grain, more than the largest Pearl amount`);
     }
