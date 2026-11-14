@@ -142,6 +142,7 @@ describe('requests', () => {
     await client.estimateFee(6);
     await client.sendRawTransaction(new Uint8Array([0x02, 0xab]));
     await client.searchRawTransactions(address, { skip: 100, count: 50 });
+    await client.searchRawTransactions(address, { reverse: true, vinExtra: true });
     await client.getBlockHeader(genesisHash);
     expect(sent.map((r) => [r.body.method, r.body.params])).toEqual([
       ['getblockhash', [7]],
@@ -155,6 +156,7 @@ describe('requests', () => {
       ['estimatefee', [6]],
       ['sendrawtransaction', ['02ab']],
       ['searchrawtransactions', [address, 1, 100, 50, 0, false]],
+      ['searchrawtransactions', [address, 1, 0, 100, 1, true]],
       ['getblockheader', [genesisHash, true]],
     ]);
   });
@@ -163,6 +165,9 @@ describe('requests', () => {
     const { client: node, sent: nodeSent } = pearld({ testmempoolaccept: 'testmempoolaccept-allowed' });
     await node.testMempoolAccept(['00'], 10000000n);
     expect(nodeSent[0]!.text).toContain('"params":[["00"],0.1]');
+    // A live pearld answers "wrong number of params (expected 2, received 1)" without the rate.
+    await node.testMempoolAccept(['00']);
+    expect(nodeSent[1]!.text).toContain('"params":[["00"],0]');
 
     const { client: wallet, sent } = oyster({ sendtoaddress: 'sendtoaddress' });
     await wallet.sendToAddress(address, 2099999999999999999n, 1000n);
@@ -274,7 +279,7 @@ describe('pearld results', () => {
 
   it('reads testmempoolaccept fees in grains and fills in allowed', async () => {
     const { client } = pearld({
-      testmempoolaccept: (r) => (r.body.params.length === 2 ? 'testmempoolaccept-rejected' : 'testmempoolaccept-allowed'),
+      testmempoolaccept: (r) => (r.body.params[1] !== 0 ? 'testmempoolaccept-rejected' : 'testmempoolaccept-allowed'),
     });
     const [ok] = await client.testMempoolAccept(['00']);
     expect(ok?.allowed).toBe(true);
@@ -402,6 +407,12 @@ describe('errors', () => {
     expect(err.message).toContain('connection refused by 127.0.0.1:18334');
     expect(err.cause).toBeInstanceOf(TypeError);
 
+    // What Node reports when Oyster, which requires TLS 1.3, is offered TLS 1.2.
+    const oldTls = new OysterClient({ url: 'https://127.0.0.1:18332', fetch: failing('ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION') });
+    const tlsErr = await rejection(oldTls.walletIsLocked());
+    expect(tlsErr.kind).toBe('network');
+    expect(tlsErr.message).toContain('Oyster only speaks TLS 1.3');
+
     const untrusted = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: failing('DEPTH_ZERO_SELF_SIGNED_CERT') });
     expect((await rejection(untrusted.getBlockCount())).message).toContain("trusts the server's rpc.cert");
   });
@@ -445,7 +456,10 @@ describe('pearldChainClient', () => {
   it('reports address payments and tip for the invoice monitor', async () => {
     const { client, sent } = pearld({
       getblockchaininfo: 'getblockchaininfo',
-      searchrawtransactions: (r) => (r.body.params[2] === 0 ? 'searchrawtransactions' : 'searchrawtransactions-none'),
+      // The fixture holds one confirmed and one mempool transaction; the
+      // mempool is then read from the confirmed count on, in one request.
+      searchrawtransactions: (r) =>
+        r.body.params[2] === 0 || r.body.params[3] === 10000 ? 'searchrawtransactions' : 'searchrawtransactions-none',
       getblockheader: 'getblockheader',
     });
     const chain = pearldChainClient(client, 2);
@@ -465,7 +479,39 @@ describe('pearldChainClient', () => {
       },
     ]);
     const skips = sent.filter((r) => r.body.method === 'searchrawtransactions').map((r) => r.body.params[2]);
-    expect(skips).toEqual([0, 2]);
+    expect(skips).toEqual([0, 1]);
+  });
+
+  it('finds every mempool payment although pearld lists the mempool in a new order on each call', async () => {
+    // What a live pearld does: confirmed transactions in a fixed order, then
+    // the mempool's in Go map order, and -5 once skip passes the end.
+    const entry = (n: number, blockhash?: string) => ({
+      txid: n.toString(16).padStart(64, '0'),
+      ...(blockhash === undefined ? {} : { blockhash, confirmations: 1 }),
+      vin: [],
+      vout: [{ value: n, n: 0, scriptPubKey: { asm: '', type: 'witness_v1_taproot', address } }],
+    });
+    const confirmed = [1, 2, 3].map((n) => entry(n, genesisHash));
+    const mempool = [4, 5, 6, 7, 8].map((n) => entry(n));
+    let calls = 0;
+    const { client } = pearld({
+      getblockheader: 'getblockheader',
+      searchrawtransactions: (r) => {
+        const [, , skip, count] = r.body.params as [string, number, number, number];
+        const turn = calls++ % mempool.length;
+        const listed = [...confirmed, ...mempool.slice(turn), ...mempool.slice(0, turn)].slice(skip, skip + count);
+        const reply =
+          listed.length === 0
+            ? { result: null, error: { code: -5, message: 'No information available about address' } }
+            : { result: listed, error: null };
+        return new Response(JSON.stringify({ ...reply, id: r.body.id }));
+      },
+    });
+    for (const pageSize of [1, 2, 3, 4, 7, 8, 100]) {
+      const activity = await pearldChainClient(client, pageSize).getAddressActivity(address);
+      expect(activity.map((payment) => Number(payment.amount / 100000000n)).sort()).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+      expect(activity.filter((payment) => payment.block === null)).toHaveLength(5);
+    }
   });
 
   it('returns null for a transaction pearld does not know', async () => {

@@ -219,7 +219,7 @@ export interface TxRawResult {
 export interface SearchRawTransactionsResult {
   readonly hex?: string;
   readonly txid: string;
-  /** Pearl leaves hash, size and vsize empty here. */
+  /** Pearl leaves hash, size and vsize empty here, and block fields out for mempool transactions. */
   readonly hash: string;
   readonly size: string;
   readonly vsize: string;
@@ -326,6 +326,8 @@ export interface SearchOptions {
   /** pearld caps this at 10000. */
   readonly count?: number;
   readonly reverse?: boolean;
+  /** Adds `prevOut`, the spent output's addresses and value, to every input. */
+  readonly vinExtra?: boolean;
 }
 
 /** Typed methods for pearld. */
@@ -374,17 +376,25 @@ export class PearldClient extends JsonRpcClient {
     return this.call('sendrawtransaction', [typeof tx === 'string' ? tx : bytesToHex(tx)]);
   }
 
-  /** maxFeeRate is grain per 1000 vbytes; pearld defaults to 10000000 (0.1 PRL/kvB). */
-  async testMempoolAccept(txs: readonly (string | Uint8Array)[], maxFeeRate?: bigint): Promise<TestMempoolAcceptResult[]> {
+  /**
+   * maxFeeRate is grain per 1000 vbytes. pearld refuses the call without it,
+   * and reads 0, sent when none is given, as its default of 10000000 (0.1
+   * PRL/kvB). A transaction above the rate is refused as "max-fee-exceeded".
+   */
+  async testMempoolAccept(txs: readonly (string | Uint8Array)[], maxFeeRate = 0n): Promise<TestMempoolAcceptResult[]> {
     const hexes = txs.map((tx) => (typeof tx === 'string' ? tx : bytesToHex(tx)));
-    const params = maxFeeRate === undefined ? [hexes] : [hexes, maxFeeRate];
-    const results = await this.call<Omit<TestMempoolAcceptResult, 'allowed'>[]>('testmempoolaccept', params, {
+    const results = await this.call<Omit<TestMempoolAcceptResult, 'allowed'>[]>('testmempoolaccept', [hexes, maxFeeRate], {
       amounts: ['base', 'effective-feerate'],
     });
     return results.map((r) => ({ ...r, allowed: (r as { allowed?: boolean }).allowed === true }));
   }
 
-  /** estimatefee: grain per 1000 bytes. pearld has no estimatesmartfee. */
+  /**
+   * estimatefee: grain per 1000 bytes, for 1 to 25 blocks. It is 0 until
+   * pearld has seen transactions confirm, so floor it at the relay fee. A
+   * node that has connected fewer than three blocks answers with an error.
+   * pearld has no estimatesmartfee.
+   */
   estimateFee(blocks: number): Promise<bigint> {
     return this.call('estimatefee', [blocks], { amounts: ['result'] });
   }
@@ -401,15 +411,19 @@ export class PearldClient extends JsonRpcClient {
     return this.call('getrawmempool', [true], { amounts: ['fee'] });
   }
 
-  /** null when the output is spent or unknown. */
+  /**
+   * null when the output is unknown or a block has spent it. pearld does not
+   * count spends that are still in the mempool, whatever includeMempool says;
+   * the flag only adds outputs of mempool transactions.
+   */
   getTxOut(txid: string, vout: number, includeMempool = true): Promise<TxOutResult | null> {
     return this.call('gettxout', [txid, vout, includeMempool], { amounts: ['value'] });
   }
 
   /** Needs pearld with --addrindex and --txindex. Mempool transactions come last unless reversed. */
   searchRawTransactions(address: string, options: SearchOptions = {}): Promise<SearchRawTransactionsResult[]> {
-    const { skip = 0, count = 100, reverse = false } = options;
-    return this.call('searchrawtransactions', [address, 1, skip, count, 0, reverse], {
+    const { skip = 0, count = 100, reverse = false, vinExtra = false } = options;
+    return this.call('searchrawtransactions', [address, 1, skip, count, vinExtra ? 1 : 0, reverse], {
       amounts: ['value'],
     });
   }
@@ -495,6 +509,9 @@ export class OysterClient extends JsonRpcClient {
   }
 }
 
+/** The most transactions searchrawtransactions returns in one call. */
+const MAX_SEARCH_COUNT = 10000;
+
 /**
  * A ChainClient over pearld for the invoice monitor. Address activity comes
  * from searchrawtransactions, so pearld must run with --addrindex and
@@ -520,21 +537,36 @@ export function pearldChainClient(client: PearldClient, pageSize = 100): ChainCl
 
     async getAddressActivity(address) {
       const found = new Map<string, { amount: bigint; blockhash: string | undefined }>();
-      for (let skip = 0; ; skip += pageSize) {
-        let page: SearchRawTransactionsResult[];
-        try {
-          page = await client.searchRawTransactions(address, { skip, count: pageSize });
-        } catch (err) {
-          if (isUnusedAddress(err)) break;
-          throw err;
-        }
+      const add = (page: SearchRawTransactionsResult[]): void => {
         for (const tx of page) {
           const amount = tx.vout
             .filter((out) => out.scriptPubKey.address === address)
             .reduce((sum, out) => sum + out.value, 0n);
           if (amount > 0n && !found.has(tx.txid)) found.set(tx.txid, { amount, blockhash: tx.blockhash });
         }
-        if (page.length < pageSize) break;
+      };
+      try {
+        // Confirmed transactions come first, in a fixed order, so skip counts only those.
+        for (let confirmed = 0; ; ) {
+          const page = await client.searchRawTransactions(address, { skip: confirmed, count: pageSize });
+          // A short page is everything that was left, in one reply.
+          if (page.length < pageSize) {
+            add(page);
+            break;
+          }
+          const mined = page.filter((tx) => tx.blockhash !== undefined && tx.blockhash !== '');
+          add(mined);
+          confirmed += mined.length;
+          if (mined.length < pageSize) {
+            // The page ran into the mempool, which pearld lists in a different
+            // order on every call: paging through it can miss transactions,
+            // so all of it is read in one request.
+            add(await client.searchRawTransactions(address, { skip: confirmed, count: MAX_SEARCH_COUNT }));
+            break;
+          }
+        }
+      } catch (err) {
+        if (!isUnusedAddress(err)) throw err;
       }
       const heights = new Map<string, number>();
       const payments: AddressPayment[] = [];
@@ -557,8 +589,9 @@ export function pearldChainClient(client: PearldClient, pageSize = 100): ChainCl
   };
 }
 
-// pearld answers -5 both for an address it has never seen and for one it
-// cannot decode; only the first means "no activity".
+// pearld answers -5 for an address it has never seen, for a skip past the
+// last transaction, and for an address it cannot decode; only the first two
+// mean "nothing here".
 function isUnusedAddress(err: unknown): boolean {
   return (
     err instanceof PearlRpcError &&
@@ -612,6 +645,9 @@ function networkMessage(err: unknown, origin: string): string {
   if (code === 'ECONNRESET' || code === 'UND_ERR_SOCKET') return `${origin} closed the connection`;
   if (typeof code === 'string' && TLS_TRUST_CODES.has(code)) {
     return `TLS certificate of ${origin} is not trusted (${code}); pass a fetch or dispatcher that trusts the server's rpc.cert`;
+  }
+  if (code === 'ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION') {
+    return `TLS handshake with ${origin} failed (${code}); the server needs a newer TLS version, and Oyster only speaks TLS 1.3`;
   }
   if (code === 'ERR_SSL_WRONG_VERSION_NUMBER' || code === 'EPROTO') {
     return `TLS handshake with ${origin} failed (${code}); if the server runs with notls or noservertls, use an http:// URL`;
