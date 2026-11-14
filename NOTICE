@@ -1,3 +1,28 @@
 pearljs uses bitcoinjs-lib, bip32, @scure/bip39, bech32, tiny-secp256k1, and @noble/hashes as npm dependencies. It does not contain copied source files from those projects. Their copyright notices and licenses are included in their installed packages.
 
 Pearl protocol constants and compatibility behavior were derived from the Pearl Research Labs source tree. No affiliation or endorsement is implied.
+
+XMSS
+
+src/xmss.ts is a TypeScript port of the XMSS reference code (https://github.com/XMSS/xmss-reference), in the form Pearl builds from xmss/external: the WOTS+, L-tree, tree hash, hash and address routines of wots.c, xmss_commons.c, xmss_core.c, hash.c, hash_address.c and utils.c, for the single parameter set Pearl uses. The reference implementation was written by Andreas Hülsing and Joost Rijneveld, and all of its code is available under the CC0 1.0 Universal Public Domain Dedication (https://creativecommons.org/publicdomain/zero/1.0/). CC0 asks for no notice; the origin is recorded here so it can be traced.
+
+Pearl
+
+Several modules follow Pearl's Go code closely enough to be derived from it, function by function: the script tree assembly and control blocks (node/txscript/taproot.go), the Taproot signature message (node/txscript/sighash.go), the script tokenizer, disassembly and script numbers (node/txscript), the multi_a parser and witness layout (node/btcutil/psbt), relay policy checks (node/mempool), WIF encoding (node/btcutil/wif.go), block and certificate serialization (node/wire) and message signing (wallet/rpc/jsonrpc/bip322.go). Pearl's node and wallet are distributed under the ISC License:
+
+ISC License
+
+Copyright (c) 2025-2026 Pearl Research Labs
+Copyright (c) 2015-2016 The Decred developers
+
+Permission to use, copy, modify, and distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
