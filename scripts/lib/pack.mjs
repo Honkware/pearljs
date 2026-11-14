@@ -3,9 +3,10 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-export const root = resolve(new URL('../..', import.meta.url).pathname);
+export const root = fileURLToPath(new URL('../..', import.meta.url));
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 export function run(cmd, args, options = {}) {
