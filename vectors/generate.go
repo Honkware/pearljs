@@ -24,6 +24,7 @@ import (
 	"github.com/pearl-research-labs/pearl/node/btcutil/psbt"
 	"github.com/pearl-research-labs/pearl/node/chaincfg"
 	"github.com/pearl-research-labs/pearl/node/chaincfg/chainhash"
+	"github.com/pearl-research-labs/pearl/node/mempool"
 	"github.com/pearl-research-labs/pearl/node/txscript"
 	"github.com/pearl-research-labs/pearl/node/wire"
 	"github.com/pearl-research-labs/pearl/wallet/rpc/jsonrpc"
@@ -218,6 +219,34 @@ type Vectors struct {
 	WIF              []WIFVector             `json:"wif"`
 	BadWIF           []BadWIFVector          `json:"badWif"`
 	BadBlocks        []BadBlockVector        `json:"badBlocks"`
+	Policy           PolicyVectors           `json:"policy"`
+}
+
+// DustVector is mempool.GetDustThreshold of a script and mempool.IsDust of
+// an output paying it Value at the default relay fee.
+type DustVector struct {
+	Name      string `json:"name"`
+	Script    string `json:"script"`
+	Threshold int64  `json:"threshold"`
+	Value     int64  `json:"value,string"`
+	Dust      bool   `json:"dust"`
+}
+
+// StandardVector is mempool.CheckTransactionStandard of a transaction, with
+// Error "" when it passes.
+type StandardVector struct {
+	Name           string `json:"name"`
+	TxHex          string `json:"txHex"`
+	Vsize          int64  `json:"vsize"`
+	Height         int32  `json:"height"`
+	MedianTimePast int64  `json:"medianTimePast"`
+	MinRelayFee    int64  `json:"minRelayFee"`
+	Error          string `json:"error"`
+}
+
+type PolicyVectors struct {
+	Dust     []DustVector     `json:"dust"`
+	Standard []StandardVector `json:"standard"`
 }
 
 // WIFVector is a private key as btcutil.NewWIF encodes it. Address is the
@@ -1472,6 +1501,110 @@ func main() {
 		}
 		vectors.BadBlocks = append(vectors.BadBlocks, BadBlockVector{
 			Name: item.name, Hex: hex.EncodeToString(item.raw), Error: err.Error(),
+		})
+	}
+
+	// Relay policy, on edits of one standard P2TR spend.
+	policyP2TR := append([]byte{txscript.OP_1, txscript.OP_DATA_32}, patternBytes(32, 7)...)
+	policyP2MR := append([]byte{txscript.OP_2, txscript.OP_DATA_32}, patternBytes(32, 8)...)
+	for _, item := range []struct {
+		name   string
+		script []byte
+		value  int64
+	}{
+		{"p2tr-under", policyP2TR, 332},
+		{"p2tr-at", policyP2TR, 333},
+		{"p2mr-under", policyP2MR, 332},
+		{"p2wpkh-at", append([]byte{txscript.OP_0, txscript.OP_DATA_20}, patternBytes(20, 9)...), 297},
+		{"bare-op-true-under", []byte{txscript.OP_TRUE}, 473},
+		{"bare-op-true-at", []byte{txscript.OP_TRUE}, 474},
+		{"op-return", []byte{txscript.OP_RETURN}, 1_000_000},
+		{"unparsable", []byte{txscript.OP_PUSHDATA1}, 1_000_000},
+		{"over-max-script-size", make([]byte, txscript.MaxScriptSize+1), 1_000_000_000},
+		{"over-max-grain", policyP2TR, btcutil.MaxGrain + 1},
+	} {
+		out := wire.NewTxOut(item.value, item.script)
+		vectors.Policy.Dust = append(vectors.Policy.Dust, DustVector{
+			Name: item.name, Script: hex.EncodeToString(item.script), Threshold: mempool.GetDustThreshold(out),
+			Value: item.value, Dust: mempool.IsDust(out, mempool.DefaultMinRelayTxFee),
+		})
+	}
+	const policyHeight, policyTime = 1000, 1_700_000_000
+	policyTx := func() *wire.MsgTx {
+		tx := wire.NewMsgTx(2)
+		var prev chainhash.Hash
+		copy(prev[:], patternBytes(32, 1))
+		in := wire.NewTxIn(&wire.OutPoint{Hash: prev, Index: 0}, nil, nil)
+		in.SetWitness(wire.TxWitness{patternBytes(64, 2)})
+		tx.AddTxIn(in)
+		tx.AddTxOut(wire.NewTxOut(10000, policyP2TR))
+		tx.AddTxOut(wire.NewTxOut(5000, policyP2MR))
+		return tx
+	}
+	timeLock := func(lockTime uint32) func(*wire.MsgTx) {
+		return func(tx *wire.MsgTx) {
+			tx.LockTime = lockTime
+			tx.TxIn[0].Sequence = wire.MaxTxInSequenceNum - 1
+		}
+	}
+	sigScript := func(script []byte) func(*wire.MsgTx) {
+		return func(tx *wire.MsgTx) { tx.TxIn[0].SignatureScript = script }
+	}
+	pushData2 := func(n int) []byte {
+		return append([]byte{txscript.OP_PUSHDATA2, byte(n), byte(n >> 8)}, make([]byte, n)...)
+	}
+	addOutput := func(value int64, script []byte) func(*wire.MsgTx) {
+		return func(tx *wire.MsgTx) { tx.AddTxOut(wire.NewTxOut(value, script)) }
+	}
+	for _, item := range []struct {
+		name        string
+		edit        func(*wire.MsgTx)
+		minRelayFee btcutil.Amount
+	}{
+		{"standard", func(*wire.MsgTx) {}, 0},
+		{"version-1", func(tx *wire.MsgTx) { tx.Version = 1 }, 0},
+		{"version-3", func(tx *wire.MsgTx) { tx.Version = 3 }, 0},
+		{"version-0", func(tx *wire.MsgTx) { tx.Version = 0 }, 0},
+		{"lock-height-not-reached", timeLock(policyHeight), 0},
+		{"lock-height-reached", timeLock(policyHeight - 1), 0},
+		{"lock-time-not-reached", timeLock(policyTime), 0},
+		{"lock-time-reached", timeLock(policyTime - 1), 0},
+		{"lock-ignored-by-final-sequence", func(tx *wire.MsgTx) { tx.LockTime = policyTime }, 0},
+		{"over-max-vsize", addOutput(0, append([]byte{txscript.OP_RETURN}, make([]byte, 100_000)...)), 0},
+		{"sig-script-at-limit", sigScript(pushData2(1647)), 0},
+		{"sig-script-over-limit", sigScript(pushData2(1648)), 0},
+		{"sig-script-not-push-only", sigScript([]byte{txscript.OP_NOP}), 0},
+		{"p2wpkh-output", addOutput(10000, append([]byte{txscript.OP_0, txscript.OP_DATA_20}, patternBytes(20, 9)...)), 0},
+		{"witness-v1-33-byte-output", addOutput(10000, append([]byte{txscript.OP_1, txscript.OP_DATA_33}, patternBytes(33, 9)...)), 0},
+		{"dust-p2tr-output", addOutput(332, policyP2TR), 0},
+		{"p2tr-output-at-dust-threshold", addOutput(333, policyP2TR), 0},
+		{"dust-p2mr-output", addOutput(332, policyP2MR), 0},
+		{"dust-at-higher-relay-fee", addOutput(1000, policyP2TR), 5000},
+		{"dust-allowed-at-zero-relay-fee", addOutput(1, policyP2TR), -1},
+		{"op-return-output", addOutput(0, []byte{txscript.OP_RETURN, txscript.OP_DATA_1, 1}), 0},
+		{"op-return-not-push-only", addOutput(0, []byte{txscript.OP_RETURN, txscript.OP_NOP}), 0},
+		{"two-op-return-outputs", func(tx *wire.MsgTx) {
+			tx.AddTxOut(wire.NewTxOut(0, []byte{txscript.OP_RETURN}))
+			tx.AddTxOut(wire.NewTxOut(0, []byte{txscript.OP_RETURN}))
+		}, 0},
+	} {
+		tx := policyTx()
+		item.edit(tx)
+		fee := item.minRelayFee
+		switch fee {
+		case 0:
+			fee = mempool.DefaultMinRelayTxFee
+		case -1:
+			fee = 0
+		}
+		errText := ""
+		utx := btcutil.NewTx(tx)
+		if err := mempool.CheckTransactionStandard(utx, policyHeight, time.Unix(policyTime, 0), fee, 2); err != nil {
+			errText = err.Error()
+		}
+		vectors.Policy.Standard = append(vectors.Policy.Standard, StandardVector{
+			Name: item.name, TxHex: serializeTx(tx, true), Vsize: blockchain.GetTransactionVsize(utx),
+			Height: policyHeight, MedianTimePast: policyTime, MinRelayFee: int64(fee), Error: errText,
 		})
 	}
 

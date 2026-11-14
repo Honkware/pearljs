@@ -9,6 +9,7 @@ export * from './keys.js';
 export * from './message.js';
 export * from './networks.js';
 export * from './payments.js';
+export * from './policy.js';
 export * from './script.js';
 export * from './scriptpath.js';
 export * from './scripttools.js';
