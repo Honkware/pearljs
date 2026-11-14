@@ -186,15 +186,18 @@ export function signMessage(privateKey: Uint8Array, message: string, options: Si
 
 /**
  * Verifies a message signature against a P2TR address, as Oyster's
- * verifymessage does for key-path signatures. Script-path signatures, which
- * Oyster's full script engine could accept, are reported as unsupported
- * instead of invalid. An address whose program is not a point on the curve
- * can have no valid signature, so the answer for it is false, as Oyster's is.
+ * verifymessage does for key-path signatures.
  *
- * Returns false for a well-formed signature that does not match. Throws for an
- * address that is not P2TR on the network, a signature that is not base64 or is
- * malformed, a script-path signature, and a message that could not have been
- * signed.
+ * The rule: the answer is false for anything that is not a valid key-path
+ * signature of that message for that address on that network, whatever the
+ * reason. That covers an address that does not decode, is for another network
+ * or is P2MR, a signature that is not base64 or not a witness stack, a message
+ * that could not have been signed (over 80 bytes, a lone surrogate), an
+ * address whose program is not a point on the curve, and a script-path
+ * signature, which Oyster's script engine could accept and pearljs does not
+ * evaluate. It throws only for a mistake in the calling code: a TypeError
+ * when address, signature or message is not a string, or network is not a
+ * PearlNetwork.
  */
 export function verifyMessage(
   address: string,
@@ -202,12 +205,23 @@ export function verifyMessage(
   message: string,
   network: PearlNetwork,
 ): boolean {
-  const { version, program } = decodeAddress(address, network);
-  if (version !== 1) {
-    throw new Error('only Taproot addresses are supported for message verification');
+  if (typeof address !== 'string') throw new TypeError('address must be a string');
+  if (network === null || typeof network !== 'object' || typeof network.bech32Hrp !== 'string') {
+    throw new TypeError('a valid PearlNetwork is required');
   }
-  const bytes = messageBytes(message);
-  const witness = parseWitness(decodeBase64(signature));
+  let program: Uint8Array;
+  let bytes: Uint8Array;
+  let witness: Uint8Array[];
+  try {
+    const decoded = decodeAddress(address, network);
+    if (decoded.version !== 1) return false;
+    program = decoded.program;
+    bytes = messageBytes(message);
+    witness = parseWitness(decodeBase64(signature));
+  } catch (err) {
+    if (err instanceof PearlError) return false;
+    throw err;
+  }
   let stack = witness;
   let annex: Uint8Array | undefined;
   const last = witness[witness.length - 1];
@@ -215,10 +229,7 @@ export function verifyMessage(
     annex = last;
     stack = witness.slice(0, -1);
   }
-  if (stack.length === 0) return false;
-  if (stack.length > 1) {
-    throw new Error('script-path message signatures are not supported');
-  }
+  if (stack.length !== 1) return false;
   const sig = stack[0]!;
   let hashType = Transaction.SIGHASH_DEFAULT;
   if (sig.length === 65) {

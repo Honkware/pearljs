@@ -73,19 +73,22 @@ describe('message signing', () => {
     );
   });
 
-  it('refuses addresses that are not P2TR and script-path witnesses', () => {
+  it('answers false for addresses that are not P2TR on the network and for script-path witnesses', () => {
     const p2mrAddress = vectors.addresses.find((item) => item.network === 'mainnet' && item.kind === 'p2mr')!.address;
     const signature = vectors.messages[1]!.signature;
-    expect(() => verifyMessage(p2mrAddress, signature, 'Hello, Pearl', networks.mainnet)).toThrow(
-      'only Taproot addresses',
-    );
+    expect(verifyMessage(p2mrAddress, signature, 'Hello, Pearl', networks.mainnet)).toBe(false);
     const twoItems = base64([2, 1, 0x51, 1, 0xc0]);
-    expect(() => verifyMessage(address, twoItems, 'Hello, Pearl', networks.mainnet)).toThrow('script-path');
+    expect(verifyMessage(address, twoItems, 'Hello, Pearl', networks.mainnet)).toBe(false);
+    const good = account.signMessage('Hello, Pearl', { index: 0 });
+    expect(verifyMessage(address, good, 'Hello, Pearl', networks.mainnet)).toBe(true);
+    expect(verifyMessage(address, good, 'Hello, Pearl', networks.regtest)).toBe(false);
+    expect(verifyMessage('not an address', good, 'Hello, Pearl', networks.mainnet)).toBe(false);
+    expect(verifyMessage(address, good, 'x'.repeat(81), networks.mainnet)).toBe(false);
   });
 
-  it('rejects malformed signatures', () => {
-    expect(() => verifyMessage(address, 'not base64!', 'x', networks.mainnet)).toThrow('base64');
-    expect(() => verifyMessage(address, base64([1, 64, 1, 2]), 'x', networks.mainnet)).toThrow('ends early');
+  it('answers false for malformed signatures', () => {
+    expect(verifyMessage(address, 'not base64!', 'x', networks.mainnet)).toBe(false);
+    expect(verifyMessage(address, base64([1, 64, 1, 2]), 'x', networks.mainnet)).toBe(false);
     expect(verifyMessage(address, base64([0]), 'x', networks.mainnet)).toBe(false);
     expect(verifyMessage(address, base64([1, 3, 1, 2, 3]), 'x', networks.mainnet)).toBe(false);
   });
@@ -113,7 +116,7 @@ describe('message signing', () => {
     );
   });
 
-  it('rejects lengths written in more bytes than they need, as wire.ReadVarInt does', () => {
+  it('does not accept lengths written in more bytes than they need, as wire.ReadVarInt does not', () => {
     const signature = Uint8Array.from(atob(account.signMessage('hello', { index: 0 })), (char) => char.charCodeAt(0));
     expect(verifyMessage(address, base64([...signature]), 'hello', networks.mainnet)).toBe(true);
     const variants = [
@@ -125,22 +128,20 @@ describe('message signing', () => {
       [1, 0xff, 0x40, 0, 0, 0, 0, 0, 0, 0, ...signature.slice(2)],
     ];
     for (const bytes of variants) {
-      expect(() => verifyMessage(address, base64(bytes), 'hello', networks.mainnet)).toThrow('non-canonical varint');
+      expect(verifyMessage(address, base64(bytes), 'hello', networks.mainnet)).toBe(false);
     }
     // 0xfd is the first length that needs the three-byte form.
     expect(verifyMessage(address, base64([1, 0xfd, 0xfd, 0, ...new Array<number>(253).fill(0)]), 'hello', networks.mainnet)).toBe(
       false,
     );
-    expect(() => verifyMessage(address, base64([1, 0xfd, 0xfc, 0, ...new Array<number>(252).fill(0)]), 'hello', networks.mainnet)).toThrow(
-      'non-canonical varint',
-    );
+    expect(verifyMessage(address, base64([1, 0xfd, 0xfc, 0, ...new Array<number>(252).fill(0)]), 'hello', networks.mainnet)).toBe(false);
   });
 
   it('refuses a message with a lone surrogate instead of signing U+FFFD for it', () => {
     for (const message of ['a\ud800', 'a\udfff', '\udc00\ud800']) {
       expect(() => account.signMessage(message, { index: 0 })).toThrow('lone surrogate');
       const signature = account.signMessage('a\ufffd', { index: 0 });
-      expect(() => verifyMessage(address, signature, message, networks.mainnet)).toThrow('lone surrogate');
+      expect(verifyMessage(address, signature, message, networks.mainnet)).toBe(false);
     }
     // A surrogate pair is an ordinary character.
     const signature = account.signMessage('a\ud83d\ude00', { index: 0 });
@@ -158,6 +159,8 @@ describe('message signing', () => {
     expect(() => verifyMessage(address, 'AA==', 5 as unknown as string, networks.mainnet)).toThrow(
       'message must be a string',
     );
+    expect(() => verifyMessage(5 as unknown as string, 'AA==', 'x', networks.mainnet)).toThrow(TypeError);
+    expect(() => verifyMessage(address, 'AA==', 'x', undefined as unknown as typeof networks.mainnet)).toThrow(TypeError);
   });
 
   it('mixes fresh randomness into every signature unless auxRand is given', () => {
