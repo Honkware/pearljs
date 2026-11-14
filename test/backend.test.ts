@@ -1,0 +1,267 @@
+// The wallet backends over pearld's address index and over Oyster, against
+// reply bodies from Pearl's own code (backendFixtures in
+// vectors/rpcfixtures_test.go) for one wallet history seen both ways.
+
+import { describe, expect, it } from 'vitest';
+import {
+  MissingIndexError,
+  OYSTER_DEFAULT_FEE_RATE,
+  createInvoice,
+  networks,
+  oysterBackend,
+  pearldBackend,
+  refreshInvoice,
+  spendableUtxos,
+  sumBalance,
+  toOutputScript,
+} from '../src/index.js';
+import {
+  blockHeights,
+  change0,
+  grain,
+  indexedPearld,
+  network,
+  receive0,
+  receive1,
+  receive2,
+  scenarioOyster,
+  tipHeight,
+  txids,
+} from './backend-helpers.js';
+import { expected, fixture, rejection } from './rpc-helpers.js';
+
+const outpoints = (utxos: { txid: string; vout: number }[]) => utxos.map((u) => `${u.txid}:${u.vout}`).sort();
+const heightOf = (confirmations: number) => tipHeight - confirmations + 1;
+
+describe('pearld backend', () => {
+  it('finds the unspent outputs of a set of addresses, mempool spends taken out and mempool outputs put in', async () => {
+    const { client } = indexedPearld();
+    const backend = pearldBackend(client, { network });
+    const utxos = await backend.getUtxos([receive0, receive1, receive2, change0]);
+    expect(outpoints(utxos)).toEqual([`${txids.a2}:0`, `${txids.a3}:0`, `${txids.m1}:0`].sort());
+    const byTxid = Object.fromEntries(utxos.map((u) => [u.txid, u]));
+    expect(byTxid[txids.a3]).toEqual({
+      txid: txids.a3,
+      vout: 0,
+      value: 70000000n,
+      script: toOutputScript(receive0, network),
+      address: receive0,
+      confirmations: 3,
+      coinbase: false,
+    });
+    expect(byTxid[txids.a2]).toMatchObject({ value: 5000000000n, address: receive2, confirmations: 10, coinbase: true });
+    expect(byTxid[txids.m1]).toMatchObject({ value: 100000000n, address: change0, confirmations: 0, coinbase: false });
+    // What Oyster would spend: the immature coinbase and the unconfirmed change stay behind.
+    expect(outpoints(spendableUtxos(utxos))).toEqual([`${txids.a3}:0`]);
+  });
+
+  it('still lists an output whose mempool spender pays an address outside the set', async () => {
+    const { client } = indexedPearld();
+    const utxos = await pearldBackend(client, { network }).getUtxos([receive0]);
+    // receive/0's own list holds m1, which spends a1:0.
+    expect(outpoints(utxos)).toEqual([`${txids.a3}:0`]);
+  });
+
+  it('takes output scripts in place of addresses and asks once for a repeated one', async () => {
+    const { client, sent } = indexedPearld();
+    const utxos = await pearldBackend(client, { network }).getUtxos([toOutputScript(receive2, network), receive2]);
+    expect(outpoints(utxos)).toEqual([`${txids.a2}:0`]);
+    expect(sent.map((r) => r.body.params[0])).toEqual([receive2]);
+  });
+
+  it('splits the balance into confirmed, unconfirmed and immature', async () => {
+    const { client } = indexedPearld();
+    const balance = await pearldBackend(client, { network }).getBalance([receive0, receive2, change0]);
+    expect(balance).toEqual({ confirmed: grain('confirmed'), unconfirmed: grain('unconfirmed'), immature: grain('immature') });
+    expect(sumBalance([{ txid: '', vout: 0, value: 5n, script: new Uint8Array(), confirmations: 100, coinbase: true }], 100).confirmed).toBe(5n);
+    expect(sumBalance([{ txid: '', vout: 0, value: 5n, script: new Uint8Array(), confirmations: 99, coinbase: true }], 100).immature).toBe(5n);
+    expect(sumBalance([{ txid: '', vout: 0, value: 5n, script: new Uint8Array() }], 100).unconfirmed).toBe(5n);
+  });
+
+  it('lists the history of an address with what each transaction paid it and spent from it', async () => {
+    const { client } = indexedPearld();
+    const history = await pearldBackend(client, { network }).getHistory(receive0);
+    const blockOf = (confirmations: number) => {
+      const hash = Object.keys(blockHeights).find((h) => blockHeights[h] === heightOf(confirmations))!;
+      return { height: heightOf(confirmations), hash };
+    };
+    expect(history).toEqual([
+      { txid: txids.a1, block: blockOf(6), received: 150000000n, spent: 0n },
+      { txid: txids.a3, block: blockOf(3), received: 70000000n, spent: 0n },
+      { txid: txids.m1, block: null, received: 0n, spent: 150000000n },
+    ]);
+    expect(await pearldBackend(client, { network }).getHistory(receive1)).toEqual([]);
+  });
+
+  it('is a chain client the invoice monitor accepts', async () => {
+    const { client } = indexedPearld();
+    const backend = pearldBackend(client, { network });
+    expect(await backend.getTip()).toEqual({ height: tipHeight, hash: expected('getblock-raw', 'hash') });
+    const invoice = createInvoice({ id: 'i', address: receive0, amount: 220000000n, createdAt: 1, expiresAt: 9, requiredConfirmations: 3 }, network);
+    const refreshed = await refreshInvoice(invoice, backend, 5);
+    expect(refreshed.paidAmount).toBe(220000000n);
+    expect(refreshed.state).toBe('confirmed');
+  });
+
+  it('estimates a fee rate and never goes under the node relay fee', async () => {
+    const estimated = pearldBackend(indexedPearld().client, { network });
+    expect(await estimated.estimateFeeRate()).toBe(BigInt(expected('estimatefee', 'rate') as string));
+
+    const young = indexedPearld({ estimatefee: 'estimatefee-unavailable' });
+    expect(await pearldBackend(young.client, { network }).estimateFeeRate(2)).toBe(BigInt(expected('getinfo', 'relayFee') as string));
+    expect(young.sent.find((r) => r.body.method === 'estimatefee')!.body.params).toEqual([2]);
+
+    const zero = indexedPearld({ estimatefee: (r) => new Response(`{"result":0,"error":null,"id":${r.body.id}}`) });
+    expect(await pearldBackend(zero.client, { network }).estimateFeeRate()).toBe(1000n);
+  });
+
+  it('broadcasts a transaction and returns its txid', async () => {
+    const { client, sent } = indexedPearld();
+    expect(await pearldBackend(client, { network }).broadcast(Uint8Array.of(1, 2, 3))).toBe(expected('getrawtransaction-hex', 'txid'));
+    expect(sent[0]!.body).toMatchObject({ method: 'sendrawtransaction', params: ['010203'] });
+  });
+
+  it('reports an output as spent by a mempool transaction although gettxout still shows it', async () => {
+    const { client } = indexedPearld({ gettxout: 'backend-gettxout-a1', gettxspendingprevout: 'backend-spending-a1' });
+    expect(await pearldBackend(client, { network }).getSpendStatus({ txid: txids.a1, vout: 0 })).toEqual({
+      status: 'spent',
+      spender: txids.m1,
+      confirmed: false,
+    });
+  });
+
+  it('reports an unspent output with its confirmations', async () => {
+    const { client } = indexedPearld({ gettxout: 'backend-gettxout-a3', gettxspendingprevout: 'backend-spending-a3' });
+    expect(await pearldBackend(client, { network }).getSpendStatus({ txid: txids.a3, vout: 0 })).toEqual({ status: 'unspent', confirmations: 3 });
+  });
+
+  it('tells an output a block spent from one that never existed, and names the spender', async () => {
+    const gone = { gettxout: 'gettxout-spent', gettxspendingprevout: 'backend-spending-a3' };
+    const spent = indexedPearld({ ...gone, getrawtransaction: 'backend-getrawtransaction-a1' });
+    expect(await pearldBackend(spent.client, { network }).getSpendStatus({ txid: txids.a1, vout: 0 })).toEqual({
+      status: 'spent',
+      spender: txids.m1,
+      confirmed: false,
+    });
+    // An output index the transaction does not have.
+    expect(await pearldBackend(spent.client, { network }).getSpendStatus({ txid: txids.a1, vout: 9 })).toEqual({ status: 'unknown' });
+
+    const unknown = indexedPearld({ ...gone, getrawtransaction: 'getrawtransaction-missing' });
+    expect(await pearldBackend(unknown.client, { network }).getSpendStatus({ txid: '00'.repeat(32), vout: 0 })).toEqual({ status: 'unknown' });
+  });
+
+  it('says which index is missing when pearld runs without it', async () => {
+    const bare = indexedPearld({ searchrawtransactions: 'searchrawtransactions-noindex', getrawtransaction: 'getrawtransaction-noindex' });
+    const backend = pearldBackend(bare.client, { network });
+    for (const call of [backend.getUtxos([receive0]), backend.getBalance([receive0]), backend.getHistory(receive0), backend.getAddressActivity(receive0)]) {
+      const err = await call.catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(MissingIndexError);
+      expect(err).toMatchObject({ index: 'addrindex' });
+      expect((err as Error).message).toContain('--addrindex');
+    }
+    const err = await backend.getTransaction(txids.a1).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MissingIndexError);
+    expect(err).toMatchObject({ index: 'txindex' });
+  });
+
+  it('refuses an address of another network before asking the node', async () => {
+    const { client, sent } = indexedPearld();
+    const mainnetAddress = receive0.replace(/^rprl/, 'prl');
+    await expect(pearldBackend(client, { network: networks.mainnet }).getUtxos([receive0])).rejects.toThrow();
+    await expect(pearldBackend(client, { network }).getHistory(mainnetAddress)).rejects.toThrow();
+    expect(sent).toHaveLength(0);
+  });
+
+  it('refuses a confirmation count or an output value that is not one', async () => {
+    const body = (edit: (text: string) => string) => (r: { body: { id: number } }) =>
+      new Response(edit(fixture('backend-search-receive2').body).replace(/"id":\d+}\n$/, `"id":${r.body.id}}`));
+    const fractional = indexedPearld({ searchrawtransactions: body((t) => t.replace('"confirmations":10', '"confirmations":1.5')) });
+    expect((await rejection(pearldBackend(fractional.client, { network }).getUtxos([receive2]))).message).toContain('no valid confirmation count');
+    const negative = indexedPearld({ searchrawtransactions: body((t) => t.replace('"value":50.00000000', '"value":-50.00000000')) });
+    expect((await rejection(pearldBackend(negative.client, { network }).getUtxos([receive2]))).message).toContain('expected an amount');
+  });
+});
+
+describe('Oyster backend', () => {
+  it('lists the wallet outputs paying the watched addresses, as coin selection takes them', async () => {
+    const { client, sent } = scenarioOyster();
+    const backend = oysterBackend(client, { network });
+    const utxos = await backend.getUtxos([receive0, change0]);
+    expect(outpoints(utxos)).toEqual([`${txids.a3}:0`, `${txids.m1}:0`].sort());
+    expect(utxos.find((u) => u.txid === txids.a3)).toEqual({
+      txid: txids.a3,
+      vout: 0,
+      value: 70000000n,
+      script: toOutputScript(receive0, network),
+      address: receive0,
+      confirmations: 3,
+      coinbase: false,
+    });
+    expect(sent[0]!.body).toMatchObject({ method: 'listunspent', params: [0, 9999999] });
+    expect(outpoints(await backend.getUtxos([receive0]))).toEqual([`${txids.a3}:0`]);
+    expect(await backend.getUtxos([receive1])).toEqual([]);
+  });
+
+  it('marks coinbase outputs from the transaction list, since listunspent has no flag', async () => {
+    const coinbase = fixture('backend-listunspent').body.replaceAll(txids.a3, txids.a2);
+    const { client } = scenarioOyster({ listunspent: (r) => new Response(coinbase.replace(/"id":\d+}\n$/, `"id":${r.body.id}}`)) });
+    const utxos = await oysterBackend(client, { network }).getUtxos([receive0]);
+    expect(utxos).toMatchObject([{ txid: txids.a2, coinbase: true }]);
+  });
+
+  it('reports the same balance as the address index, immature coinbase included', async () => {
+    const { client } = scenarioOyster();
+    const balance = await oysterBackend(client, { network }).getBalance([receive0, receive2, change0]);
+    expect(balance).toEqual({ confirmed: grain('confirmed'), unconfirmed: grain('unconfirmed'), immature: grain('immature') });
+    expect((await oysterBackend(client, { network }).getBalance([receive0])).immature).toBe(0n);
+  });
+
+  it('lists what an address received, with block heights worked out from confirmations', async () => {
+    const { client } = scenarioOyster();
+    const backend = oysterBackend(client, { network });
+    const history = await backend.getHistory(receive0);
+    expect(history.map((h) => [h.txid, h.received, h.block?.height, 'spent' in h])).toEqual([
+      [txids.a1, 150000000n, heightOf(6), false],
+      [txids.a3, 70000000n, heightOf(3), false],
+    ]);
+    expect(await backend.getAddressActivity(receive0)).toEqual(history.map((h) => ({ txid: h.txid, amount: h.received, block: h.block })));
+    expect(await backend.getTip()).toEqual({ height: tipHeight, hash: expected('getblock-raw', 'hash') });
+  });
+
+  it('counts a change address as used although Oyster lists no receive for it', async () => {
+    const { client } = scenarioOyster();
+    const backend = oysterBackend(client, { network });
+    expect(await backend.findUsed!([receive0, receive1, receive2, change0])).toEqual([receive0, receive2, change0]);
+    expect(await backend.getAddressActivity(change0)).toEqual([]);
+  });
+
+  it('looks up a wallet transaction and returns null for one the wallet does not hold', async () => {
+    const { client } = scenarioOyster({ gettransaction: (r) => (r.body.params[0] === txids.a1 ? 'gettransaction' : 'gettransaction-missing') });
+    const backend = oysterBackend(client, { network });
+    expect(await backend.getTransaction(txids.a1)).toEqual({ txid: 'ab'.repeat(32), block: { height: heightOf(6), hash: expected('getblock-raw', 'hash') } });
+    expect(await backend.getTransaction('00'.repeat(32))).toBeNull();
+  });
+
+  it('reaches pearld through Oyster for broadcast, fee rate and spend status', async () => {
+    const { client } = scenarioOyster({
+      sendrawtransaction: 'sendrawtransaction',
+      estimatefee: 'estimatefee',
+      gettxout: 'backend-gettxout-a1',
+      gettxspendingprevout: 'backend-spending-a1',
+    });
+    const backend = oysterBackend(client, { network });
+    expect(await backend.broadcast('00')).toBe(expected('getrawtransaction-hex', 'txid'));
+    expect(await backend.estimateFeeRate()).toBe(BigInt(expected('estimatefee', 'rate') as string));
+    expect(await backend.getSpendStatus({ txid: txids.a1, vout: 0 })).toEqual({ status: 'spent', spender: txids.m1, confirmed: false });
+    expect(await backend.getSpendStatus({ txid: txids.a3, vout: 0 })).toEqual({ status: 'unspent', confirmations: 3 });
+  });
+
+  it('says what an SPV Oyster cannot do instead of failing obscurely', async () => {
+    const inactive = 'chain-rpc-inactive';
+    const { client } = scenarioOyster({ sendrawtransaction: inactive, estimatefee: inactive, gettxout: inactive, gettxspendingprevout: inactive });
+    const backend = oysterBackend(client, { network });
+    await expect(backend.broadcast('00')).rejects.toThrow('send with sendMany instead');
+    expect(await backend.estimateFeeRate()).toBe(OYSTER_DEFAULT_FEE_RATE);
+    expect(await backend.getSpendStatus({ txid: txids.a1, vout: 0 })).toEqual({ status: 'unknown' });
+  });
+});
