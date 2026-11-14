@@ -11,23 +11,25 @@ import {
   finalizePsbt,
   mnemonicToSeed,
   networks,
-  parseTransaction,
+  parseBlock,
   serializeTransaction,
   toOutputScript,
   transactionId,
   witnessTransactionId,
 } from '../src/index.js';
-import type { Prevout, SpendEstimate, Transaction } from '../src/index.js';
-import { MINER_MNEMONIC, mineBlocks } from './context.js';
-import { rpcClient, type Rpc } from './rpc.js';
+import type { Prevout, SpendEstimate, TestMempoolAcceptResult, Transaction, TxRawResult } from '../src/index.js';
+import { MINER_MNEMONIC, mineBlocks, oysterClient, pearldClient, type LiveEndpoint } from './context.js';
 
 export const live = inject('live');
 export const describeLive = describe.skipIf(live === null);
 export const describeOyster = describe.skipIf(live?.oyster === null || live?.oyster === undefined);
 
-const unavailable: Rpc = () => Promise.reject(new Error('no live node'));
-export const pearld: Rpc = live === null ? unavailable : rpcClient(live.pearld);
-export const oyster: Rpc = live?.oyster ? rpcClient(live.oyster) : unavailable;
+/** Stands in when there is no node; never called, since every suite is then skipped. */
+export const nowhere: LiveEndpoint = { url: 'https://127.0.0.1:1', username: '', password: '', ca: '' };
+export const pearld = pearldClient(live?.pearld ?? nowhere);
+/** pearld as its limited user. */
+export const limited = pearldClient(live?.pearld ?? nowhere, live?.limited);
+export const oyster = oysterClient(live?.oyster ?? nowhere);
 
 export const network = networks.regtest;
 /** Coinbases pay index 0 of this account; change goes to index 1. */
@@ -42,68 +44,65 @@ export function mine(n = 1): Promise<string[]> {
   return mineBlocks(pearld, n);
 }
 
-interface RawTransactionVerbose {
-  txid: string;
-  hash: string;
-  vsize: number;
-  size: number;
-  confirmations?: number;
-  blockhash?: string;
-}
-
-export async function getTransaction(txid: string): Promise<RawTransactionVerbose> {
-  return pearld<RawTransactionVerbose>('getrawtransaction', txid, 1);
-}
-
 /** Broadcasts with sendrawtransaction and checks pearld reports pearljs's txid. */
 export async function broadcast(tx: Transaction): Promise<string> {
-  const txid = await pearld<string>('sendrawtransaction', serializeTransaction(tx));
+  const txid = await pearld.sendRawTransaction(serializeTransaction(tx));
   expect(txid).toBe(transactionId(tx));
   return txid;
 }
 
 /** Mines a block and checks that it confirmed tx. Returns pearld's view of it. */
-export async function confirm(tx: Transaction): Promise<RawTransactionVerbose> {
+export async function confirm(tx: Transaction): Promise<TxRawResult> {
   const [blockHash] = await mine(1);
-  const info = await getTransaction(transactionId(tx));
+  const info = await pearld.getRawTransaction(transactionId(tx));
   expect(info.blockhash).toBe(blockHash);
   expect(info.confirmations).toBe(1);
   expect(info.hash).toBe(witnessTransactionId(tx));
   return info;
 }
 
+/** Broadcasts every transaction, mines one block and checks that it confirmed them all. */
+export async function broadcastAllAndConfirm(txs: readonly Transaction[]): Promise<TxRawResult[]> {
+  for (const tx of txs) await broadcast(tx);
+  const [blockHash] = await mine(1);
+  const infos: TxRawResult[] = [];
+  for (const tx of txs) {
+    const info = await pearld.getRawTransaction(transactionId(tx));
+    expect(info.blockhash).toBe(blockHash);
+    expect(info.hash).toBe(witnessTransactionId(tx));
+    infos.push(info);
+  }
+  return infos;
+}
+
 /** broadcast, then confirm. */
-export async function broadcastAndConfirm(tx: Transaction): Promise<RawTransactionVerbose> {
+export async function broadcastAndConfirm(tx: Transaction): Promise<TxRawResult> {
   await broadcast(tx);
   return confirm(tx);
 }
 
-export interface TestMempoolAcceptResult {
-  txid: string;
-  allowed: boolean;
-  vsize?: number;
-  'reject-reason'?: string;
-}
-
 export async function testMempoolAccept(tx: Transaction): Promise<TestMempoolAcceptResult> {
-  // pearld requires maxfeerate although btcjson documents it as optional; 0 selects the default.
-  const [result] = await pearld<TestMempoolAcceptResult[]>('testmempoolaccept', [serializeTransaction(tx)], 0);
-  // pearld omits allowed when it is false.
-  return { ...result!, allowed: result!.allowed === true };
+  const [result] = await pearld.testMempoolAccept([serializeTransaction(tx)]);
+  return result!;
 }
 
-/** A mature coinbase output that pays the miner and is not spent, in the chain or the mempool. */
+/** The height and median time past a transaction entering the mempool now is judged at. */
+export async function nextBlock(): Promise<{ height: number; medianTimePast: number }> {
+  const info = await pearld.getBlockchainInfo();
+  return { height: info.blocks + 1, medianTimePast: info.mediantime };
+}
+
+/** A mature coinbase output that pays the miner and no block has spent. */
 let searchFrom = 1;
 async function matureCoinbase(): Promise<{ tx: Transaction; vout: number }> {
-  const tip = await pearld<number>('getblockcount');
+  const tip = await pearld.getBlockCount();
   // Spendable in the next block once it is 100 blocks deep.
   for (let height = searchFrom; height <= tip + 1 - 100; height++) {
-    const hash = await pearld<string>('getblockhash', height);
-    const block = await pearld<{ tx: string[] }>('getblock', hash, 1);
-    const txid = block.tx[0]!;
-    const tx = parseTransaction(await pearld<string>('getrawtransaction', txid, 0));
+    const block = parseBlock(await pearld.getRawBlock(await pearld.getBlockHash(height)));
+    const tx = block.transactions[0]!;
+    const txid = transactionId(tx);
     const vout = tx.outs.findIndex((out) => Buffer.from(out.script).equals(minerScript));
-    if (vout >= 0 && (await pearld('gettxout', txid, vout, true)) !== null) {
+    if (vout >= 0 && (await pearld.getTxOut(txid, vout)) !== null) {
       searchFrom = height;
       return { tx, vout };
     }

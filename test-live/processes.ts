@@ -1,23 +1,32 @@
 // Starts prebuilt pearld and oyster binaries on regtest and stops them. Nothing
 // is built here: the binaries come from the PEARLD and OYSTER environment
-// variables. Every listener is on 127.0.0.1 and the node takes no peers.
+// variables. Every listener is on 127.0.0.1, RPC runs over each server's
+// default TLS with the certificate it generates, and a node only ever peers
+// with another node started here.
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
-import { rpcClient, type Rpc, type RpcEndpoint } from './rpc.js';
+import type { JsonRpcClient, OysterClient, PearldClient } from '../src/index.js';
+import { oysterClient, pearldClient, type Credentials, type LiveEndpoint } from './context.js';
 
-export interface RunningProcess {
-  readonly endpoint: RpcEndpoint;
-  readonly rpc: Rpc;
+export interface RunningProcess<Client extends JsonRpcClient> {
+  readonly endpoint: LiveEndpoint;
+  readonly client: Client;
   readonly logFile: string;
   stop(): Promise<void>;
 }
 
-const USER = 'pearljs';
-const PASS = 'pearljs-live';
+export interface RunningPearld extends RunningProcess<PearldClient> {
+  readonly limited: Credentials;
+  /** host:port of the P2P listener. */
+  readonly p2p: string;
+}
+
+const ADMIN: Credentials = { username: 'pearljs', password: 'pearljs-live' };
+const LIMITED: Credentials = { username: 'pearljs-limited', password: 'pearljs-limited-live' };
 
 /** A port nothing is listening on right now. */
 export async function freePort(): Promise<number> {
@@ -42,7 +51,7 @@ process.on('exit', () => {
 });
 
 function launch(exe: string, args: string[], logFile: string): ChildProcess {
-  const log = createWriteStream(logFile);
+  const log = createWriteStream(logFile, { flags: 'a' });
   const child = spawn(exe, args, { stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout?.pipe(log);
   child.stderr?.pipe(log);
@@ -61,15 +70,29 @@ async function logTail(logFile: string): Promise<string> {
   return text.split('\n').slice(-20).join('\n');
 }
 
-async function waitForRpc(child: ChildProcess, rpc: Rpc, method: string, logFile: string): Promise<void> {
+/**
+ * Waits for the server to write its certificate and answer one call, and
+ * returns a client that trusts that certificate.
+ */
+async function waitForRpc<Client extends JsonRpcClient>(
+  child: ChildProcess,
+  certFile: string,
+  connect: (ca: string) => Client,
+  method: string,
+  logFile: string,
+): Promise<{ ca: string; client: Client }> {
   const deadline = Date.now() + 60_000;
+  let ca: string | undefined;
+  let client: Client | undefined;
   for (;;) {
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(`process exited before its RPC server came up:\n${await logTail(logFile)}`);
     }
     try {
-      await rpc(method);
-      return;
+      ca ??= await readFile(certFile, 'utf8');
+      client ??= connect(ca);
+      await client.call(method);
+      return { ca, client };
     } catch (error) {
       if (Date.now() > deadline) throw new Error(`RPC did not come up: ${String(error)}\n${await logTail(logFile)}`);
     }
@@ -77,10 +100,10 @@ async function waitForRpc(child: ChildProcess, rpc: Rpc, method: string, logFile
   }
 }
 
-function stopper(child: ChildProcess, rpc: Rpc): () => Promise<void> {
+function stopper(child: ChildProcess, client: JsonRpcClient): () => Promise<void> {
   return async () => {
     if (child.exitCode !== null || child.signalCode !== null) return;
-    await rpc('stop').catch(() => child.kill('SIGTERM'));
+    await client.call('stop').catch(() => child.kill('SIGTERM'));
     const timeout = setTimeout(() => child.kill('SIGKILL'), 30_000);
     await exited(child);
     clearTimeout(timeout);
@@ -93,50 +116,67 @@ export interface PearldOptions {
   miningAddress: string;
 }
 
-export async function startPearld(options: PearldOptions): Promise<RunningProcess> {
+export async function startPearld(options: PearldOptions): Promise<RunningPearld> {
   const [rpcPort, p2pPort] = [await freePort(), await freePort()];
-  const endpoint = { url: `http://127.0.0.1:${rpcPort}`, user: USER, pass: PASS };
   await mkdir(options.dir, { recursive: true });
   const logFile = join(options.dir, 'pearld.log');
+  const certFile = join(options.dir, 'rpc.cert');
   const child = launch(
     options.exe,
     [
       '--regtest',
       `--datadir=${join(options.dir, 'data')}`,
       `--logdir=${join(options.dir, 'logs')}`,
-      `--rpcuser=${USER}`,
-      `--rpcpass=${PASS}`,
+      `--rpcuser=${ADMIN.username}`,
+      `--rpcpass=${ADMIN.password}`,
+      `--rpclimituser=${LIMITED.username}`,
+      `--rpclimitpass=${LIMITED.password}`,
       `--rpclisten=127.0.0.1:${rpcPort}`,
-      // Plain HTTP is only accepted because the listener is loopback.
-      '--notls',
+      // Without these pearld writes the pair into the user's home directory.
+      `--rpccert=${certFile}`,
+      `--rpckey=${join(options.dir, 'rpc.key')}`,
       `--listen=127.0.0.1:${p2pPort}`,
       '--nodnsseed',
       `--miningaddr=${options.miningAddress}`,
       '--txindex',
+      '--addrindex',
       // Regtest relays non-standard transactions by default; mainnet does not.
       '--rejectnonstd',
     ],
     logFile,
   );
-  const rpc = rpcClient(endpoint);
+  const url = `https://127.0.0.1:${rpcPort}`;
   try {
-    await waitForRpc(child, rpc, 'getblockcount', logFile);
+    const { ca, client } = await waitForRpc(
+      child,
+      certFile,
+      (pem) => pearldClient({ url, ca: pem, ...ADMIN }),
+      'getblockcount',
+      logFile,
+    );
+    return {
+      endpoint: { url, ca, ...ADMIN },
+      limited: LIMITED,
+      p2p: `127.0.0.1:${p2pPort}`,
+      client,
+      logFile,
+      stop: stopper(child, client),
+    };
   } catch (error) {
     child.kill('SIGKILL');
     throw error;
   }
-  return { endpoint, rpc, logFile, stop: stopper(child, rpc) };
 }
 
 export interface OysterOptions {
   exe: string;
   dir: string;
-  pearld: RpcEndpoint;
+  pearld: LiveEndpoint;
   mnemonic: string;
   passphrase: string;
 }
 
-export async function startOyster(options: OysterOptions): Promise<RunningProcess> {
+export async function startOyster(options: OysterOptions): Promise<RunningProcess<OysterClient>> {
   const appData = join(options.dir, 'appdata');
   await mkdir(appData, { recursive: true });
   const logFile = join(options.dir, 'oyster.log');
@@ -154,28 +194,37 @@ export async function startOyster(options: OysterOptions): Promise<RunningProces
   }
 
   const rpcPort = await freePort();
-  const endpoint = { url: `http://127.0.0.1:${rpcPort}`, user: USER, pass: PASS };
+  const certFile = join(options.dir, 'rpc.cert');
+  const pearldCert = join(options.dir, 'pearld.cert');
+  await writeFile(pearldCert, options.pearld.ca);
   const child = launch(
     options.exe,
     [
       ...common,
       `--rpcconnect=${new URL(options.pearld.url).host}`,
-      '--noclienttls',
-      `--pearldusername=${options.pearld.user}`,
-      `--pearldpassword=${options.pearld.pass}`,
+      `--cafile=${pearldCert}`,
+      `--pearldusername=${options.pearld.username}`,
+      `--pearldpassword=${options.pearld.password}`,
       `--rpclisten=127.0.0.1:${rpcPort}`,
-      '--noservertls',
-      `--username=${USER}`,
-      `--password=${PASS}`,
+      `--rpccert=${certFile}`,
+      `--rpckey=${join(options.dir, 'rpc.key')}`,
+      `--username=${ADMIN.username}`,
+      `--password=${ADMIN.password}`,
     ],
     logFile,
   );
-  const rpc = rpcClient(endpoint);
+  const url = `https://127.0.0.1:${rpcPort}`;
   try {
-    await waitForRpc(child, rpc, 'getinfo', logFile);
+    const { ca, client } = await waitForRpc(
+      child,
+      certFile,
+      (pem) => oysterClient({ url, ca: pem, ...ADMIN }),
+      'getinfo',
+      logFile,
+    );
+    return { endpoint: { url, ca, ...ADMIN }, client, logFile, stop: stopper(child, client) };
   } catch (error) {
     child.kill('SIGKILL');
     throw error;
   }
-  return { endpoint, rpc, logFile, stop: stopper(child, rpc) };
 }

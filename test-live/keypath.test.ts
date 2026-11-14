@@ -50,8 +50,8 @@ describeLive('BIP86 key path', () => {
     expect(info.vsize).toBe(estimateVsize(signed, spends));
     expect(info.vsize).toBe(signed.virtualSize());
 
-    const output = await pearld<{ value: number; scriptPubKey: { address: string } }>('gettxout', info.txid, 0, true);
-    expect(output.scriptPubKey.address).toBe(account.deriveAddress(7, true));
-    expect(output.value).toBe(0.3);
+    const output = await pearld.getTxOut(info.txid, 0);
+    expect(output?.scriptPubKey.address).toBe(account.deriveAddress(7, true));
+    expect(output?.value).toBe(30_000_000n);
   });
 });

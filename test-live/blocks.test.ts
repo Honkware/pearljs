@@ -36,9 +36,10 @@ const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
 const reversedHex = (bytes: Uint8Array): string => hex(Uint8Array.from(bytes).reverse());
 
 async function fetchBlock(hash: string): Promise<{ raw: string; block: PearlBlock; info: VerboseBlock }> {
-  const raw = await pearld<string>('getblock', hash, 0);
-  const info = await pearld<VerboseBlock>('getblock', hash, 1);
-  return { raw, block: parseBlock(Buffer.from(raw, 'hex')), info };
+  const raw = await pearld.getBlockHex(hash);
+  // Verbose getblock has no typed method; getBlockHeader covers the header fields.
+  const info = await pearld.call<VerboseBlock>('getblock', [hash, 1]);
+  return { raw, block: parseBlock(await pearld.getRawBlock(hash)), info };
 }
 
 function expectMatchesPearld(raw: string, block: PearlBlock, info: VerboseBlock): void {
@@ -54,14 +55,14 @@ function expectMatchesPearld(raw: string, block: PearlBlock, info: VerboseBlock)
 
 describeLive('blocks', () => {
   it('parses the regtest genesis block, whose hardcoded certificate does not bind', async () => {
-    const { raw, block, info } = await fetchBlock(await pearld<string>('getblockhash', 0));
+    const { raw, block, info } = await fetchBlock(await pearld.getBlockHash(0));
     expect(info.hash).toBe(networks.regtest.genesisHash);
     expectMatchesPearld(raw, block, info);
     expect(() => checkCertificateBinding(block)).toThrow();
   });
 
   it('parses a coinbase-only block with a V3 certificate bound to its header', async () => {
-    const { raw, block, info } = await fetchBlock(await pearld<string>('getblockhash', 1));
+    const { raw, block, info } = await fetchBlock(await pearld.getBlockHash(1));
     expectMatchesPearld(raw, block, info);
     expect(block.certificate?.version).toBe(3);
     checkCertificateBinding(block);
@@ -72,7 +73,7 @@ describeLive('blocks', () => {
 
   it('parses a block with a witness transaction and checks its witness commitment', async () => {
     const funding = await fund([{ script: toOutputScript(miner.deriveAddress(2), network), value: 1_000_000n }]);
-    const { raw, block, info } = await fetchBlock(await pearld<string>('getbestblockhash'));
+    const { raw, block, info } = await fetchBlock(await pearld.getBestBlockHash());
     expectMatchesPearld(raw, block, info);
     expect(info.tx).toContain(transactionId(funding));
     expect(witnessCommitment(block)).not.toBeNull();
