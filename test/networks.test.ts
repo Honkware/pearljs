@@ -13,7 +13,7 @@ import {
 
 describe('networks', () => {
   it('mainnet matches chaincfg MainNetParams', () => {
-    expect(mainnet).toEqual({
+    expect(mainnet).toMatchObject({
       name: 'mainnet',
       magic: 0x50524c4d,
       defaultPort: 44108,
@@ -29,7 +29,7 @@ describe('networks', () => {
   });
 
   it('testnet matches chaincfg TestNetParams', () => {
-    expect(testnet).toEqual({
+    expect(testnet).toMatchObject({
       name: 'testnet',
       magic: 0x50524c31,
       defaultPort: 44110,
@@ -45,7 +45,7 @@ describe('networks', () => {
   });
 
   it('testnet2 keeps testnet address params with its own magic and genesis', () => {
-    expect(testnet2).toEqual({
+    expect(testnet2).toMatchObject({
       name: 'testnet2',
       magic: 0x50524c32,
       defaultPort: 44112,
@@ -61,7 +61,7 @@ describe('networks', () => {
   });
 
   it('regtest matches chaincfg RegressionNetParams', () => {
-    expect(regtest).toEqual({
+    expect(regtest).toMatchObject({
       name: 'regtest',
       magic: 0x50524c52,
       defaultPort: 18444,
@@ -77,7 +77,7 @@ describe('networks', () => {
   });
 
   it('simnet matches chaincfg SimNetParams and shares the regtest genesis', () => {
-    expect(simnet).toEqual({
+    expect(simnet).toMatchObject({
       name: 'simnet',
       magic: 0x50524c53,
       defaultPort: 18555,

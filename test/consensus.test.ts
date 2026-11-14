@@ -1,0 +1,153 @@
+// Consensus data against Pearl's own functions run in generate.go: the
+// chaincfg params of each network, CheckCertificateRules around every fork
+// height, CalcBlockSubsidy and its running total, CompactToBig, BigToCompact
+// and CalcWork, and getdifficulty's ratio.
+
+import { describe, expect, it } from 'vitest';
+import {
+  bitsToTarget,
+  blockSubsidy,
+  checkCertificateRules,
+  COINBASE_MATURITY,
+  difficultyForBits,
+  EMISSION_LIMIT,
+  MAX_GRAIN,
+  networks,
+  requiredCertVersion,
+  targetToBits,
+  totalSupply,
+  workForBits,
+} from '../src/index.js';
+import type { CertificateVersion, PearlCertificate } from '../src/index.js';
+import vectors from '../vectors/pearl-go.json' with { type: 'json' };
+import { networkNamed } from './vector-helpers.js';
+
+const certificate = (version: number, size: number): PearlCertificate => ({
+  version: version as CertificateVersion,
+  hash: new Uint8Array(32),
+  publicData: new Uint8Array(size),
+  proof: Uint8Array.of(1),
+});
+
+describe('network consensus params', () => {
+  it('covers every network the generator knows', () => {
+    expect(vectors.consensus.networks.map((item) => item.name).sort()).toEqual(Object.keys(networks).sort());
+  });
+
+  for (const expected of vectors.consensus.networks) {
+    it(`match chaincfg for ${expected.name}`, () => {
+      const network = networkNamed(expected.name);
+      expect(network.forkHeights).toEqual({
+        moe: expected.moeForkHeight,
+        denseOnly: expected.denseOnlyForkHeight,
+        rankPenalty: expected.rankPenaltyForkHeight,
+        saltedSeed: expected.saltedSeedForkHeight,
+      });
+      expect(network.checkpoints).toEqual(expected.checkpoints);
+      expect(network.dnsSeeds).toEqual(expected.dnsSeeds);
+      expect(network.targetSpacing).toBe(expected.targetTimePerBlock);
+      expect(network.wtemaHalfLife).toBe(expected.wtemaHalfLife);
+      expect(network.powLimit).toBe(BigInt(expected.powLimit));
+      expect(network.powLimitBits).toBe(expected.powLimitBits);
+      expect(network.coinbaseMaturity).toBe(expected.coinbaseMaturity);
+      expect(COINBASE_MATURITY).toBe(expected.coinbaseMaturity);
+    });
+  }
+});
+
+describe('certificate rules', () => {
+  for (const expected of vectors.consensus.networks) {
+    it(`require the certificate CheckCertificateRules does on ${expected.name}`, () => {
+      const network = networkNamed(expected.name);
+      for (const rule of expected.certRules) {
+        expect(requiredCertVersion(network, rule.height)).toBe(rule.required);
+        let error = '';
+        try {
+          checkCertificateRules(certificate(rule.version, rule.publicDataLen), network, rule.height);
+        } catch (err) {
+          error = (err as Error).message;
+        }
+        expect(error, `v${rule.version}/${rule.publicDataLen} at ${rule.height}`).toBe(rule.error);
+      }
+    });
+  }
+
+  it('refuses a block without a certificate', () => {
+    expect(() => checkCertificateRules(null, networks.mainnet, 1)).toThrow('block has no certificate');
+  });
+
+  it('refuses a height outside int32', () => {
+    expect(() => requiredCertVersion(networks.mainnet, -1)).toThrow(RangeError);
+    expect(() => requiredCertVersion(networks.mainnet, 2 ** 31)).toThrow(RangeError);
+  });
+});
+
+describe('subsidy and supply', () => {
+  for (const expected of vectors.consensus.networks) {
+    it(`match CalcBlockSubsidy on ${expected.name}`, () => {
+      const network = networkNamed(expected.name);
+      for (const { height, amount } of expected.subsidies) {
+        expect(blockSubsidy(network, height), `height ${height}`).toBe(BigInt(amount));
+      }
+    });
+
+    it(`sum to Pearl's running total on ${expected.name}`, () => {
+      const network = networkNamed(expected.name);
+      for (const { height, amount } of expected.supplies) {
+        expect(totalSupply(network, height), `height ${height}`).toBe(BigInt(amount));
+      }
+    });
+  }
+
+  it('pays half the emission limit in the first four years, far under MaxGrain', () => {
+    const supply = totalSupply(networks.mainnet, 650_226);
+    expect(supply).toBeLessThan(EMISSION_LIMIT / 2n);
+    expect(EMISSION_LIMIT / 2n - supply).toBeLessThan(1_000_000n);
+    expect(EMISSION_LIMIT * 10n).toBe(MAX_GRAIN);
+  });
+});
+
+describe('compact bits', () => {
+  it('decode to CompactToBig and CalcWork', () => {
+    for (const expected of vectors.consensus.compact) {
+      expect(bitsToTarget(expected.bits), expected.bits.toString(16)).toBe(BigInt(expected.target));
+      expect(workForBits(expected.bits), expected.bits.toString(16)).toBe(BigInt(expected.work));
+      expect(targetToBits(BigInt(expected.target)), expected.bits.toString(16)).toBe(expected.recompact);
+    }
+  });
+
+  it('encode like BigToCompact', () => {
+    for (const expected of vectors.consensus.targets) {
+      expect(targetToBits(BigInt(expected.target)), expected.target).toBe(expected.bits);
+    }
+  });
+
+  it('keep each PowLimitBits target within PowLimit', () => {
+    for (const network of Object.values(networks)) {
+      expect(bitsToTarget(network.powLimitBits) <= network.powLimit).toBe(true);
+    }
+    // Regtest's bits are not the compact form of its limit, 2^233 - 1.
+    expect(targetToBits(networks.mainnet.powLimit)).toBe(networks.mainnet.powLimitBits);
+    expect(targetToBits(networks.regtest.powLimit)).not.toBe(networks.regtest.powLimitBits);
+  });
+
+  it('refuses bits outside uint32', () => {
+    expect(() => bitsToTarget(-1)).toThrow(RangeError);
+    expect(() => bitsToTarget(2 ** 32)).toThrow(RangeError);
+  });
+});
+
+describe('difficultyForBits', () => {
+  for (const expected of vectors.consensus.networks) {
+    it(`matches getdifficulty on ${expected.name}`, () => {
+      const network = networkNamed(expected.name);
+      for (const { bits, difficulty } of expected.difficulties) {
+        expect(difficultyForBits(bits, network), bits.toString(16)).toBe(difficulty);
+      }
+    });
+  }
+
+  it('refuses bits that encode zero', () => {
+    expect(() => difficultyForBits(0, networks.mainnet)).toThrow(RangeError);
+  });
+});
