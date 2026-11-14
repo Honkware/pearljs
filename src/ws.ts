@@ -38,6 +38,11 @@ import {
 /** Websocket path of pearld and Oyster. */
 export const PEARLD_WS_PATH = '/ws';
 
+// How long close() waits for the socket to report its close. Oyster answers a
+// close frame but keeps the TCP connection open, and undici reports a close
+// only when the connection ends, so against Oyster the report never comes.
+const CLOSE_TIMEOUT = 3000;
+
 /** How the websocket client reconnects after a session drops. */
 export interface ReconnectOptions {
   /** Delay before the first retry in ms; it doubles on each failed attempt. Default 1000. */
@@ -238,6 +243,7 @@ export class JsonRpcWsClient implements Rpc {
   #closed: Failure | null = null;
   #closing: Promise<void> | null = null;
   #closeDone: (() => void) | null = null;
+  #closeTimer: ReturnType<typeof setTimeout> | undefined;
   #id = 0;
   readonly #pending = new Map<number, Pending>();
   readonly #listeners = new Map<string, Set<Listener>>();
@@ -426,7 +432,10 @@ export class JsonRpcWsClient implements Rpc {
     return sessionid;
   }
 
-  /** Stops reconnecting, fails pending calls and closes the socket. */
+  /**
+   * Stops reconnecting, fails pending calls and closes the socket. Resolves
+   * once the socket reports its close, or after three seconds if it never does.
+   */
   close(): Promise<void> {
     if (this.#closing === null) {
       this.#closing = new Promise((resolve) => (this.#closeDone = resolve));
@@ -625,6 +634,7 @@ export class JsonRpcWsClient implements Rpc {
       pending.reject(new PearlRpcError('network', pending.method, `${failure.message} before the reply`));
     }
     if (this.#closed !== null) {
+      clearTimeout(this.#closeTimer);
       this.#closeDone?.();
       return;
     }
@@ -677,6 +687,11 @@ export class JsonRpcWsClient implements Rpc {
     this.#emit('close', error === undefined ? {} : { error });
     if (socket !== null && socket.readyState === OPEN) {
       socket.close(1000);
+      this.#closeTimer = setTimeout(() => {
+        if (this.#socket !== socket) return;
+        this.#socket = null;
+        this.#closeDone?.();
+      }, CLOSE_TIMEOUT);
       return;
     }
     // A socket still connecting may never report its close.

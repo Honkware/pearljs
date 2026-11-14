@@ -488,6 +488,31 @@ describe('pearld websocket client', () => {
     await ws.close();
   });
 
+  it('resolves close after three seconds when the socket never reports its close, as with Oyster', async () => {
+    vi.useFakeTimers();
+    try {
+      const ws = client({ auth: 'header' });
+      const ready = ws.connect();
+      const socket = last();
+      socket.open();
+      await ready;
+      // Oyster echoes the close frame and keeps the connection, so no close event follows.
+      socket.close = () => {
+        socket.readyState = 2;
+      };
+      let closed = false;
+      const closing = ws.close().then(() => (closed = true));
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(closed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await closing;
+      expect(closed).toBe(true);
+      await expect(ws.call('getblockcount')).rejects.toThrow(/closed/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not start a session that was closed while authenticating', async () => {
     const ws = client();
     const connects = collect(ws, 'connect');
