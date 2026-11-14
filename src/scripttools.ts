@@ -15,6 +15,7 @@
 
 import { OP_CODES, OPCODE_NAMES } from './opcodes.js';
 import { scriptPush } from './script.js';
+import { toHex } from './internal/bytes.js';
 
 /** A decompiled script: opcodes as numbers, pushed data as byte arrays. */
 export type ScriptChunk = number | Uint8Array;
@@ -115,7 +116,6 @@ export function compileScript(chunks: readonly ScriptChunk[]): Uint8Array {
 const SMALL_INT_NAMES: Record<number, string> = { [OP_CODES.OP_0]: '0', [OP_CODES.OP_1NEGATE]: '-1' };
 for (let n = 1; n <= 16; n += 1) SMALL_INT_NAMES[OP_CODES.OP_1 + n - 1] = String(n);
 
-const toHex = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 
 // "10" to "16" are both OP_10 to OP_16 and a one-byte push of 0x10 to 0x16.
 const AMBIGUOUS_WORD = /^1[0-6]$/;

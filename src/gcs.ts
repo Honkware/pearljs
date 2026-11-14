@@ -18,6 +18,7 @@
 import { hash256 } from './crypto.js';
 import { blockHash } from './blockheader.js';
 import type { PearlBlock } from './block.js';
+import { fromHex, toHex, varInt } from './internal/bytes.js';
 
 /** Golomb-Rice parameter of Pearl's basic filter (builder.DefaultP). */
 export const BASIC_FILTER_P = 19;
@@ -134,7 +135,7 @@ function toKey(key: Uint8Array): Uint8Array {
 export function buildFilter(key: Uint8Array, items: readonly Uint8Array[], params: GcsParams = BASIC): CompactFilter {
   toKey(key);
   const distinct = new Map<string, Uint8Array>();
-  for (const item of items) distinct.set(hex(item), item);
+  for (const item of items) distinct.set(toHex(item), item);
   const n = distinct.size;
   checkParams(params, n);
   const { p, m } = params;
@@ -183,7 +184,7 @@ export function buildBasicFilter(block: PearlBlock, prevOutScripts: readonly Uin
  * hex. P and M are not in the encoding; they default to the basic filter's.
  */
 export function decodeFilter(filter: string | Uint8Array, params: GcsParams = BASIC): CompactFilter {
-  const bytes = typeof filter === 'string' ? unhex(filter) : filter;
+  const bytes = typeof filter === 'string' ? fromHex(filter) : filter;
   const [n, size] = readVarInt(bytes);
   checkParams(params, n);
   return { n, p: params.p, m: params.m, data: bytes.slice(size) };
@@ -191,7 +192,7 @@ export function decodeFilter(filter: string | Uint8Array, params: GcsParams = BA
 
 /** The N-prefixed wire form, gcs.Filter.NBytes. */
 export function encodeFilter(filter: CompactFilter): Uint8Array {
-  const prefix = writeVarInt(filter.n);
+  const prefix = varInt(filter.n);
   const out = new Uint8Array(prefix.length + filter.data.length);
   out.set(prefix);
   out.set(filter.data, prefix.length);
@@ -293,7 +294,7 @@ export function filterHeader(filter: CompactFilter, prevHeader: string | Uint8Ar
 
 /** A filter header or hash as display hex, the form getcfilterheader returns. */
 export function filterHeaderHex(header: Uint8Array): string {
-  return hex(Uint8Array.from(header).reverse());
+  return toHex(Uint8Array.from(header).reverse());
 }
 
 /**
@@ -309,7 +310,7 @@ export function checkFilterHeaders(
   chain.forEach(({ filter, header }, i) => {
     const computed = filterHeader(filter, prev);
     const expected = toInternal(header, 'filter header');
-    if (hex(computed) !== hex(expected)) {
+    if (toHex(computed) !== toHex(expected)) {
       throw new Error(
         `filter ${i} does not match its header: computed ${filterHeaderHex(computed)}, expected ${filterHeaderHex(expected)}`,
       );
@@ -367,25 +368,9 @@ function readVarInt(bytes: Uint8Array): [number, number] {
   return [value, 1 + width];
 }
 
-function writeVarInt(n: number): Uint8Array {
-  if (n < 0xfd) return Uint8Array.of(n);
-  if (n <= 0xffff) return Uint8Array.of(0xfd, n & 0xff, n >> 8);
-  return Uint8Array.of(0xfe, n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, n >>> 24);
-}
-
 function toInternal(value: string | Uint8Array, label: string): Uint8Array {
-  const bytes = typeof value === 'string' ? unhex(value).reverse() : value;
+  const bytes = typeof value === 'string' ? fromHex(value).reverse() : value;
   if (bytes.length !== 32) throw new RangeError(`${label} must be 32 bytes`);
   return bytes;
 }
 
-function hex(bytes: Uint8Array): string {
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-function unhex(text: string): Uint8Array {
-  if (text.length % 2 !== 0 || !/^[0-9a-f]*$/i.test(text)) throw new Error('expected hex');
-  const bytes = new Uint8Array(text.length / 2);
-  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(text.slice(i * 2, i * 2 + 2), 16);
-  return bytes;
-}

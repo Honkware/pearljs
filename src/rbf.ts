@@ -22,6 +22,7 @@
 
 import type { Transaction } from 'bitcoinjs-lib';
 import { DEFAULT_MIN_RELAY_FEE, feeForVsize, minRelayFee } from './policy.js';
+import { toHex } from './internal/bytes.js';
 
 /** mempool.MaxRBFSequence: an input with a sequence at or below this signals replacement. */
 export const MAX_RBF_SEQUENCE = 0xfffffffd;
@@ -79,8 +80,7 @@ export interface PackageLimitOptions {
   vsize?: number;
 }
 
-const hex = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-const prevTxid = (input: Transaction['ins'][number]): string => hex(Uint8Array.from(input.hash).reverse());
+const prevTxid = (input: Transaction['ins'][number]): string => toHex(Uint8Array.from(input.hash).reverse());
 
 /** FeePerKB as pearld stores it: fee * 1000 / vsize, truncated. */
 function feePerKb(fee: bigint, vsize: number): bigint {

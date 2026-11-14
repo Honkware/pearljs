@@ -8,6 +8,7 @@
  */
 
 import { sha256 } from '@noble/hashes/sha2';
+import { toHex } from './internal/bytes.js';
 
 /** Serialized size of a Pearl block header in bytes. */
 export const BLOCK_HEADER_SIZE = 108;
@@ -116,8 +117,5 @@ export function blockHash(header: PearlBlockHeader): Uint8Array {
  * chainhash.Hash.String.
  */
 export function blockHashHex(header: PearlBlockHeader): string {
-  return Array.from(blockHash(header))
-    .reverse()
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
+  return toHex(blockHash(header).reverse());
 }

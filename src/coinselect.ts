@@ -18,6 +18,7 @@ import { COINBASE_MATURITY } from './consensus.js';
 import { DEFAULT_MIN_RELAY_FEE, estimateVsize, isDust, minRelayFee } from './policy.js';
 import type { SpendEstimate } from './policy.js';
 import { classifyOutputScript } from './script.js';
+import { varIntSize } from './internal/bytes.js';
 
 /** An unspent output as coin selection takes it. */
 export interface Utxo {
@@ -279,6 +280,3 @@ function signedVsize(inputs: readonly Utxo[], outputs: readonly TxOutput[], chan
   return Math.max(oyster, estimateVsize(tx, inputs.map((input) => input.spend ?? { type: 'keyPath' })));
 }
 
-function varIntSize(n: number): number {
-  return n < 0xfd ? 1 : n <= 0xffff ? 3 : 5;
-}

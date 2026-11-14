@@ -25,6 +25,7 @@ import type { AddressPayment, BlockRef, ChainClient, ChainTransaction } from './
 import { getBlockFilter } from './gcs.js';
 import type { BlockFilter } from './gcs.js';
 import type { PearlNetworkName } from './networks.js';
+import { fromHex, toHex as bytesToHex } from './internal/bytes.js';
 
 /** pearld's default RPC port per network (node/params.go). */
 export const PEARLD_RPC_PORTS: Readonly<Record<PearlNetworkName, number>> = {
@@ -1056,7 +1057,7 @@ export function pearldMethods<Base extends RpcClass>(Base: Base) {
 
     /** The serialized block as bytes, ready for parseBlock. */
     async getRawBlock(hash: string): Promise<Uint8Array> {
-      return hexToBytes(await this.getBlockHex(hash));
+      return fromHex(await this.getBlockHex(hash), 'expected hex from the server');
     }
 
     /** The block's header fields, sizes and transaction ids. */
@@ -2042,13 +2043,3 @@ function toHex(value: string | Uint8Array): string {
   return typeof value === 'string' ? value : bytesToHex(value);
 }
 
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  if (hex.length % 2 !== 0 || !/^[0-9a-f]*$/i.test(hex)) throw new Error('expected hex from the server');
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  return bytes;
-}

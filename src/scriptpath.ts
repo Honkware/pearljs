@@ -39,6 +39,7 @@ import {
 import type { ScriptTree, ScriptTreeLeaf } from './scripttree.js';
 import { XMSS_SIGNATURE_LENGTH } from './xmss.js';
 import type { XmssSigner } from './xmss.js';
+import { concat, equalBytes, toHex, uint32le, varInt } from './internal/bytes.js';
 
 /**
  * Anything that can make a BIP340 Schnorr signature for a tapscript key,
@@ -131,14 +132,6 @@ function xOnly(publicKey: Uint8Array): Uint8Array {
   throw new Error(`signer public key must be 32 or 33 bytes, got ${publicKey.length}`);
 }
 
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
-  return a.length === b.length && a.every((byte, index) => byte === b[index]);
-}
-
 /** True when the script pushes this x-only key as a 32-byte direct push. */
 function scriptPushesKey(script: Uint8Array, key: Uint8Array): boolean {
   outer: for (let i = 0; i + 33 <= script.length; i += 1) {
@@ -158,22 +151,6 @@ const TAPSCRIPT_SPEND_TYPE = 0x02; // ext_flag 1, no annex
 const TAPSCRIPT_KEY_VERSION = 0x00;
 const NO_CODESEPARATOR = 0xffffffff;
 
-function concat(parts: readonly Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
-}
-
-function uint32le(value: number): Uint8Array {
-  const out = new Uint8Array(4);
-  new DataView(out.buffer).setUint32(0, value >>> 0, true);
-  return out;
-}
-
 function uint64le(value: bigint): Uint8Array {
   const out = new Uint8Array(8);
   new DataView(out.buffer).setBigUint64(0, value, true);
@@ -181,12 +158,7 @@ function uint64le(value: bigint): Uint8Array {
 }
 
 function varBytes(bytes: Uint8Array): Uint8Array {
-  const length = bytes.length;
-  let prefix: Uint8Array;
-  if (length < 0xfd) prefix = Uint8Array.of(length);
-  else if (length <= 0xffff) prefix = Uint8Array.of(0xfd, length & 0xff, length >> 8);
-  else prefix = concat([Uint8Array.of(0xfe), uint32le(length)]);
-  return concat([prefix, bytes]);
+  return concat([varInt(bytes.length), bytes]);
 }
 
 function serializeOutput(value: bigint, script: Uint8Array): Uint8Array {

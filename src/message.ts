@@ -29,6 +29,7 @@ import type { PearlNetwork } from './networks.js';
 import { OP_CODES, scriptPush, taggedHash } from './script.js';
 import { assertTaprootSighashType } from './scriptpath.js';
 import { serializeWitness } from './transaction.js';
+import { fromBase64 } from './internal/bytes.js';
 
 /** txscript.MaxDataCarrierSize: the most message bytes Oyster can sign. */
 export const MAX_MESSAGE_LENGTH = 80;
@@ -112,7 +113,7 @@ function decodeBase64(text: string): Uint8Array {
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text)) {
     throw new Error('signature is not valid base64');
   }
-  return Uint8Array.from(atob(text), (char) => char.charCodeAt(0));
+  return fromBase64(text);
 }
 
 /** Options for signMessage. */

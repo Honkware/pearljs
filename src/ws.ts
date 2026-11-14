@@ -34,6 +34,7 @@ import {
   type RpcErrorKind,
   type TxRawResult,
 } from './rpc.js';
+import { fromHex } from './internal/bytes.js';
 
 /** Websocket path of pearld and Oyster. */
 export const PEARLD_WS_PATH = '/ws';
@@ -923,7 +924,7 @@ function decodeNotification(method: string, params: unknown[], text: string): un
       return rescanEvent(params);
     case 'filteredblockconnected':
     case 'filteredblockdisconnected': {
-      const header = parseBlockHeader(hexBytes(str(params[1], 'header')));
+      const header = parseBlockHeader(fromHex(str(params[1], 'header'), 'header is not hex'));
       const txs = params[2] ?? [];
       if (!Array.isArray(txs) || !txs.every((tx) => typeof tx === 'string')) throw new Error('transactions are not hex strings');
       return {
@@ -995,9 +996,3 @@ function decode(data: ArrayBuffer | ArrayBufferView): string {
   return new TextDecoder().decode(data);
 }
 
-function hexBytes(hex: string): Uint8Array {
-  if (hex.length % 2 !== 0 || !/^[0-9a-f]*$/i.test(hex)) throw new Error('header is not hex');
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  return bytes;
-}

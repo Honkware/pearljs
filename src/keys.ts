@@ -41,6 +41,7 @@ import type {
   PsbtSighashOptions,
   TapscriptSigner,
 } from './scriptpath.js';
+import { equalBytes } from './internal/bytes.js';
 
 export { mnemonicToSeed } from './mnemonic.js';
 
@@ -324,10 +325,6 @@ function assertInputIndex(psbt: Psbt, inputIndex: number): void {
   if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= psbt.inputCount) {
     throw new RangeError(`PSBT input index ${inputIndex} is out of range`);
   }
-}
-
-function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
-  return left.length === right.length && left.every((byte, index) => byte === right[index]);
 }
 
 /**

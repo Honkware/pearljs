@@ -23,6 +23,7 @@ import {
   verifyP2mrLeafCommitment,
   verifyTaprootLeafCommitment,
 } from './scripttree.js';
+import { toHex } from './internal/bytes.js';
 
 // mempool.MaxRBFSequence.
 const MAX_RBF_SEQUENCE = 0xfffffffd;
@@ -118,7 +119,7 @@ export function inspectTransaction(
   const vsize = tx.virtualSize();
   return {
     txid: tx.getId(),
-    wtxid: hex(Uint8Array.from(tx.getHash(true)).reverse()),
+    wtxid: toHex(Uint8Array.from(tx.getHash(true)).reverse()),
     version: tx.version,
     locktime: tx.locktime,
     size: tx.byteLength(),
@@ -132,7 +133,7 @@ export function inspectTransaction(
       const annexed = input.witness.length >= 2 && input.witness[input.witness.length - 1]![0] === ANNEX_TAG;
       const stack = annexed ? input.witness.slice(0, -1) : input.witness;
       return {
-        txid: hex(Uint8Array.from(input.hash).reverse()),
+        txid: toHex(Uint8Array.from(input.hash).reverse()),
         vout: input.index,
         sequence: input.sequence,
         value: prevout.value,
@@ -215,6 +216,3 @@ function leafDetails(script: Uint8Array): { leaf: LeafKind; keys: Uint8Array[]; 
   return { leaf: 'other', keys: [] };
 }
 
-function hex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}

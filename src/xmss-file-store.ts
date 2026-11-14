@@ -29,6 +29,7 @@ import { closeSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, w
 import { dirname } from 'node:path';
 import { XMSS_PUBLIC_KEY_LENGTH } from './xmss.js';
 import type { XmssIndexStore } from './xmss.js';
+import { toHex } from './internal/bytes.js';
 
 const STATE_VERSION = 1;
 
@@ -53,10 +54,6 @@ interface State {
   version: number;
   publicKey: string | null;
   next: number;
-}
-
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function isMissing(error: unknown): boolean {

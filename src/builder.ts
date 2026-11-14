@@ -25,6 +25,7 @@ import type { P2mrPsbtSignOptions, Prevout } from './scriptpath.js';
 import type { ScriptTree } from './scripttree.js';
 import { createPsbt, createTransaction, finalizePsbt } from './transaction.js';
 import { p2mr } from './payments.js';
+import { equalBytes } from './internal/bytes.js';
 
 const FINAL_SEQUENCE = 0xffffffff;
 // mempool.MaxRBFSequence: an input at or under this signals replacement.
@@ -348,6 +349,3 @@ export function payFromAccount(account: PearlSigningAccount, options: AccountPay
   });
 }
 
-function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
-  return left.length === right.length && left.every((byte, i) => byte === right[i]);
-}

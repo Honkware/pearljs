@@ -18,6 +18,7 @@
 
 import * as ecc from 'tiny-secp256k1';
 import { BASE_LEAF_VERSION, tapBranchHash, tapLeafHash, taggedHash } from './script.js';
+import { concat, equalBytes, toHex } from './internal/bytes.js';
 
 const HASH_SIZE = 32;
 const MAX_PROOF_NODES = 128;
@@ -44,24 +45,6 @@ export interface ScriptTree {
 interface TreeNode {
   hash: Uint8Array;
   leafIndices: number[];
-}
-
-function concat(parts: readonly Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
-}
-
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
-  return a.length === b.length && a.every((byte, index) => byte === b[index]);
 }
 
 /**

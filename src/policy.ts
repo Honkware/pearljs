@@ -22,6 +22,7 @@ import { parseMultiA } from './multia.js';
 import { XMSS_SIGNATURE_LENGTH } from './xmss.js';
 import type { Prevout } from './scriptpath.js';
 import type { ScriptTree } from './scripttree.js';
+import { varIntSize } from './internal/bytes.js';
 
 /** mempool.DefaultMinRelayTxFee, in grain per 1000 vbytes. */
 export const DEFAULT_MIN_RELAY_FEE = 1000n;
@@ -307,6 +308,3 @@ function leafStack(script: Uint8Array, signature: number): number[] {
   throw new Error('pass stack sizes for this leaf');
 }
 
-function varIntSize(n: number): number {
-  return n < 0xfd ? 1 : n <= 0xffff ? 3 : n <= 0xffffffff ? 5 : 9;
-}

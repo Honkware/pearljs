@@ -25,6 +25,7 @@ import {
   serializeBlockHeader,
 } from './blockheader.js';
 import type { PearlBlockHeader } from './blockheader.js';
+import { concat, equalBytes, uint32le, varInt } from './internal/bytes.js';
 
 // wire.CertificateMaxSize, wire.MaxZKProofSize and the public data sizes.
 /** wire.CertificateMaxSize: the most bytes a serialized certificate may have. */
@@ -79,34 +80,8 @@ export interface PearlBlock {
   transactions: Transaction[];
 }
 
-function concat(parts: readonly Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
-}
-
-function uint32le(value: number): Uint8Array {
-  const out = new Uint8Array(4);
-  new DataView(out.buffer).setUint32(0, value >>> 0, true);
-  return out;
-}
-
-function varInt(value: number): Uint8Array {
-  if (value < 0xfd) return Uint8Array.of(value);
-  if (value <= 0xffff) return Uint8Array.of(0xfd, value & 0xff, value >> 8);
-  return concat([Uint8Array.of(0xfe), uint32le(value)]);
-}
-
 function doubleSha256(data: Uint8Array): Uint8Array {
   return sha256(sha256(data));
-}
-
-function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
-  return a.length === b.length && a.every((byte, index) => byte === b[index]);
 }
 
 class Reader {

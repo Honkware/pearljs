@@ -19,6 +19,7 @@ import type { Prevout } from './scriptpath.js';
 import { decompileScript } from './scripttools.js';
 import { verifyP2mrLeafCommitment, verifyTaprootLeafCommitment } from './scripttree.js';
 import type { PearlNetwork } from './networks.js';
+import { fromBase64, toHex, varInt } from './internal/bytes.js';
 
 export { Psbt, Transaction };
 
@@ -65,10 +66,7 @@ export function transactionId(tx: Transaction): string {
 
 /** The wtxid in display hex: the hash of the transaction with its witnesses. */
 export function witnessTransactionId(tx: Transaction): string {
-  return Array.from(tx.getHash(true))
-    .reverse()
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('');
+  return toHex(Uint8Array.from(tx.getHash(true)).reverse());
 }
 
 /**
@@ -101,7 +99,7 @@ export function parsePsbt(base64: string): Psbt {
         : error.message;
     throw new Error(`invalid PSBT: ${reason}`);
   }
-  const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+  const bytes = fromBase64(base64);
   const end = psbtEnd(bytes, psbt.inputCount, psbt.txOutputs.length);
   if (end !== bytes.length) {
     throw new Error(`invalid PSBT: ${bytes.length - end} bytes follow the last map`);
@@ -284,16 +282,6 @@ function pearlScriptPathWitness(psbt: Psbt, inputIndex: number): Uint8Array[] | 
   // multiAStack refuses a signature for a key outside the leaf, as Pearl does.
   const byKey = new Map(signatures.map((sig) => [toHex(sig.pubkey), sig.signature]));
   return [...multiAStack(multiA, byKey), leaf.script, leaf.controlBlock];
-}
-
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function varInt(value: number): number[] {
-  if (value < 0xfd) return [value];
-  if (value <= 0xffff) return [0xfd, value & 0xff, value >> 8];
-  return [0xfe, value & 0xff, (value >> 8) & 0xff, (value >> 16) & 0xff, value >>> 24];
 }
 
 /** A witness stack as it is serialized: item count, then each item with its length. */

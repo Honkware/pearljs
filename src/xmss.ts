@@ -18,6 +18,7 @@
  */
 
 import { shake256 } from '@noble/hashes/sha3';
+import { concat, equalBytes, toHex } from './internal/bytes.js';
 
 /** Bytes in the private seed an XMSS key is generated from. */
 export const XMSS_PRIVATE_SEED_LENGTH = 64;
@@ -75,16 +76,6 @@ function newAddress(type: number): Address {
 function setTreeAddr(addr: Address, tree: number): void {
   addr[1] = Math.floor(tree / 2 ** 32);
   addr[2] = tree >>> 0;
-}
-
-function concat(parts: readonly Uint8Array[]): Uint8Array {
-  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
 }
 
 /** Big-endian encoding of a non-negative integer into length bytes (ull_to_bytes). */
@@ -362,10 +353,6 @@ export function xmssSign(secretKey: Uint8Array, msgUid: number, message: Uint8Ar
   return signature;
 }
 
-function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
-  return a.length === b.length && a.every((byte, i) => byte === b[i]);
-}
-
 function signWithTree(
   secretKey: Uint8Array,
   levels: Uint8Array[][],
@@ -469,10 +456,6 @@ export interface XmssSigner {
 // when it would sign a different message. Signing the same message at the
 // same index again yields the same signature and reveals nothing new.
 const signedMessages = new Map<string, Map<number, string>>();
-
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
 
 /**
  * An XMSS signer over raw seeds. Each signature takes an index from store,

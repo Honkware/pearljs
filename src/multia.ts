@@ -17,6 +17,7 @@ import { OP_CODES } from './opcodes.js';
 import { encodeScriptNumber, scriptPush } from './script.js';
 import { decodeScriptNumber, decompileScript } from './scripttools.js';
 import type { ScriptChunk } from './scripttools.js';
+import { toHex } from './internal/bytes.js';
 
 const isData = (chunk: ScriptChunk | undefined): chunk is Uint8Array => chunk instanceof Uint8Array;
 
@@ -111,8 +112,7 @@ export function parseMultiA(script: Uint8Array): MultiALeaf | null {
  * have.
  */
 export function multiAStack(leaf: MultiALeaf, signatures: ReadonlyMap<string, Uint8Array>): Uint8Array[] {
-  const hex = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-  const keyHexes = leaf.keys.map(hex);
+  const keyHexes = leaf.keys.map(toHex);
   for (const key of signatures.keys()) {
     if (!keyHexes.includes(key)) throw new Error('a script-path signature does not match a multi_a key');
   }
