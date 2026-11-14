@@ -1,5 +1,6 @@
 export * from './address.js';
 export * from './amount.js';
+export * from './block.js';
 export * from './blockheader.js';
 export * from './client.js';
 export * from './invoice.js';
