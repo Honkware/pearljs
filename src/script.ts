@@ -18,6 +18,7 @@ export const OP_CODES = {
   OP_16: 0x60,
   OP_RETURN: 0x6a,
   OP_CAT: 0x7e,
+  OP_CHECKSIG: 0xac,
   OP_CHECKLOCKTIMEVERIFY: 0xb1,
   OP_CHECKSEQUENCEVERIFY: 0xb2,
   OP_CHECKMULTISIG: 0xae,
@@ -195,7 +196,8 @@ function compactSize(value: number): Uint8Array {
   return out;
 }
 
-function taggedHash(tag: string, message: Uint8Array): Uint8Array {
+/** BIP340 tagged hash: SHA256(SHA256(tag) || SHA256(tag) || message). */
+export function taggedHash(tag: string, message: Uint8Array): Uint8Array {
   const tagHash = sha256(new TextEncoder().encode(tag));
   const data = new Uint8Array(2 * tagHash.length + message.length);
   data.set(tagHash, 0);
@@ -221,6 +223,19 @@ export function tapLeafHash(
   message.set(size, 1);
   message.set(script, 1 + size.length);
   return taggedHash('TapLeaf', message);
+}
+
+/**
+ * Single-key tapscript leaf: <x-only pubkey> OP_CHECKSIG. This is the leaf
+ * shape Pearl's wallet stores for P2MR addresses.
+ */
+export function checksigScript(xOnlyPubkey: Uint8Array): Uint8Array {
+  if (xOnlyPubkey.length !== TAPROOT_HASH_LENGTH) {
+    throw new Error(
+      `x-only pubkey must be ${TAPROOT_HASH_LENGTH} bytes, got ${xOnlyPubkey.length}`,
+    );
+  }
+  return Uint8Array.from([...scriptPush(xOnlyPubkey), OP_CODES.OP_CHECKSIG]);
 }
 
 function compareBytes(a: Uint8Array, b: Uint8Array): number {
