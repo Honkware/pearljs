@@ -29,7 +29,7 @@ import type { Psbt } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { MAX_GRAIN } from './amount.js';
 import { p2mr, p2tr } from './payments.js';
-import { classifyOutputScript, taggedHash, tapLeafHash, xmssLeafScript } from './script.js';
+import { classifyOutputScript, taggedHash, TAPROOT_ANNEX_TAG, tapLeafHash, xmssLeafScript } from './script.js';
 import {
   p2mrControlBlock,
   taprootControlBlock,
@@ -143,6 +143,33 @@ function serializeOutput(value: bigint, script: Uint8Array): Uint8Array {
   return concat([uint64le(value), varBytes(script)]);
 }
 
+/**
+ * The two parts of the signature message a leaf or a witness can change.
+ * Both are covered by every signature of the input, so the witness has to
+ * end with the same annex and the script has to reach the signature check
+ * with the same separator behind it.
+ */
+export interface TapscriptContextOptions {
+  /**
+   * The annex the witness will end with: bytes starting with 0x50
+   * (TAPROOT_ANNEX_TAG). Pearl gives an annex no meaning and commits every
+   * signature to it. None unless given.
+   */
+  annex?: Uint8Array;
+  /**
+   * Opcode position of the last OP_CODESEPARATOR executed before the
+   * signature check, from codeSeparatorPositions. Left out when no separator
+   * has run by then.
+   */
+  codeSeparatorPosition?: number;
+}
+
+function checkAnnex(annex: Uint8Array | undefined): void {
+  if (annex !== undefined && (!(annex instanceof Uint8Array) || annex[0] !== TAPROOT_ANNEX_TAG)) {
+    throw new PearlError('SCRIPT_INVALID', 'an annex must be bytes that start with 0x50');
+  }
+}
+
 /** Whether NewTxSigHashes computes the amount and script hashes for this spend. */
 function coversInputValues(
   prevouts: readonly TxOutput[],
@@ -164,6 +191,7 @@ function pearlTapscriptSighash(
   prevouts: readonly TxOutput[],
   leafHash: Uint8Array,
   sighashType: number,
+  options: TapscriptContextOptions,
 ): Uint8Array {
   const anyoneCanPay = (sighashType & SIGHASH_ANYONECANPAY) !== 0;
   const outputMode = sighashType & SIGHASH_OUTPUT_MASK;
@@ -186,7 +214,8 @@ function pearlTapscriptSighash(
   if (outputMode !== Transaction.SIGHASH_SINGLE && outputMode !== Transaction.SIGHASH_NONE) {
     parts.push(sha256(concat(tx.outs.map((output) => serializeOutput(output.value, output.script)))));
   }
-  parts.push(Uint8Array.of(TAPSCRIPT_SPEND_TYPE));
+  // spend_type is ext_flag * 2 + annex_present.
+  parts.push(Uint8Array.of(TAPSCRIPT_SPEND_TYPE | (options.annex === undefined ? 0 : 1)));
   if (anyoneCanPay) {
     const input = tx.ins[inputIndex]!;
     const prevout = prevouts[inputIndex]!;
@@ -199,16 +228,18 @@ function pearlTapscriptSighash(
   } else {
     parts.push(uint32le(inputIndex));
   }
+  // Not a tagged hash: sha256 of the annex with its length in front.
+  if (options.annex !== undefined) parts.push(sha256(varBytes(options.annex)));
   if (outputMode === Transaction.SIGHASH_SINGLE) {
     const output = tx.outs[inputIndex]!;
     parts.push(sha256(serializeOutput(output.value, output.script)));
   }
-  parts.push(leafHash, Uint8Array.of(TAPSCRIPT_KEY_VERSION), uint32le(NO_CODESEPARATOR));
+  parts.push(leafHash, Uint8Array.of(TAPSCRIPT_KEY_VERSION), uint32le(options.codeSeparatorPosition ?? NO_CODESEPARATOR));
   return taggedHash('TapSighash', concat(parts));
 }
 
 /** What tapscriptSighash needs besides the transaction and the input. */
-export interface TapscriptSighashInput {
+export interface TapscriptSighashInput extends TapscriptContextOptions {
   /** Script and value (in grain) of every input's spent output, in input order. */
   prevouts: readonly TxOutput[];
   /** Hash of the leaf being spent, from tapLeafHash or a ScriptTreeLeaf. */
@@ -238,14 +269,19 @@ export function tapscriptSighash(tx: Transaction, inputIndex: number, options: T
     throw new Error(`leaf hash must be 32 bytes, got ${leafHash.length}`);
   }
   assertTaprootSighashType(sighashType);
+  checkAnnex(options.annex);
+  const position = options.codeSeparatorPosition;
+  if (position !== undefined && (!Number.isInteger(position) || position < 0 || position >= NO_CODESEPARATOR)) {
+    throw new RangeError('codeSeparatorPosition must be an opcode position from codeSeparatorPositions');
+  }
   if ((sighashType & 0x03) === Transaction.SIGHASH_SINGLE && inputIndex >= tx.outs.length) {
     throw new SigningError('SIGHASH_UNSUPPORTED', 'SIGHASH_SINGLE needs an output at the same index as the input');
   }
-  return pearlTapscriptSighash(tx, inputIndex, prevouts, leafHash, sighashType);
+  return pearlTapscriptSighash(tx, inputIndex, prevouts, leafHash, sighashType, options);
 }
 
 /** What signTapscriptUnchecked needs besides the transaction and the signer. */
-export interface TapscriptSignOptions {
+export interface TapscriptSignOptions extends TapscriptContextOptions {
   /** Script and value (in grain) of every input's spent output, in input order. */
   prevouts: readonly TxOutput[];
   /** The leaf script being spent. */
@@ -314,15 +350,19 @@ function finishTapscriptSignature(
 
 /**
  * Script-path witness: the leaf's arguments, then the script and control
- * block. Every item is a copy, so a witness set on a transaction shares no
- * memory with the script tree or the caller's buffers.
+ * block, then the annex when there is one. Every item is a copy, so a
+ * witness set on a transaction shares no memory with the script tree or the
+ * caller's buffers. Signatures in the stack must have been made for the
+ * same annex.
  */
 export function scriptPathWitness(
   stack: readonly Uint8Array[],
   script: Uint8Array,
   controlBlock: Uint8Array,
+  annex?: Uint8Array,
 ): Uint8Array[] {
-  return [...stack, script, controlBlock].map((item) => Uint8Array.from(item));
+  checkAnnex(annex);
+  return [...stack, script, controlBlock, ...(annex === undefined ? [] : [annex])].map((item) => Uint8Array.from(item));
 }
 
 /**
@@ -405,6 +445,8 @@ export interface P2mrSignOptions extends FeeGuardOptions {
   leafIndex: number;
   /** A Taproot sighash type. SIGHASH_DEFAULT unless given. */
   sighashType?: number;
+  /** An annex to sign for and end the witness with; see TapscriptContextOptions. None unless given. */
+  annex?: Uint8Array;
   /**
    * Transactions that created the spent outputs. When every input is P2MR,
    * every prevout is checked against them before signing.
@@ -469,8 +511,9 @@ export function signP2mrInput(
     prevouts: options.prevouts,
     script: leaf.script,
     sighashType,
+    ...(options.annex === undefined ? {} : { annex: options.annex }),
   });
-  tx.setWitness(inputIndex, scriptPathWitness([signature], leaf.script, controlBlock));
+  tx.setWitness(inputIndex, scriptPathWitness([signature], leaf.script, controlBlock, options.annex));
 }
 
 /** signP2mrInput for a signer that answers asynchronously. */
@@ -485,8 +528,9 @@ export async function signP2mrInputAsync(
     prevouts: options.prevouts,
     script: leaf.script,
     sighashType,
+    ...(options.annex === undefined ? {} : { annex: options.annex }),
   });
-  tx.setWitness(inputIndex, scriptPathWitness([signature], leaf.script, controlBlock));
+  tx.setWitness(inputIndex, scriptPathWitness([signature], leaf.script, controlBlock, options.annex));
 }
 
 function checkP2mrSchnorrSpend(
@@ -502,7 +546,7 @@ function checkP2mrSchnorrSpend(
   }
   checkInputValues(tx, options, sighashType);
   const signature = new Uint8Array(sighashType === Transaction.SIGHASH_DEFAULT ? 64 : 65);
-  checkFee(tx, inputIndex, options.prevouts, scriptPathWitness([signature], leaf.script, controlBlock), sighashType, options);
+  checkFee(tx, inputIndex, options.prevouts, scriptPathWitness([signature], leaf.script, controlBlock, options.annex), sighashType, options);
   return { leaf, controlBlock, sighashType };
 }
 
@@ -563,11 +607,12 @@ function checkInputValues(tx: Transaction, options: InputValueOptions, sighashTy
 // 468-byte elements so each fits the 520-byte stack element limit.
 const XMSS_SIGNATURE_CHUNKS = 5;
 
-/** Witness for an XMSS leaf: the signature in five chunks, then script and control block. */
+/** Witness for an XMSS leaf: the signature in five chunks, then script and control block, then the annex if any. */
 export function xmssScriptPathWitness(
   signature: Uint8Array,
   script: Uint8Array,
   controlBlock: Uint8Array,
+  annex?: Uint8Array,
 ): Uint8Array[] {
   if (signature.length !== XMSS_SIGNATURE_LENGTH) {
     throw new Error(`XMSS signature must be ${XMSS_SIGNATURE_LENGTH} bytes, got ${signature.length}`);
@@ -576,7 +621,7 @@ export function xmssScriptPathWitness(
   const chunks = Array.from({ length: XMSS_SIGNATURE_CHUNKS }, (_, i) =>
     signature.slice(i * size, (i + 1) * size),
   );
-  return scriptPathWitness(chunks, script, controlBlock);
+  return scriptPathWitness(chunks, script, controlBlock, annex);
 }
 
 /**
@@ -604,15 +649,16 @@ export async function signXmssP2mrInput(
     throw new SigningError('INPUT_MISMATCH', 'the leaf script is not the XMSS leaf of the signer key');
   }
   checkInputValues(tx, options, sighashType);
-  const placeholder = xmssScriptPathWitness(new Uint8Array(XMSS_SIGNATURE_LENGTH), leaf.script, controlBlock);
+  const placeholder = xmssScriptPathWitness(new Uint8Array(XMSS_SIGNATURE_LENGTH), leaf.script, controlBlock, options.annex);
   checkFee(tx, inputIndex, options.prevouts, placeholder, sighashType, options);
   const hash = tapscriptSighash(tx, inputIndex, {
     prevouts: options.prevouts,
     leafHash: leaf.leafHash,
     sighashType,
+    ...(options.annex === undefined ? {} : { annex: options.annex }),
   });
   const signature = await signer.sign(hash);
-  tx.setWitness(inputIndex, xmssScriptPathWitness(signature, leaf.script, controlBlock));
+  tx.setWitness(inputIndex, xmssScriptPathWitness(signature, leaf.script, controlBlock, options.annex));
 }
 
 /** What prepareTaprootScriptPathInput needs. */

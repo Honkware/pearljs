@@ -26,7 +26,7 @@ import { Transaction } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { decodeAddress } from './address.js';
 import type { PearlNetwork } from './networks.js';
-import { OP_CODES, scriptPush, taggedHash } from './script.js';
+import { OP_CODES, scriptPush, taggedHash, TAPROOT_ANNEX_TAG } from './script.js';
 import { assertTaprootSighashType } from './internal/sighash.js';
 import { serializeWitness } from './transaction.js';
 import { fromBase64 } from './internal/bytes.js';
@@ -37,7 +37,6 @@ export const MAX_MESSAGE_LENGTH = 80;
 // wire.MaxWitnessItemsPerInput and txscript.MaxScriptSize bound the parse.
 const MAX_WITNESS_ITEMS = 1003;
 const MAX_WITNESS_ITEM_SIZE = 10000;
-const TAPROOT_ANNEX_TAG = 0x50;
 
 function messageBytes(message: string): Uint8Array {
   if (typeof message !== 'string') {

@@ -223,6 +223,22 @@ function pushWithLength(data: Uint8Array): number[] {
   return [OP_CODES.OP_PUSHDATA4, n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, n >>> 24, ...data];
 }
 
+/**
+ * The opcode position of every OP_CODESEPARATOR in a script, in order: the
+ * count of opcodes before it, a push of any size counting as one. A signature
+ * checked after a separator has run commits to the position of the last one,
+ * which tapscriptSighash and signTapscriptUnchecked take as
+ * codeSeparatorPosition. Which separators have run by a given check depends
+ * on the script's branches; this lists them all.
+ *
+ * Throws SCRIPT_MALFORMED for a script that does not parse.
+ */
+export function codeSeparatorPositions(script: Uint8Array): number[] {
+  const { tokens, error } = tokenize(script);
+  if (error !== null) throw new PearlError('SCRIPT_MALFORMED', error);
+  return tokens.flatMap((token, position) => (token.opcode === OP_CODES.OP_CODESEPARATOR ? [position] : []));
+}
+
 /** txscript.IsPushOnlyScript: every opcode is a push or OP_0 to OP_16, and the script parses. */
 export function isPushOnlyScript(script: Uint8Array): boolean {
   const { tokens, error } = tokenize(script);

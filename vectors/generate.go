@@ -205,6 +205,36 @@ type ScriptPathSpendVector struct {
 	FinalPSBT     string          `json:"finalPsbt,omitempty"`
 }
 
+// TapscriptSignatureVector is one signature of a TapscriptExtraVector. CodeSepPos
+// is the opcode position of the last OP_CODESEPARATOR executed before the
+// OP_CHECKSIG that takes it, 4294967295 when there is none.
+type TapscriptSignatureVector struct {
+	KeyIndex   int    `json:"keyIndex"`
+	CodeSepPos uint32 `json:"codeSepPos"`
+	Sighash    string `json:"sighash"`
+	Signature  string `json:"signature"`
+}
+
+// TapscriptExtraVector is a script-path spend that carries an annex, runs
+// OP_CODESEPARATOR before a signature check, or both. Signatures are in
+// witness order. CodeSepPositions lists the opcode position of every
+// OP_CODESEPARATOR in the leaf, from txscript's tokenizer. Pearl's script
+// engine has accepted FinalTxHex.
+type TapscriptExtraVector struct {
+	Name             string                     `json:"name"`
+	Kind             string                     `json:"kind"`
+	HashType         uint32                     `json:"hashType"`
+	Prevouts         []PrevoutVector            `json:"prevouts"`
+	LeafScript       string                     `json:"leafScript"`
+	ControlBlock     string                     `json:"controlBlock"`
+	Annex            string                     `json:"annex"`
+	CodeSepPositions []int32                    `json:"codeSepPositions"`
+	UnsignedTxHex    string                     `json:"unsignedTxHex"`
+	Signatures       []TapscriptSignatureVector `json:"signatures"`
+	FinalTxHex       string                     `json:"finalTxHex"`
+	TxID             string                     `json:"txid"`
+}
+
 type Vectors struct {
 	Source           string                  `json:"source"`
 	Networks         []NetworkVector         `json:"networks"`
@@ -232,6 +262,7 @@ type Vectors struct {
 	Mempool          []MempoolScenarioVector `json:"mempool"`
 	Consensus        ConsensusVectors        `json:"consensus"`
 	CoinSelection    CoinSelectionVectors    `json:"coinSelection"`
+	TapscriptExtras  []TapscriptExtraVector  `json:"tapscriptExtras"`
 }
 
 // CoinVector is an unspent output offered to coin selection.
@@ -1140,6 +1171,7 @@ func main() {
 	for _, net := range nets {
 		vectors.Blocks = append(vectors.Blocks, makeBlockVector(net.Name+"-genesis", net.GenesisBlock))
 	}
+	vectors.TapscriptExtras = tapscriptExtraVectors(account, internalPub, script)
 
 	// Synthetic blocks cover every certificate version, the MoE size
 	// threshold, odd transaction counts and witness commitments. Spends are
@@ -2872,6 +2904,171 @@ func coinSelectionVectors() CoinSelectionVectors {
 		}
 		vector.UnsignedTxHex = serializeTx(authored.Tx, false)
 		out.Cases = append(out.Cases, vector)
+	}
+	return out
+}
+
+// tapscriptExtraVectors spends P2TR and P2MR leaves with an annex in the
+// witness and with OP_CODESEPARATOR in the leaf. Each sighash comes from
+// CalcTapscriptSignaturehash with WithAnnex and the code separator position
+// the engine will have at that OP_CHECKSIG; the engine then runs the spend.
+func tapscriptExtraVectors(account *hdkeychain.ExtendedKey, internalPub *btcec.PublicKey, payScript []byte) []TapscriptExtraVector {
+	const blank = uint32(0xffffffff)
+	keys := make([]*btcec.PrivateKey, 2)
+	pubs := make([][]byte, 2)
+	for i := range keys {
+		priv, err := derive(account, 0, uint32(30+i)).ECPrivKey()
+		check(err)
+		keys[i] = priv
+		pubs[i] = schnorr.SerializePubKey(priv.PubKey())
+	}
+	build := func(b *txscript.ScriptBuilder) []byte {
+		out, err := b.Script()
+		check(err)
+		return out
+	}
+	single := build(txscript.NewScriptBuilder().AddData(pubs[0]).AddOp(txscript.OP_CHECKSIG))
+	leading := build(txscript.NewScriptBuilder().AddOp(txscript.OP_CODESEPARATOR).AddData(pubs[0]).AddOp(txscript.OP_CHECKSIG))
+	// The first check runs before the separator and the second after it.
+	between := build(txscript.NewScriptBuilder().
+		AddData(pubs[0]).AddOp(txscript.OP_CHECKSIGVERIFY).
+		AddOp(txscript.OP_CODESEPARATOR).
+		AddData(pubs[1]).AddOp(txscript.OP_CHECKSIG))
+	// Only the last separator executed counts.
+	twice := build(txscript.NewScriptBuilder().
+		AddOp(txscript.OP_CODESEPARATOR).AddData([]byte{0x01, 0x02, 0x03}).AddOp(txscript.OP_DROP).
+		AddOp(txscript.OP_CODESEPARATOR).AddData(pubs[1]).AddOp(txscript.OP_CHECKSIG))
+
+	type sig struct {
+		key int
+		pos uint32
+	}
+	var out []TapscriptExtraVector
+	for _, item := range []struct {
+		name     string
+		kind     string
+		leaf     []byte
+		hashType txscript.SigHashType
+		annex    []byte
+		// In witness order: the last one is checked first.
+		sigs []sig
+		// withP2TR adds a key-path input, which makes Pearl's signature
+		// message cover input amounts.
+		withP2TR bool
+	}{
+		{"p2tr-annex", "p2tr", single, txscript.SigHashDefault, []byte{0x50}, []sig{{0, blank}}, false},
+		{"p2mr-annex", "p2mr", single, txscript.SigHashDefault, []byte{0x50, 0xde, 0xad, 0xbe, 0xef}, []sig{{0, blank}}, false},
+		{"p2mr-annex-single-anyonecanpay", "p2mr", single, txscript.SigHashSingle | txscript.SigHashAnyOneCanPay, bytes.Repeat([]byte{0x50}, 300), []sig{{0, blank}}, false},
+		{"p2mr-annex-with-p2tr-input", "p2mr", single, txscript.SigHashAll, []byte{0x50, 0x01}, []sig{{0, blank}}, true},
+		{"p2tr-codesep-leading", "p2tr", leading, txscript.SigHashDefault, nil, []sig{{0, 0}}, false},
+		{"p2mr-codesep-leading", "p2mr", leading, txscript.SigHashDefault, nil, []sig{{0, 0}}, false},
+		{"p2mr-codesep-between-checks", "p2mr", between, txscript.SigHashDefault, nil, []sig{{1, 2}, {0, blank}}, false},
+		{"p2tr-codesep-between-checks-all", "p2tr", between, txscript.SigHashAll, nil, []sig{{1, 2}, {0, blank}}, false},
+		{"p2mr-codesep-twice", "p2mr", twice, txscript.SigHashNone, nil, []sig{{1, 3}}, false},
+		{"p2mr-codesep-between-checks-annex", "p2mr", between, txscript.SigHashDefault, []byte{0x50, 0x00, 0xff}, []sig{{1, 2}, {0, blank}}, false},
+		{"p2tr-codesep-leading-annex-none-anyonecanpay", "p2tr", leading, txscript.SigHashNone | txscript.SigHashAnyOneCanPay, []byte{0x50, 0x07}, []sig{{0, 0}}, false},
+	} {
+		leaf := txscript.NewBaseTapLeaf(item.leaf)
+		tree := txscript.AssembleTaprootScriptTree(leaf)
+		root := tree.RootNode.TapHash()
+		proof := tree.LeafMerkleProofs[0]
+		var prevScript, controlBlock []byte
+		var err error
+		if item.kind == "p2tr" {
+			prevScript, err = txscript.PayToTaprootScript(txscript.ComputeTaprootOutputKey(internalPub, root[:]))
+			check(err)
+			block := proof.ToControlBlock(internalPub)
+			controlBlock, err = block.ToBytes()
+			check(err)
+		} else {
+			mrAddr, err := btcutil.NewAddressMerkleRoot(root[:], &chaincfg.MainNetParams)
+			check(err)
+			prevScript, err = txscript.PayToAddrScript(mrAddr)
+			check(err)
+			block := txscript.MerkleRootControlBlock{LeafVersion: txscript.BaseLeafVersion, InclusionProof: proof.InclusionProof}
+			controlBlock, err = block.ToBytes()
+			check(err)
+		}
+
+		const amount int64 = 90000000
+		tx := wire.NewMsgTx(2)
+		var prevOuts []*wire.TxOut
+		var keyPathPriv *btcec.PrivateKey
+		if item.withP2TR {
+			keyPathPriv, err = derive(account, 1, 2).ECPrivKey()
+			check(err)
+			keyPathScript, err := txscript.PayToTaprootScript(txscript.ComputeTaprootKeyNoScript(keyPathPriv.PubKey()))
+			check(err)
+			tx.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x0a}, 0), nil, nil))
+			prevOuts = append(prevOuts, wire.NewTxOut(40000000, keyPathScript))
+		}
+		inputIndex := len(tx.TxIn)
+		tx.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x0b}, 3), nil, nil))
+		prevOuts = append(prevOuts, wire.NewTxOut(amount, prevScript))
+		for len(tx.TxOut) <= inputIndex {
+			tx.AddTxOut(wire.NewTxOut(amount/2-3000, payScript))
+		}
+
+		fetcher := txscript.NewMultiPrevOutFetcher(nil)
+		var prevoutVectors []PrevoutVector
+		for i, txIn := range tx.TxIn {
+			fetcher.AddPrevOut(txIn.PreviousOutPoint, prevOuts[i])
+			prevoutVectors = append(prevoutVectors, PrevoutVector{Script: hex.EncodeToString(prevOuts[i].PkScript), Value: prevOuts[i].Value})
+		}
+		sigHashes := txscript.NewTxSigHashes(tx, fetcher)
+		leafHash := leaf.TapHash()
+
+		vector := TapscriptExtraVector{
+			Name: item.name, Kind: item.kind, HashType: uint32(item.hashType), Prevouts: prevoutVectors,
+			LeafScript: hex.EncodeToString(item.leaf), ControlBlock: hex.EncodeToString(controlBlock),
+			Annex: hex.EncodeToString(item.annex), CodeSepPositions: []int32{},
+			UnsignedTxHex: serializeTx(tx, false),
+		}
+		tokenizer := txscript.MakeScriptTokenizer(0, item.leaf)
+		for tokenizer.Next() {
+			if tokenizer.Opcode() == txscript.OP_CODESEPARATOR {
+				vector.CodeSepPositions = append(vector.CodeSepPositions, tokenizer.OpcodePosition())
+			}
+		}
+		check(tokenizer.Err())
+
+		var witness wire.TxWitness
+		for _, s := range item.sigs {
+			opts := []txscript.TaprootSigHashOption{txscript.WithBaseTapscriptVersion(s.pos, leafHash[:])}
+			if item.annex != nil {
+				opts = append(opts, txscript.WithAnnex(item.annex))
+			}
+			sighash, err := txscript.CalcTapscriptSignaturehash(sigHashes, item.hashType, tx, inputIndex, fetcher, leaf, opts...)
+			check(err)
+			signed, err := schnorr.Sign(keys[s.key], sighash)
+			check(err)
+			signature := signed.Serialize()
+			if item.hashType != txscript.SigHashDefault {
+				signature = append(signature, byte(item.hashType))
+			}
+			witness = append(witness, signature)
+			vector.Signatures = append(vector.Signatures, TapscriptSignatureVector{
+				KeyIndex: 30 + s.key, CodeSepPos: s.pos,
+				Sighash: hex.EncodeToString(sighash), Signature: hex.EncodeToString(signature),
+			})
+		}
+		witness = append(witness, item.leaf, controlBlock)
+		if item.annex != nil {
+			witness = append(witness, item.annex)
+		}
+		tx.TxIn[inputIndex].SetWitness(witness)
+		if keyPathPriv != nil {
+			keySig, err := txscript.RawTxInTaprootSignature(
+				tx, txscript.NewTxSigHashes(tx, fetcher), 0, prevOuts[0].Value,
+				prevOuts[0].PkScript, nil, txscript.SigHashDefault, keyPathPriv,
+			)
+			check(err)
+			tx.TxIn[0].SetWitness(wire.TxWitness{keySig})
+		}
+		verifyInputs(tx, prevOuts)
+		vector.FinalTxHex = serializeTx(tx, true)
+		vector.TxID = tx.TxID()
+		out = append(out, vector)
 	}
 	return out
 }

@@ -14,7 +14,7 @@ import type { Transaction } from 'bitcoinjs-lib';
 import { fromOutputScript } from './address.js';
 import { parseMultiA } from './multia.js';
 import type { PearlNetwork } from './networks.js';
-import { classifyOutputScript, tapLeafHash } from './script.js';
+import { classifyOutputScript, TAPROOT_ANNEX_TAG, tapLeafHash } from './script.js';
 import type { ScriptClass } from './script.js';
 import type { TxOutput } from './transaction.js';
 import {
@@ -28,7 +28,6 @@ import type { FeeRate } from './amount.js';
 
 // mempool.MaxRBFSequence.
 const MAX_RBF_SEQUENCE = 0xfffffffd;
-const ANNEX_TAG = 0x50;
 
 /** `checksig` is `<key> OP_CHECKSIG`, `multiA` a k-of-n OP_CHECKSIGADD leaf, `xmss` `<key> OP_CHECKXMSSSIG`. */
 export type LeafKind = 'checksig' | 'multiA' | 'xmss' | 'other';
@@ -131,7 +130,7 @@ export function inspectTransaction(
     rbf: tx.ins.some((input) => input.sequence <= MAX_RBF_SEQUENCE),
     inputs: tx.ins.map((input, i) => {
       const prevout = prevouts[i]!;
-      const annexed = input.witness.length >= 2 && input.witness[input.witness.length - 1]![0] === ANNEX_TAG;
+      const annexed = input.witness.length >= 2 && input.witness[input.witness.length - 1]![0] === TAPROOT_ANNEX_TAG;
       const stack = annexed ? input.witness.slice(0, -1) : input.witness;
       return {
         txid: toHex(Uint8Array.from(input.hash).reverse()),

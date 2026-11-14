@@ -35,6 +35,9 @@ export const SEQUENCE_LOCKTIME_GRANULARITY = 9;
 /** The largest data push a script may contain, in bytes (txscript.MaxScriptElementSize). */
 export const MAX_SCRIPT_ELEMENT_SIZE = 520;
 
+/** First byte of a Taproot annex, the optional last witness item (txscript.TaprootAnnexTag). */
+export const TAPROOT_ANNEX_TAG = 0x50;
+
 // txscript.BaseLeafVersion.
 /** The tapscript leaf version, the only one Pearl executes (txscript.BaseLeafVersion). */
 export const BASE_LEAF_VERSION = 0xc0;
