@@ -12,6 +12,9 @@ import { taprootOutputKey } from './scripttree.js';
 
 const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const COMPRESS_MAGIC = 0x01;
+// 38 bytes take at most 52 base58 characters, and every extra character adds
+// a byte, so a longer string is the wrong length whatever it holds.
+const MAX_WIF_LENGTH = 52;
 
 export interface DecodedWif {
   privateKey: Uint8Array;
@@ -67,9 +70,20 @@ export function encodeWif(privateKey: Uint8Array, network: PearlNetwork, compres
 
 /**
  * Decodes a WIF with the checks of btcutil.DecodeWIF, then refuses a key for
- * another network, as importprivkey does.
+ * another network, as importprivkey does. The private key is returned to the
+ * caller, who owns it; pearljs keeps no copy.
  */
 export function decodeWif(wif: string, network: PearlNetwork): DecodedWif {
+  if (typeof wif !== 'string') {
+    throw new TypeError('WIF must be a string');
+  }
+  if (network === null || typeof network !== 'object' || typeof network.wif !== 'number') {
+    throw new TypeError('a valid PearlNetwork is required');
+  }
+  // Checked before decoding, which is quadratic in the length.
+  if (wif.length > MAX_WIF_LENGTH) {
+    throw new Error('malformed private key');
+  }
   const decoded = base58Decode(wif);
   let compressed: boolean;
   if (decoded.length === 1 + 32 + 1 + 4) {

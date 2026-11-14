@@ -31,6 +31,26 @@ describe('WIF private keys', () => {
     expect(() => decodeWif(`1${vectors.wif[0]!.wif}`, networks.mainnet)).toThrow('malformed private key');
   });
 
+  it('rejects an over-long string before decoding it', () => {
+    // 53 characters can never decode to 37 or 38 bytes; DecodeWIF answers the same.
+    const wif = vectors.wif.find((item) => item.compressed)!.wif;
+    expect(wif).toHaveLength(52);
+    expect(() => decodeWif(`${wif}2`, networks.mainnet)).toThrow('malformed private key');
+    // 160,000 characters took over 20 seconds when the length was checked after decoding.
+    const started = performance.now();
+    expect(() => decodeWif('z'.repeat(160_000), networks.mainnet)).toThrow('malformed private key');
+    expect(performance.now() - started).toBeLessThan(500);
+  });
+
+  it('rejects input that is not a string with a clear error', () => {
+    for (const bad of [undefined, null, 5, {}, new Uint8Array(38), ['K']]) {
+      expect(() => decodeWif(bad as unknown as string, networks.mainnet)).toThrow('WIF must be a string');
+    }
+    expect(() => decodeWif(vectors.wif[0]!.wif, undefined as unknown as typeof networks.mainnet)).toThrow(
+      'a valid PearlNetwork is required',
+    );
+  });
+
   it('refuses a key for another network, as importprivkey does', () => {
     const testnetWif = vectors.wif.find((item) => item.network === 'testnet')!.wif;
     expect(() => decodeWif(testnetWif, networks.mainnet)).toThrow('not intended for mainnet');
