@@ -1,0 +1,45 @@
+// Pearl monetary amounts. All values are bigint grains; JS numbers are
+// rejected at the boundary because they lose precision well below MAX_GRAIN.
+
+export const GRAIN_PER_PEARL = 100000000n;
+
+// btcutil.MaxGrain, the maximum transaction amount (21e9 * GrainPerPearl).
+// This is an amount validity bound, not the chain's total supply.
+export const MAX_GRAIN = 2100000000000000000n;
+
+const DECIMALS = 8;
+const PEARL_RE = /^\d+(\.\d{1,8})?$/;
+
+/** Parses a decimal pearl string like "1.5" into grains. */
+export function parsePearl(text: string): bigint {
+  if (typeof text !== 'string') {
+    throw new TypeError('amount must be a decimal string');
+  }
+  if (!PEARL_RE.test(text)) {
+    throw new Error(`invalid pearl amount: ${JSON.stringify(text)}`);
+  }
+  const dot = text.indexOf('.');
+  const whole = dot === -1 ? text : text.slice(0, dot);
+  const frac = (dot === -1 ? '' : text.slice(dot + 1)).padEnd(DECIMALS, '0');
+  const grain = BigInt(whole) * GRAIN_PER_PEARL + BigInt(frac || '0');
+  if (grain > MAX_GRAIN) {
+    throw new Error(`pearl amount exceeds maximum: ${text}`);
+  }
+  return grain;
+}
+
+/** Formats grains as a decimal pearl string without trailing zeros. */
+export function formatPearl(grain: bigint): string {
+  if (typeof grain !== 'bigint') {
+    throw new TypeError('amount must be a bigint of grains');
+  }
+  if (grain < 0n || grain > MAX_GRAIN) {
+    throw new Error(`grain amount out of range: ${grain}`);
+  }
+  const whole = grain / GRAIN_PER_PEARL;
+  const frac = (grain % GRAIN_PER_PEARL)
+    .toString()
+    .padStart(DECIMALS, '0')
+    .replace(/0+$/, '');
+  return frac === '' ? whole.toString() : `${whole}.${frac}`;
+}

@@ -1,0 +1,53 @@
+{
+  "name": "pearljs",
+  "version": "0.1.0",
+  "description": "Pearl transaction, Taproot, PSBT, block header, script, and payment primitives",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "demo": "tsc -p tsconfig.examples.json && node dist-examples/examples/invoice-demo.js",
+    "test": "vitest run",
+    "lint": "eslint src test examples",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check": "npm run lint && npm run typecheck && npm run build && npm test"
+  },
+  "keywords": [
+    "pearl",
+    "bitcoinjs",
+    "taproot",
+    "psbt"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@noble/hashes": "1.8.0",
+    "bech32": "2.0.0",
+    "bip32": "5.0.1",
+    "bip39": "3.1.2",
+    "bitcoinjs-lib": "7.0.5",
+    "tiny-secp256k1": "2.2.5"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.25",
+    "eslint": "9.39.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.48.0",
+    "vitest": "4.0.16"
+  }
+}

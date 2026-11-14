@@ -1,0 +1,3 @@
+pearljs uses bitcoinjs-lib, bip32, bip39, bech32, tiny-secp256k1, and @noble/hashes as npm dependencies. It does not contain copied source files from those projects. Their copyright notices and licenses are included in their installed packages.
+
+Pearl protocol constants and compatibility behavior were derived from the Pearl Research Labs source tree. No affiliation or endorsement is implied.
