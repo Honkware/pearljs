@@ -1490,6 +1490,1794 @@
       ]
     }
   ],
+  "scriptToolkit": {
+    "opcodeByName": {
+      "OP_0": 0,
+      "OP_0NOTEQUAL": 146,
+      "OP_1": 81,
+      "OP_10": 90,
+      "OP_11": 91,
+      "OP_12": 92,
+      "OP_13": 93,
+      "OP_14": 94,
+      "OP_15": 95,
+      "OP_16": 96,
+      "OP_1ADD": 139,
+      "OP_1NEGATE": 79,
+      "OP_1SUB": 140,
+      "OP_2": 82,
+      "OP_2DIV": 142,
+      "OP_2DROP": 109,
+      "OP_2DUP": 110,
+      "OP_2MUL": 141,
+      "OP_2OVER": 112,
+      "OP_2ROT": 113,
+      "OP_2SWAP": 114,
+      "OP_3": 83,
+      "OP_3DUP": 111,
+      "OP_4": 84,
+      "OP_5": 85,
+      "OP_6": 86,
+      "OP_7": 87,
+      "OP_8": 88,
+      "OP_9": 89,
+      "OP_ABS": 144,
+      "OP_ADD": 147,
+      "OP_AND": 132,
+      "OP_BOOLAND": 154,
+      "OP_BOOLOR": 155,
+      "OP_CAT": 126,
+      "OP_CHECKLOCKTIMEVERIFY": 177,
+      "OP_CHECKMULTISIG": 174,
+      "OP_CHECKMULTISIGVERIFY": 175,
+      "OP_CHECKSEQUENCEVERIFY": 178,
+      "OP_CHECKSIG": 172,
+      "OP_CHECKSIGADD": 186,
+      "OP_CHECKSIGVERIFY": 173,
+      "OP_CHECKXMSSSIG": 222,
+      "OP_CODESEPARATOR": 171,
+      "OP_DATA_1": 1,
+      "OP_DATA_10": 10,
+      "OP_DATA_11": 11,
+      "OP_DATA_12": 12,
+      "OP_DATA_13": 13,
+      "OP_DATA_14": 14,
+      "OP_DATA_15": 15,
+      "OP_DATA_16": 16,
+      "OP_DATA_17": 17,
+      "OP_DATA_18": 18,
+      "OP_DATA_19": 19,
+      "OP_DATA_2": 2,
+      "OP_DATA_20": 20,
+      "OP_DATA_21": 21,
+      "OP_DATA_22": 22,
+      "OP_DATA_23": 23,
+      "OP_DATA_24": 24,
+      "OP_DATA_25": 25,
+      "OP_DATA_26": 26,
+      "OP_DATA_27": 27,
+      "OP_DATA_28": 28,
+      "OP_DATA_29": 29,
+      "OP_DATA_3": 3,
+      "OP_DATA_30": 30,
+      "OP_DATA_31": 31,
+      "OP_DATA_32": 32,
+      "OP_DATA_33": 33,
+      "OP_DATA_34": 34,
+      "OP_DATA_35": 35,
+      "OP_DATA_36": 36,
+      "OP_DATA_37": 37,
+      "OP_DATA_38": 38,
+      "OP_DATA_39": 39,
+      "OP_DATA_4": 4,
+      "OP_DATA_40": 40,
+      "OP_DATA_41": 41,
+      "OP_DATA_42": 42,
+      "OP_DATA_43": 43,
+      "OP_DATA_44": 44,
+      "OP_DATA_45": 45,
+      "OP_DATA_46": 46,
+      "OP_DATA_47": 47,
+      "OP_DATA_48": 48,
+      "OP_DATA_49": 49,
+      "OP_DATA_5": 5,
+      "OP_DATA_50": 50,
+      "OP_DATA_51": 51,
+      "OP_DATA_52": 52,
+      "OP_DATA_53": 53,
+      "OP_DATA_54": 54,
+      "OP_DATA_55": 55,
+      "OP_DATA_56": 56,
+      "OP_DATA_57": 57,
+      "OP_DATA_58": 58,
+      "OP_DATA_59": 59,
+      "OP_DATA_6": 6,
+      "OP_DATA_60": 60,
+      "OP_DATA_61": 61,
+      "OP_DATA_62": 62,
+      "OP_DATA_63": 63,
+      "OP_DATA_64": 64,
+      "OP_DATA_65": 65,
+      "OP_DATA_66": 66,
+      "OP_DATA_67": 67,
+      "OP_DATA_68": 68,
+      "OP_DATA_69": 69,
+      "OP_DATA_7": 7,
+      "OP_DATA_70": 70,
+      "OP_DATA_71": 71,
+      "OP_DATA_72": 72,
+      "OP_DATA_73": 73,
+      "OP_DATA_74": 74,
+      "OP_DATA_75": 75,
+      "OP_DATA_8": 8,
+      "OP_DATA_9": 9,
+      "OP_DEPTH": 116,
+      "OP_DIV": 150,
+      "OP_DROP": 117,
+      "OP_DUP": 118,
+      "OP_ELSE": 103,
+      "OP_ENDIF": 104,
+      "OP_EQUAL": 135,
+      "OP_EQUALVERIFY": 136,
+      "OP_FALSE": 0,
+      "OP_FROMALTSTACK": 108,
+      "OP_GREATERTHAN": 160,
+      "OP_GREATERTHANOREQUAL": 162,
+      "OP_HASH160": 169,
+      "OP_HASH256": 170,
+      "OP_IF": 99,
+      "OP_IFDUP": 115,
+      "OP_INVALIDOPCODE": 255,
+      "OP_INVERT": 131,
+      "OP_LEFT": 128,
+      "OP_LESSTHAN": 159,
+      "OP_LESSTHANOREQUAL": 161,
+      "OP_LSHIFT": 152,
+      "OP_MAX": 164,
+      "OP_MIN": 163,
+      "OP_MOD": 151,
+      "OP_MUL": 149,
+      "OP_NEGATE": 143,
+      "OP_NIP": 119,
+      "OP_NOP": 97,
+      "OP_NOP1": 176,
+      "OP_NOP10": 185,
+      "OP_NOP2": 177,
+      "OP_NOP3": 178,
+      "OP_NOP4": 179,
+      "OP_NOP5": 180,
+      "OP_NOP6": 181,
+      "OP_NOP7": 182,
+      "OP_NOP8": 183,
+      "OP_NOP9": 184,
+      "OP_NOT": 145,
+      "OP_NOTIF": 100,
+      "OP_NUMEQUAL": 156,
+      "OP_NUMEQUALVERIFY": 157,
+      "OP_NUMNOTEQUAL": 158,
+      "OP_OR": 133,
+      "OP_OVER": 120,
+      "OP_PICK": 121,
+      "OP_PUBKEY": 254,
+      "OP_PUBKEYHASH": 253,
+      "OP_PUBKEYS": 251,
+      "OP_PUSHDATA1": 76,
+      "OP_PUSHDATA2": 77,
+      "OP_PUSHDATA4": 78,
+      "OP_RESERVED": 80,
+      "OP_RESERVED1": 137,
+      "OP_RESERVED2": 138,
+      "OP_RETURN": 106,
+      "OP_RIGHT": 129,
+      "OP_RIPEMD160": 166,
+      "OP_ROLL": 122,
+      "OP_ROT": 123,
+      "OP_RSHIFT": 153,
+      "OP_SHA1": 167,
+      "OP_SHA256": 168,
+      "OP_SIZE": 130,
+      "OP_SMALLINTEGER": 250,
+      "OP_SUB": 148,
+      "OP_SUBSTR": 127,
+      "OP_SWAP": 124,
+      "OP_TOALTSTACK": 107,
+      "OP_TRUE": 81,
+      "OP_TUCK": 125,
+      "OP_UNKNOWN187": 187,
+      "OP_UNKNOWN188": 188,
+      "OP_UNKNOWN189": 189,
+      "OP_UNKNOWN190": 190,
+      "OP_UNKNOWN191": 191,
+      "OP_UNKNOWN192": 192,
+      "OP_UNKNOWN193": 193,
+      "OP_UNKNOWN194": 194,
+      "OP_UNKNOWN195": 195,
+      "OP_UNKNOWN196": 196,
+      "OP_UNKNOWN197": 197,
+      "OP_UNKNOWN198": 198,
+      "OP_UNKNOWN199": 199,
+      "OP_UNKNOWN200": 200,
+      "OP_UNKNOWN201": 201,
+      "OP_UNKNOWN202": 202,
+      "OP_UNKNOWN203": 203,
+      "OP_UNKNOWN204": 204,
+      "OP_UNKNOWN205": 205,
+      "OP_UNKNOWN206": 206,
+      "OP_UNKNOWN207": 207,
+      "OP_UNKNOWN208": 208,
+      "OP_UNKNOWN209": 209,
+      "OP_UNKNOWN210": 210,
+      "OP_UNKNOWN211": 211,
+      "OP_UNKNOWN212": 212,
+      "OP_UNKNOWN213": 213,
+      "OP_UNKNOWN214": 214,
+      "OP_UNKNOWN215": 215,
+      "OP_UNKNOWN216": 216,
+      "OP_UNKNOWN217": 217,
+      "OP_UNKNOWN218": 218,
+      "OP_UNKNOWN219": 219,
+      "OP_UNKNOWN220": 220,
+      "OP_UNKNOWN221": 221,
+      "OP_UNKNOWN223": 223,
+      "OP_UNKNOWN224": 224,
+      "OP_UNKNOWN225": 225,
+      "OP_UNKNOWN226": 226,
+      "OP_UNKNOWN227": 227,
+      "OP_UNKNOWN228": 228,
+      "OP_UNKNOWN229": 229,
+      "OP_UNKNOWN230": 230,
+      "OP_UNKNOWN231": 231,
+      "OP_UNKNOWN232": 232,
+      "OP_UNKNOWN233": 233,
+      "OP_UNKNOWN234": 234,
+      "OP_UNKNOWN235": 235,
+      "OP_UNKNOWN236": 236,
+      "OP_UNKNOWN237": 237,
+      "OP_UNKNOWN238": 238,
+      "OP_UNKNOWN239": 239,
+      "OP_UNKNOWN240": 240,
+      "OP_UNKNOWN241": 241,
+      "OP_UNKNOWN242": 242,
+      "OP_UNKNOWN243": 243,
+      "OP_UNKNOWN244": 244,
+      "OP_UNKNOWN245": 245,
+      "OP_UNKNOWN246": 246,
+      "OP_UNKNOWN247": 247,
+      "OP_UNKNOWN248": 248,
+      "OP_UNKNOWN249": 249,
+      "OP_UNKNOWN252": 252,
+      "OP_VER": 98,
+      "OP_VERIF": 101,
+      "OP_VERIFY": 105,
+      "OP_VERNOTIF": 102,
+      "OP_WITHIN": 165,
+      "OP_XOR": 134
+    },
+    "opcodes": [
+      {
+        "value": 0,
+        "disasm": "0",
+        "leafError": "false stack entry at end of script execution"
+      },
+      {
+        "value": 1,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_1 requires 2 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 2,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_2 requires 3 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 3,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_3 requires 4 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 4,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_4 requires 5 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 5,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_5 requires 6 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 6,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_6 requires 7 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 7,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_7 requires 8 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 8,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_8 requires 9 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 9,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_9 requires 10 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 10,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_10 requires 11 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 11,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_11 requires 12 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 12,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_12 requires 13 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 13,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_13 requires 14 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 14,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_14 requires 15 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 15,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_15 requires 16 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 16,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_16 requires 17 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 17,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_17 requires 18 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 18,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_18 requires 19 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 19,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_19 requires 20 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 20,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_20 requires 21 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 21,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_21 requires 22 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 22,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_22 requires 23 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 23,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_23 requires 24 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 24,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_24 requires 25 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 25,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_25 requires 26 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 26,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_26 requires 27 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 27,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_27 requires 28 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 28,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_28 requires 29 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 29,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_29 requires 30 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 30,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_30 requires 31 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 31,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_31 requires 32 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 32,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_32 requires 33 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 33,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_33 requires 34 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 34,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_34 requires 35 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 35,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_35 requires 36 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 36,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_36 requires 37 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 37,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_37 requires 38 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 38,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_38 requires 39 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 39,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_39 requires 40 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 40,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_40 requires 41 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 41,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_41 requires 42 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 42,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_42 requires 43 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 43,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_43 requires 44 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 44,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_44 requires 45 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 45,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_45 requires 46 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 46,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_46 requires 47 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 47,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_47 requires 48 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 48,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_48 requires 49 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 49,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_49 requires 50 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 50,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_50 requires 51 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 51,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_51 requires 52 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 52,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_52 requires 53 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 53,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_53 requires 54 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 54,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_54 requires 55 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 55,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_55 requires 56 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 56,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_56 requires 57 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 57,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_57 requires 58 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 58,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_58 requires 59 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 59,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_59 requires 60 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 60,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_60 requires 61 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 61,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_61 requires 62 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 62,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_62 requires 63 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 63,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_63 requires 64 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 64,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_64 requires 65 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 65,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_65 requires 66 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 66,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_66 requires 67 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 67,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_67 requires 68 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 68,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_68 requires 69 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 69,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_69 requires 70 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 70,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_70 requires 71 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 71,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_71 requires 72 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 72,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_72 requires 73 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 73,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_73 requires 74 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 74,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_74 requires 75 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 75,
+        "disasm": "[error]",
+        "leafError": "opcode OP_DATA_75 requires 76 bytes, but script only has 1 remaining"
+      },
+      {
+        "value": 76,
+        "disasm": "[error]",
+        "leafError": "opcode OP_PUSHDATA1 requires 1 bytes, but script only has 0 remaining"
+      },
+      {
+        "value": 77,
+        "disasm": "[error]",
+        "leafError": "opcode OP_PUSHDATA2 requires 2 bytes, but script only has 0 remaining"
+      },
+      {
+        "value": 78,
+        "disasm": "[error]",
+        "leafError": "opcode OP_PUSHDATA4 requires 4 bytes, but script only has 0 remaining"
+      },
+      {
+        "value": 79,
+        "disasm": "-1",
+        "leafError": ""
+      },
+      {
+        "value": 80,
+        "disasm": "OP_RESERVED",
+        "leafError": "attempt to execute reserved opcode OP_RESERVED"
+      },
+      {
+        "value": 81,
+        "disasm": "1",
+        "leafError": ""
+      },
+      {
+        "value": 82,
+        "disasm": "2",
+        "leafError": ""
+      },
+      {
+        "value": 83,
+        "disasm": "3",
+        "leafError": ""
+      },
+      {
+        "value": 84,
+        "disasm": "4",
+        "leafError": ""
+      },
+      {
+        "value": 85,
+        "disasm": "5",
+        "leafError": ""
+      },
+      {
+        "value": 86,
+        "disasm": "6",
+        "leafError": ""
+      },
+      {
+        "value": 87,
+        "disasm": "7",
+        "leafError": ""
+      },
+      {
+        "value": 88,
+        "disasm": "8",
+        "leafError": ""
+      },
+      {
+        "value": 89,
+        "disasm": "9",
+        "leafError": ""
+      },
+      {
+        "value": 90,
+        "disasm": "10",
+        "leafError": ""
+      },
+      {
+        "value": 91,
+        "disasm": "11",
+        "leafError": ""
+      },
+      {
+        "value": 92,
+        "disasm": "12",
+        "leafError": ""
+      },
+      {
+        "value": 93,
+        "disasm": "13",
+        "leafError": ""
+      },
+      {
+        "value": 94,
+        "disasm": "14",
+        "leafError": ""
+      },
+      {
+        "value": 95,
+        "disasm": "15",
+        "leafError": ""
+      },
+      {
+        "value": 96,
+        "disasm": "16",
+        "leafError": ""
+      },
+      {
+        "value": 97,
+        "disasm": "OP_NOP",
+        "leafError": "stack must contain exactly one item (contains 0)"
+      },
+      {
+        "value": 98,
+        "disasm": "OP_VER",
+        "leafError": "attempt to execute reserved opcode OP_VER"
+      },
+      {
+        "value": 99,
+        "disasm": "OP_IF",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 100,
+        "disasm": "OP_NOTIF",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 101,
+        "disasm": "OP_VERIF",
+        "leafError": "attempt to execute reserved opcode OP_VERIF"
+      },
+      {
+        "value": 102,
+        "disasm": "OP_VERNOTIF",
+        "leafError": "attempt to execute reserved opcode OP_VERNOTIF"
+      },
+      {
+        "value": 103,
+        "disasm": "OP_ELSE",
+        "leafError": "encountered opcode OP_ELSE with no matching opcode to begin conditional execution"
+      },
+      {
+        "value": 104,
+        "disasm": "OP_ENDIF",
+        "leafError": "encountered opcode OP_ENDIF with no matching opcode to begin conditional execution"
+      },
+      {
+        "value": 105,
+        "disasm": "OP_VERIFY",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 106,
+        "disasm": "OP_RETURN",
+        "leafError": "script returned early"
+      },
+      {
+        "value": 107,
+        "disasm": "OP_TOALTSTACK",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 108,
+        "disasm": "OP_FROMALTSTACK",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 109,
+        "disasm": "OP_2DROP",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 110,
+        "disasm": "OP_2DUP",
+        "leafError": "index 1 is invalid for stack size 0"
+      },
+      {
+        "value": 111,
+        "disasm": "OP_3DUP",
+        "leafError": "index 2 is invalid for stack size 0"
+      },
+      {
+        "value": 112,
+        "disasm": "OP_2OVER",
+        "leafError": "index 3 is invalid for stack size 0"
+      },
+      {
+        "value": 113,
+        "disasm": "OP_2ROT",
+        "leafError": "index 5 is invalid for stack size 0"
+      },
+      {
+        "value": 114,
+        "disasm": "OP_2SWAP",
+        "leafError": "index 3 is invalid for stack size 0"
+      },
+      {
+        "value": 115,
+        "disasm": "OP_IFDUP",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 116,
+        "disasm": "OP_DEPTH",
+        "leafError": "false stack entry at end of script execution"
+      },
+      {
+        "value": 117,
+        "disasm": "OP_DROP",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 118,
+        "disasm": "OP_DUP",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 119,
+        "disasm": "OP_NIP",
+        "leafError": "index 1 is invalid for stack size 0"
+      },
+      {
+        "value": 120,
+        "disasm": "OP_OVER",
+        "leafError": "index 1 is invalid for stack size 0"
+      },
+      {
+        "value": 121,
+        "disasm": "OP_PICK",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 122,
+        "disasm": "OP_ROLL",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 123,
+        "disasm": "OP_ROT",
+        "leafError": "index 2 is invalid for stack size 0"
+      },
+      {
+        "value": 124,
+        "disasm": "OP_SWAP",
+        "leafError": "index 1 is invalid for stack size 0"
+      },
+      {
+        "value": 125,
+        "disasm": "OP_TUCK",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 126,
+        "disasm": "OP_CAT",
+        "leafError": "opcode OP_CAT requires at least 2 items on stack"
+      },
+      {
+        "value": 127,
+        "disasm": "OP_SUBSTR",
+        "leafError": "attempt to execute disabled opcode OP_SUBSTR"
+      },
+      {
+        "value": 128,
+        "disasm": "OP_LEFT",
+        "leafError": "attempt to execute disabled opcode OP_LEFT"
+      },
+      {
+        "value": 129,
+        "disasm": "OP_RIGHT",
+        "leafError": "attempt to execute disabled opcode OP_RIGHT"
+      },
+      {
+        "value": 130,
+        "disasm": "OP_SIZE",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 131,
+        "disasm": "OP_INVERT",
+        "leafError": "attempt to execute disabled opcode OP_INVERT"
+      },
+      {
+        "value": 132,
+        "disasm": "OP_AND",
+        "leafError": "attempt to execute disabled opcode OP_AND"
+      },
+      {
+        "value": 133,
+        "disasm": "OP_OR",
+        "leafError": "attempt to execute disabled opcode OP_OR"
+      },
+      {
+        "value": 134,
+        "disasm": "OP_XOR",
+        "leafError": "attempt to execute disabled opcode OP_XOR"
+      },
+      {
+        "value": 135,
+        "disasm": "OP_EQUAL",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 136,
+        "disasm": "OP_EQUALVERIFY",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 137,
+        "disasm": "OP_RESERVED1",
+        "leafError": "attempt to execute reserved opcode OP_RESERVED1"
+      },
+      {
+        "value": 138,
+        "disasm": "OP_RESERVED2",
+        "leafError": "attempt to execute reserved opcode OP_RESERVED2"
+      },
+      {
+        "value": 139,
+        "disasm": "OP_1ADD",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 140,
+        "disasm": "OP_1SUB",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 141,
+        "disasm": "OP_2MUL",
+        "leafError": "attempt to execute disabled opcode OP_2MUL"
+      },
+      {
+        "value": 142,
+        "disasm": "OP_2DIV",
+        "leafError": "attempt to execute disabled opcode OP_2DIV"
+      },
+      {
+        "value": 143,
+        "disasm": "OP_NEGATE",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 144,
+        "disasm": "OP_ABS",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 145,
+        "disasm": "OP_NOT",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 146,
+        "disasm": "OP_0NOTEQUAL",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 147,
+        "disasm": "OP_ADD",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 148,
+        "disasm": "OP_SUB",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 149,
+        "disasm": "OP_MUL",
+        "leafError": "attempt to execute disabled opcode OP_MUL"
+      },
+      {
+        "value": 150,
+        "disasm": "OP_DIV",
+        "leafError": "attempt to execute disabled opcode OP_DIV"
+      },
+      {
+        "value": 151,
+        "disasm": "OP_MOD",
+        "leafError": "attempt to execute disabled opcode OP_MOD"
+      },
+      {
+        "value": 152,
+        "disasm": "OP_LSHIFT",
+        "leafError": "attempt to execute disabled opcode OP_LSHIFT"
+      },
+      {
+        "value": 153,
+        "disasm": "OP_RSHIFT",
+        "leafError": "attempt to execute disabled opcode OP_RSHIFT"
+      },
+      {
+        "value": 154,
+        "disasm": "OP_BOOLAND",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 155,
+        "disasm": "OP_BOOLOR",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 156,
+        "disasm": "OP_NUMEQUAL",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 157,
+        "disasm": "OP_NUMEQUALVERIFY",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 158,
+        "disasm": "OP_NUMNOTEQUAL",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 159,
+        "disasm": "OP_LESSTHAN",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 160,
+        "disasm": "OP_GREATERTHAN",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 161,
+        "disasm": "OP_LESSTHANOREQUAL",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 162,
+        "disasm": "OP_GREATERTHANOREQUAL",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 163,
+        "disasm": "OP_MIN",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 164,
+        "disasm": "OP_MAX",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 165,
+        "disasm": "OP_WITHIN",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 166,
+        "disasm": "OP_RIPEMD160",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 167,
+        "disasm": "OP_SHA1",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 168,
+        "disasm": "OP_SHA256",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 169,
+        "disasm": "OP_HASH160",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 170,
+        "disasm": "OP_HASH256",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 171,
+        "disasm": "OP_CODESEPARATOR",
+        "leafError": "stack must contain exactly one item (contains 0)"
+      },
+      {
+        "value": 172,
+        "disasm": "OP_CHECKSIG",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 173,
+        "disasm": "OP_CHECKSIGVERIFY",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 174,
+        "disasm": "OP_CHECKMULTISIG",
+        "leafError": "OP_CHECKMULTISIG and OP_CHECKMULTISIGVERIFY are disabled"
+      },
+      {
+        "value": 175,
+        "disasm": "OP_CHECKMULTISIGVERIFY",
+        "leafError": "OP_CHECKMULTISIG and OP_CHECKMULTISIGVERIFY are disabled"
+      },
+      {
+        "value": 176,
+        "disasm": "OP_NOP1",
+        "leafError": "OP_NOP1 reserved for soft-fork upgrades"
+      },
+      {
+        "value": 177,
+        "disasm": "OP_CHECKLOCKTIMEVERIFY",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 178,
+        "disasm": "OP_CHECKSEQUENCEVERIFY",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 179,
+        "disasm": "OP_NOP4",
+        "leafError": "OP_NOP4 reserved for soft-fork upgrades"
+      },
+      {
+        "value": 180,
+        "disasm": "OP_NOP5",
+        "leafError": "OP_NOP5 reserved for soft-fork upgrades"
+      },
+      {
+        "value": 181,
+        "disasm": "OP_NOP6",
+        "leafError": "OP_NOP6 reserved for soft-fork upgrades"
+      },
+      {
+        "value": 182,
+        "disasm": "OP_NOP7",
+        "leafError": "OP_NOP7 reserved for soft-fork upgrades"
+      },
+      {
+        "value": 183,
+        "disasm": "OP_NOP8",
+        "leafError": "OP_NOP8 reserved for soft-fork upgrades"
+      },
+      {
+        "value": 184,
+        "disasm": "OP_NOP9",
+        "leafError": "OP_NOP9 reserved for soft-fork upgrades"
+      },
+      {
+        "value": 185,
+        "disasm": "OP_NOP10",
+        "leafError": "OP_NOP10 reserved for soft-fork upgrades"
+      },
+      {
+        "value": 186,
+        "disasm": "OP_CHECKSIGADD",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 187,
+        "disasm": "OP_UNKNOWN187",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN187"
+      },
+      {
+        "value": 188,
+        "disasm": "OP_UNKNOWN188",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN188"
+      },
+      {
+        "value": 189,
+        "disasm": "OP_UNKNOWN189",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN189"
+      },
+      {
+        "value": 190,
+        "disasm": "OP_UNKNOWN190",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN190"
+      },
+      {
+        "value": 191,
+        "disasm": "OP_UNKNOWN191",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN191"
+      },
+      {
+        "value": 192,
+        "disasm": "OP_UNKNOWN192",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN192"
+      },
+      {
+        "value": 193,
+        "disasm": "OP_UNKNOWN193",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN193"
+      },
+      {
+        "value": 194,
+        "disasm": "OP_UNKNOWN194",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN194"
+      },
+      {
+        "value": 195,
+        "disasm": "OP_UNKNOWN195",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN195"
+      },
+      {
+        "value": 196,
+        "disasm": "OP_UNKNOWN196",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN196"
+      },
+      {
+        "value": 197,
+        "disasm": "OP_UNKNOWN197",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN197"
+      },
+      {
+        "value": 198,
+        "disasm": "OP_UNKNOWN198",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN198"
+      },
+      {
+        "value": 199,
+        "disasm": "OP_UNKNOWN199",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN199"
+      },
+      {
+        "value": 200,
+        "disasm": "OP_UNKNOWN200",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN200"
+      },
+      {
+        "value": 201,
+        "disasm": "OP_UNKNOWN201",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN201"
+      },
+      {
+        "value": 202,
+        "disasm": "OP_UNKNOWN202",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN202"
+      },
+      {
+        "value": 203,
+        "disasm": "OP_UNKNOWN203",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN203"
+      },
+      {
+        "value": 204,
+        "disasm": "OP_UNKNOWN204",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN204"
+      },
+      {
+        "value": 205,
+        "disasm": "OP_UNKNOWN205",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN205"
+      },
+      {
+        "value": 206,
+        "disasm": "OP_UNKNOWN206",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN206"
+      },
+      {
+        "value": 207,
+        "disasm": "OP_UNKNOWN207",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN207"
+      },
+      {
+        "value": 208,
+        "disasm": "OP_UNKNOWN208",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN208"
+      },
+      {
+        "value": 209,
+        "disasm": "OP_UNKNOWN209",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN209"
+      },
+      {
+        "value": 210,
+        "disasm": "OP_UNKNOWN210",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN210"
+      },
+      {
+        "value": 211,
+        "disasm": "OP_UNKNOWN211",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN211"
+      },
+      {
+        "value": 212,
+        "disasm": "OP_UNKNOWN212",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN212"
+      },
+      {
+        "value": 213,
+        "disasm": "OP_UNKNOWN213",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN213"
+      },
+      {
+        "value": 214,
+        "disasm": "OP_UNKNOWN214",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN214"
+      },
+      {
+        "value": 215,
+        "disasm": "OP_UNKNOWN215",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN215"
+      },
+      {
+        "value": 216,
+        "disasm": "OP_UNKNOWN216",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN216"
+      },
+      {
+        "value": 217,
+        "disasm": "OP_UNKNOWN217",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN217"
+      },
+      {
+        "value": 218,
+        "disasm": "OP_UNKNOWN218",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN218"
+      },
+      {
+        "value": 219,
+        "disasm": "OP_UNKNOWN219",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN219"
+      },
+      {
+        "value": 220,
+        "disasm": "OP_UNKNOWN220",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN220"
+      },
+      {
+        "value": 221,
+        "disasm": "OP_UNKNOWN221",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN221"
+      },
+      {
+        "value": 222,
+        "disasm": "OP_CHECKXMSSSIG",
+        "leafError": "index 0 is invalid for stack size 0"
+      },
+      {
+        "value": 223,
+        "disasm": "OP_UNKNOWN223",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN223"
+      },
+      {
+        "value": 224,
+        "disasm": "OP_UNKNOWN224",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN224"
+      },
+      {
+        "value": 225,
+        "disasm": "OP_UNKNOWN225",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN225"
+      },
+      {
+        "value": 226,
+        "disasm": "OP_UNKNOWN226",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN226"
+      },
+      {
+        "value": 227,
+        "disasm": "OP_UNKNOWN227",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN227"
+      },
+      {
+        "value": 228,
+        "disasm": "OP_UNKNOWN228",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN228"
+      },
+      {
+        "value": 229,
+        "disasm": "OP_UNKNOWN229",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN229"
+      },
+      {
+        "value": 230,
+        "disasm": "OP_UNKNOWN230",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN230"
+      },
+      {
+        "value": 231,
+        "disasm": "OP_UNKNOWN231",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN231"
+      },
+      {
+        "value": 232,
+        "disasm": "OP_UNKNOWN232",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN232"
+      },
+      {
+        "value": 233,
+        "disasm": "OP_UNKNOWN233",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN233"
+      },
+      {
+        "value": 234,
+        "disasm": "OP_UNKNOWN234",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN234"
+      },
+      {
+        "value": 235,
+        "disasm": "OP_UNKNOWN235",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN235"
+      },
+      {
+        "value": 236,
+        "disasm": "OP_UNKNOWN236",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN236"
+      },
+      {
+        "value": 237,
+        "disasm": "OP_UNKNOWN237",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN237"
+      },
+      {
+        "value": 238,
+        "disasm": "OP_UNKNOWN238",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN238"
+      },
+      {
+        "value": 239,
+        "disasm": "OP_UNKNOWN239",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN239"
+      },
+      {
+        "value": 240,
+        "disasm": "OP_UNKNOWN240",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN240"
+      },
+      {
+        "value": 241,
+        "disasm": "OP_UNKNOWN241",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN241"
+      },
+      {
+        "value": 242,
+        "disasm": "OP_UNKNOWN242",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN242"
+      },
+      {
+        "value": 243,
+        "disasm": "OP_UNKNOWN243",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN243"
+      },
+      {
+        "value": 244,
+        "disasm": "OP_UNKNOWN244",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN244"
+      },
+      {
+        "value": 245,
+        "disasm": "OP_UNKNOWN245",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN245"
+      },
+      {
+        "value": 246,
+        "disasm": "OP_UNKNOWN246",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN246"
+      },
+      {
+        "value": 247,
+        "disasm": "OP_UNKNOWN247",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN247"
+      },
+      {
+        "value": 248,
+        "disasm": "OP_UNKNOWN248",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN248"
+      },
+      {
+        "value": 249,
+        "disasm": "OP_UNKNOWN249",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN249"
+      },
+      {
+        "value": 250,
+        "disasm": "OP_SMALLINTEGER",
+        "leafError": "attempt to execute invalid opcode OP_SMALLINTEGER"
+      },
+      {
+        "value": 251,
+        "disasm": "OP_PUBKEYS",
+        "leafError": "attempt to execute invalid opcode OP_PUBKEYS"
+      },
+      {
+        "value": 252,
+        "disasm": "OP_UNKNOWN252",
+        "leafError": "attempt to execute invalid opcode OP_UNKNOWN252"
+      },
+      {
+        "value": 253,
+        "disasm": "OP_PUBKEYHASH",
+        "leafError": "attempt to execute invalid opcode OP_PUBKEYHASH"
+      },
+      {
+        "value": 254,
+        "disasm": "OP_PUBKEY",
+        "leafError": "attempt to execute invalid opcode OP_PUBKEY"
+      },
+      {
+        "value": 255,
+        "disasm": "OP_INVALIDOPCODE",
+        "leafError": "attempt to execute invalid opcode OP_INVALIDOPCODE"
+      }
+    ],
+    "disasm": [
+      {
+        "name": "p2tr",
+        "script": "51201111111111111111111111111111111111111111111111111111111111111111",
+        "disasm": "1 1111111111111111111111111111111111111111111111111111111111111111",
+        "error": false,
+        "pushOnly": true
+      },
+      {
+        "name": "p2mr",
+        "script": "52202222222222222222222222222222222222222222222222222222222222222222",
+        "disasm": "2 2222222222222222222222222222222222222222222222222222222222222222",
+        "error": false,
+        "pushOnly": true
+      },
+      {
+        "name": "nulldata",
+        "script": "6a05706561726c",
+        "disasm": "OP_RETURN 706561726c",
+        "error": false,
+        "pushOnly": false
+      },
+      {
+        "name": "multi-a",
+        "script": "205c2118c73f0c9d2498e080c4dc09e104bae3132a0b8c4d65ad2e2127cde14e55ac207ac2badc5f7154dd9ecd3af0a150aea051d67188a14bf6b7622525eb66e0fe27ba200f64ecb1aadaa45d7b19851b3875e6d11f3137bcfb3c003e00dc3f36c7b9d64bba529c",
+        "disasm": "5c2118c73f0c9d2498e080c4dc09e104bae3132a0b8c4d65ad2e2127cde14e55 OP_CHECKSIG 7ac2badc5f7154dd9ecd3af0a150aea051d67188a14bf6b7622525eb66e0fe27 OP_CHECKSIGADD 0f64ecb1aadaa45d7b19851b3875e6d11f3137bcfb3c003e00dc3f36c7b9d64b OP_CHECKSIGADD 2 OP_NUMEQUAL",
+        "error": false,
+        "pushOnly": false
+      },
+      {
+        "name": "xmss-leaf",
+        "script": "4044444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444de",
+        "disasm": "44444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444444 OP_CHECKXMSSSIG",
+        "error": false,
+        "pushOnly": false
+      },
+      {
+        "name": "hashlock",
+        "script": "a82033333333333333333333333333333333333333333333333333333333333333338851",
+        "disasm": "OP_SHA256 3333333333333333333333333333333333333333333333333333333333333333 OP_EQUALVERIFY 1",
+        "error": false,
+        "pushOnly": false
+      },
+      {
+        "name": "timelock",
+        "script": "03400d03b17551",
+        "disasm": "400d03 OP_CHECKLOCKTIMEVERIFY OP_DROP 1",
+        "error": false,
+        "pushOnly": false
+      },
+      {
+        "name": "small-ints",
+        "script": "004f5160",
+        "disasm": "0 -1 1 16",
+        "error": false,
+        "pushOnly": true
+      },
+      {
+        "name": "one-byte-push",
+        "script": "01100181",
+        "disasm": "10 81",
+        "error": false,
+        "pushOnly": true
+      },
+      {
+        "name": "pushdata1",
+        "script": "4c03010203",
+        "disasm": "010203",
+        "error": false,
+        "pushOnly": true
+      },
+      {
+        "name": "pushdata2",
+        "script": "4d0200aabb",
+        "disasm": "aabb",
+        "error": false,
+        "pushOnly": true
+      },
+      {
+        "name": "pushdata4",
+        "script": "4e01000000cc",
+        "disasm": "cc",
+        "error": false,
+        "pushOnly": true
+      },
+      {
+        "name": "cat-and-xmss",
+        "script": "7edeba",
+        "disasm": "OP_CAT OP_CHECKXMSSSIG OP_CHECKSIGADD",
+        "error": false,
+        "pushOnly": false
+      },
+      {
+        "name": "unknown-and-disabled",
+        "script": "95bbff",
+        "disasm": "OP_MUL OP_UNKNOWN187 OP_INVALIDOPCODE",
+        "error": false,
+        "pushOnly": false
+      },
+      {
+        "name": "empty",
+        "script": "",
+        "disasm": "",
+        "error": false,
+        "pushOnly": true
+      },
+      {
+        "name": "truncated-push",
+        "script": "050102",
+        "disasm": "[error]",
+        "error": true,
+        "pushOnly": false
+      },
+      {
+        "name": "truncated-pushdata2",
+        "script": "764d10",
+        "disasm": "OP_DUP [error]",
+        "error": true,
+        "pushOnly": false
+      }
+    ],
+    "numbers": [
+      {
+        "data": "",
+        "minimal": true,
+        "maxLength": 4,
+        "value": 0,
+        "error": ""
+      },
+      {
+        "data": "01",
+        "minimal": true,
+        "maxLength": 4,
+        "value": 1,
+        "error": ""
+      },
+      {
+        "data": "81",
+        "minimal": true,
+        "maxLength": 4,
+        "value": -1,
+        "error": ""
+      },
+      {
+        "data": "7f",
+        "minimal": true,
+        "maxLength": 4,
+        "value": 127,
+        "error": ""
+      },
+      {
+        "data": "8000",
+        "minimal": true,
+        "maxLength": 4,
+        "value": 128,
+        "error": ""
+      },
+      {
+        "data": "0080",
+        "minimal": true,
+        "maxLength": 4,
+        "value": 0,
+        "error": "numeric value encoded as 0080 is not minimally encoded"
+      },
+      {
+        "data": "ff7f",
+        "minimal": true,
+        "maxLength": 4,
+        "value": 32767,
+        "error": ""
+      },
+      {
+        "data": "ffffff7f",
+        "minimal": true,
+        "maxLength": 4,
+        "value": 2147483647,
+        "error": ""
+      },
+      {
+        "data": "ffffffff",
+        "minimal": true,
+        "maxLength": 4,
+        "value": -2147483647,
+        "error": ""
+      },
+      {
+        "data": "00",
+        "minimal": true,
+        "maxLength": 4,
+        "value": 0,
+        "error": "numeric value encoded as 00 is not minimally encoded"
+      },
+      {
+        "data": "00",
+        "minimal": false,
+        "maxLength": 4,
+        "value": 0,
+        "error": ""
+      },
+      {
+        "data": "0100",
+        "minimal": true,
+        "maxLength": 4,
+        "value": 0,
+        "error": "numeric value encoded as 0100 is not minimally encoded"
+      },
+      {
+        "data": "0100",
+        "minimal": false,
+        "maxLength": 4,
+        "value": 1,
+        "error": ""
+      },
+      {
+        "data": "80",
+        "minimal": true,
+        "maxLength": 4,
+        "value": 0,
+        "error": "numeric value encoded as 80 is not minimally encoded"
+      },
+      {
+        "data": "0000008000",
+        "minimal": true,
+        "maxLength": 4,
+        "value": 0,
+        "error": "numeric value encoded as 0000008000 is 5 bytes which exceeds the max allowed of 4"
+      },
+      {
+        "data": "0000008000",
+        "minimal": true,
+        "maxLength": 5,
+        "value": 2147483648,
+        "error": ""
+      },
+      {
+        "data": "ffffffff7f",
+        "minimal": true,
+        "maxLength": 5,
+        "value": 549755813887,
+        "error": ""
+      }
+    ]
+  },
   "badBlocks": [
     {
       "name": "unknown-certificate-version",

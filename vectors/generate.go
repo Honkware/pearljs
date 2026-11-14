@@ -213,7 +213,41 @@ type Vectors struct {
 	XMSS             XMSSVectors             `json:"xmss"`
 	Messages         []MessageVector         `json:"messages"`
 	MultiASpends     []MultiASpendVector     `json:"multiASpends"`
+	ScriptToolkit    ScriptToolkitVectors    `json:"scriptToolkit"`
 	BadBlocks        []BadBlockVector        `json:"badBlocks"`
+}
+
+// OpcodeVector describes one byte value. Disasm is DisasmString of the
+// one-byte script. LeafError is the engine error from spending a P2MR leaf
+// that is just that byte, or "" if it spends. Pearl removed BIP 342's
+// OP_SUCCESS handling, so no byte makes a leaf succeed by itself.
+type OpcodeVector struct {
+	Value     int    `json:"value"`
+	Disasm    string `json:"disasm"`
+	LeafError string `json:"leafError"`
+}
+
+type DisasmVector struct {
+	Name     string `json:"name"`
+	Script   string `json:"script"`
+	Disasm   string `json:"disasm"`
+	Error    bool   `json:"error"`
+	PushOnly bool   `json:"pushOnly"`
+}
+
+type ScriptNumVector struct {
+	Data      string `json:"data"`
+	Minimal   bool   `json:"minimal"`
+	MaxLength int    `json:"maxLength"`
+	Value     int64  `json:"value"`
+	Error     string `json:"error"`
+}
+
+type ScriptToolkitVectors struct {
+	OpcodeByName map[string]int    `json:"opcodeByName"`
+	Opcodes      []OpcodeVector    `json:"opcodes"`
+	Disasm       []DisasmVector    `json:"disasm"`
+	Numbers      []ScriptNumVector `json:"numbers"`
 }
 
 // MultiASpendVector is a k-of-n OP_CHECKSIGADD leaf spent through a PSBT and
@@ -1060,6 +1094,92 @@ func main() {
 		})
 	}
 
+	// Script toolkit: opcode names, one-line disassembly, push-only checks,
+	// script numbers, and which bytes are OP_SUCCESS in tapscript.
+	vectors.ScriptToolkit.OpcodeByName = map[string]int{}
+	for name, value := range txscript.OpcodeByName {
+		vectors.ScriptToolkit.OpcodeByName[name] = int(value)
+	}
+	leafError := func(op byte) string {
+		leafScript := []byte{op}
+		leaf := txscript.NewBaseTapLeaf(leafScript)
+		tree := txscript.AssembleTaprootScriptTree(leaf)
+		root := tree.RootNode.TapHash()
+		mrAddr, err := btcutil.NewAddressMerkleRoot(root[:], &chaincfg.MainNetParams)
+		check(err)
+		pkScript, err := txscript.PayToAddrScript(mrAddr)
+		check(err)
+		cb, err := (&txscript.MerkleRootControlBlock{LeafVersion: txscript.BaseLeafVersion}).ToBytes()
+		check(err)
+		tx := wire.NewMsgTx(2)
+		tx.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x0d}, 0), nil, nil))
+		tx.TxIn[0].SetWitness(wire.TxWitness{leafScript, cb})
+		tx.AddTxOut(wire.NewTxOut(1000, pkScript))
+		fetcher := txscript.NewCannedPrevOutputFetcher(pkScript, 2000)
+		vm, err := txscript.NewEngine(pkScript, tx, 0, txscript.StandardVerifyFlags, nil,
+			txscript.NewTxSigHashes(tx, fetcher), 2000, fetcher)
+		if err == nil {
+			err = vm.Execute()
+		}
+		if err != nil {
+			return err.Error()
+		}
+		return ""
+	}
+	for value := 0; value < 256; value++ {
+		disasm, _ := txscript.DisasmString([]byte{byte(value)})
+		vectors.ScriptToolkit.Opcodes = append(vectors.ScriptToolkit.Opcodes, OpcodeVector{
+			Value: value, Disasm: disasm, LeafError: leafError(byte(value)),
+		})
+	}
+	for _, item := range []struct {
+		name   string
+		script []byte
+	}{
+		{"p2tr", append([]byte{txscript.OP_1, 32}, bytes.Repeat([]byte{0x11}, 32)...)},
+		{"p2mr", append([]byte{txscript.OP_2, 32}, bytes.Repeat([]byte{0x22}, 32)...)},
+		{"nulldata", []byte{txscript.OP_RETURN, 0x05, 'p', 'e', 'a', 'r', 'l'}},
+		{"multi-a", mustHex(vectors.MultiASpends[0].LeafScript)},
+		{"xmss-leaf", append(append([]byte{64}, bytes.Repeat([]byte{0x44}, 64)...), txscript.OP_CHECKXMSSSIG)},
+		{"hashlock", append(append([]byte{txscript.OP_SHA256, 32}, bytes.Repeat([]byte{0x33}, 32)...), txscript.OP_EQUALVERIFY, 0x51)},
+		{"timelock", []byte{0x03, 0x40, 0x0d, 0x03, txscript.OP_CHECKLOCKTIMEVERIFY, txscript.OP_DROP, txscript.OP_TRUE}},
+		{"small-ints", []byte{txscript.OP_0, txscript.OP_1NEGATE, txscript.OP_1, txscript.OP_16}},
+		{"one-byte-push", []byte{0x01, 0x10, 0x01, 0x81}},
+		{"pushdata1", append([]byte{txscript.OP_PUSHDATA1, 3}, 1, 2, 3)},
+		{"pushdata2", append([]byte{txscript.OP_PUSHDATA2, 2, 0}, 0xaa, 0xbb)},
+		{"pushdata4", append([]byte{txscript.OP_PUSHDATA4, 1, 0, 0, 0}, 0xcc)},
+		{"cat-and-xmss", []byte{txscript.OP_CAT, txscript.OP_CHECKXMSSSIG, txscript.OP_CHECKSIGADD}},
+		{"unknown-and-disabled", []byte{txscript.OP_MUL, 0xbb, 0xff}},
+		{"empty", nil},
+		{"truncated-push", []byte{0x05, 1, 2}},
+		{"truncated-pushdata2", []byte{txscript.OP_DUP, txscript.OP_PUSHDATA2, 0x10}},
+	} {
+		disasm, err := txscript.DisasmString(item.script)
+		vectors.ScriptToolkit.Disasm = append(vectors.ScriptToolkit.Disasm, DisasmVector{
+			Name: item.name, Script: hex.EncodeToString(item.script), Disasm: disasm,
+			Error: err != nil, PushOnly: txscript.IsPushOnlyScript(item.script),
+		})
+	}
+	for _, item := range []struct {
+		data      string
+		minimal   bool
+		maxLength int
+	}{
+		{"", true, 4}, {"01", true, 4}, {"81", true, 4}, {"7f", true, 4}, {"8000", true, 4},
+		{"0080", true, 4}, {"ff7f", true, 4}, {"ffffff7f", true, 4}, {"ffffffff", true, 4},
+		{"00", true, 4}, {"00", false, 4}, {"0100", true, 4}, {"0100", false, 4}, {"80", true, 4},
+		{"0000008000", true, 4}, {"0000008000", true, 5}, {"ffffffff7f", true, 5},
+	} {
+		value, err := txscript.MakeScriptNum(mustHex(item.data), item.minimal, item.maxLength)
+		vector := ScriptNumVector{Data: item.data, Minimal: item.minimal, MaxLength: item.maxLength}
+		if err != nil {
+			vector.Error = err.Error()
+		} else {
+			vector.Value = int64(value)
+		}
+		vectors.ScriptToolkit.Numbers = append(vectors.ScriptToolkit.Numbers, vector)
+	}
+
 	// Message signing as Oyster does it, with BIP86 mainnet keys.
 	messageKey := func(index uint32) (*btcec.PrivateKey, *btcutil.AddressTaproot) {
 		priv, err := derive(account, 0, index).ECPrivKey()
@@ -1284,6 +1404,12 @@ func main() {
 	check(err)
 	data = append(data, '\n')
 	check(os.WriteFile(*out, data, 0o644))
+}
+
+func mustHex(s string) []byte {
+	out, err := hex.DecodeString(s)
+	check(err)
+	return out
 }
 
 func mustPort(port string) int {
