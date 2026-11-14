@@ -232,8 +232,9 @@ type DustVector struct {
 	Dust      bool   `json:"dust"`
 }
 
-// StandardVector is mempool.CheckTransactionStandard of a transaction, with
-// Error "" when it passes.
+// StandardVector is blockchain.CheckTransactionSanity and then
+// mempool.CheckTransactionStandard of a transaction, the order pearld's
+// mempool runs them in, with Error "" when both pass.
 type StandardVector struct {
 	Name           string `json:"name"`
 	TxHex          string `json:"txHex"`
@@ -1599,7 +1600,9 @@ func main() {
 		}
 		errText := ""
 		utx := btcutil.NewTx(tx)
-		if err := mempool.CheckTransactionStandard(utx, policyHeight, time.Unix(policyTime, 0), fee, 2); err != nil {
+		if err := blockchain.CheckTransactionSanity(utx); err != nil {
+			errText = err.Error()
+		} else if err := mempool.CheckTransactionStandard(utx, policyHeight, time.Unix(policyTime, 0), fee, 2); err != nil {
 			errText = err.Error()
 		}
 		vectors.Policy.Standard = append(vectors.Policy.Standard, StandardVector{

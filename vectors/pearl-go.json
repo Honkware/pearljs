@@ -3663,7 +3663,7 @@
         "height": 1000,
         "medianTimePast": 1700000000,
         "minRelayFee": 1000,
-        "error": "transaction output 2: non-standard script form"
+        "error": "transaction output 2 has unsupported script type nonstandard"
       },
       {
         "name": "witness-v1-33-byte-output",
@@ -3672,7 +3672,7 @@
         "height": 1000,
         "medianTimePast": 1700000000,
         "minRelayFee": 1000,
-        "error": "transaction output 2: non-standard script form"
+        "error": "transaction output 2 has unsupported script type nonstandard"
       },
       {
         "name": "dust-p2tr-output",

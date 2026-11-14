@@ -76,6 +76,12 @@ describe('checkStandard', () => {
     expect(() => checkStandard(tx)).toThrow(`tx ${tx.getId()} is too small`);
   });
 
+  it('refuses an unsupported output before checking the version, as pearld does', () => {
+    const tx = parseTransaction(standard('p2wpkh-output').txHex);
+    tx.version = 3;
+    expect(() => checkStandard(tx)).toThrow('transaction output 2 has unsupported script type nonstandard');
+  });
+
   it('refuses a non-standard input and a fee under the relay fee', () => {
     const tx = parseTransaction(standard('standard').txHex);
     const outputs = 15000n;

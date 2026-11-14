@@ -83,6 +83,14 @@ export function checkStandard(tx: Transaction, options: StandardOptions = {}): v
   if (!tx.hasWitnesses()) throw new Error('transaction has no witness data');
   if (tx.byteLength(false) < MIN_STANDARD_TX_NON_WITNESS_SIZE) throw new Error(`tx ${tx.getId()} is too small`);
 
+  // CheckTransactionSanity refuses other outputs as a consensus rule before
+  // the mempool reaches CheckTransactionStandard; Pearl has no other class.
+  tx.outs.forEach((output, i) => {
+    if (classifyOutputScript(output.script) === 'nonstandard') {
+      throw new Error(`transaction output ${i} has unsupported script type nonstandard`);
+    }
+  });
+
   // CheckTransactionStandard, in its order.
   if (tx.version > maxVersion || tx.version < 1) {
     throw new Error(`transaction version ${tx.version} is not in the valid range of 1-${maxVersion}`);
@@ -104,9 +112,7 @@ export function checkStandard(tx: Transaction, options: StandardOptions = {}): v
   });
   let nullData = 0;
   tx.outs.forEach((output, i) => {
-    const kind = classifyOutputScript(output.script);
-    if (kind === 'nonstandard') throw new Error(`transaction output ${i}: non-standard script form`);
-    if (kind === 'nulldata') nullData += 1;
+    if (classifyOutputScript(output.script) === 'nulldata') nullData += 1;
     else if (isDust(output, feeRate)) throw new Error(`transaction output ${i}: payment is dust: ${output.value}`);
   });
   if (nullData > 1) throw new Error('more than one transaction output in a nulldata script');
