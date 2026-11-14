@@ -8,6 +8,13 @@
 // path compares only the low 32 bits of each value, so above 5471 entries it
 // matches some items that Match does not.
 
+/**
+ * BIP158 compact block filters as Pearl builds them: decode, match, build, and
+ * check the filter-header chain.
+ *
+ * @module
+ */
+
 import { hash256 } from './crypto.js';
 import { blockHash } from './blockheader.js';
 import type { PearlBlock } from './block.js';
@@ -19,11 +26,13 @@ export const BASIC_FILTER_M = 784931;
 /** getcfilter's filter type for the basic filter, the only one pearld builds. */
 export const BASIC_FILTER_TYPE = 0;
 
+/** Golomb-Rice parameter P and false-positive modulus M of a filter. */
 export interface GcsParams {
   readonly p: number;
   readonly m: number;
 }
 
+/** A decoded Golomb-coded set, as BIP158 defines it. */
 export interface CompactFilter {
   /** Number of distinct items in the set. */
   readonly n: number;
@@ -312,11 +321,15 @@ export function checkFilterHeaders(
 
 /** Anything with a JSON-RPC call, such as PearldClient or PearlWsClient. */
 export interface FilterRpc {
+  /** Calls a method and resolves to its result. */
   call<T = unknown>(method: string, params?: readonly unknown[]): Promise<T>;
 }
 
+/** A block's basic filter with the key to match it with, as getBlockFilter returns it. */
 export interface BlockFilter {
+  /** Display hex, as RPC shows it. */
   readonly blockHash: string;
+  /** The SipHash key: the first 16 bytes of the block hash in internal order. */
   readonly key: Uint8Array;
   readonly filter: CompactFilter;
   /** getcfilterheader's value, set when the filter was checked against it. */

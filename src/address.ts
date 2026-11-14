@@ -3,20 +3,34 @@
 // v2 P2MR (32-byte Merkle root). There is no base58, v0 or v3+ address on
 // Pearl, so all of those are rejected on decode.
 
+/**
+ * Bech32m P2TR and P2MR addresses: encode, decode, check, and convert to and
+ * from output scripts.
+ *
+ * @module
+ */
+
 import { bech32m } from 'bech32';
 import { networks } from './networks.js';
 import type { PearlNetwork, PearlNetworkName } from './networks.js';
 
+/** A decoded address: the witness version (1 for P2TR, 2 for P2MR) and its 32-byte program. */
 export interface WitnessAddress {
   version: number;
   program: Uint8Array;
 }
 
+/** Bytes in a P2TR or P2MR witness program. */
 export const WITNESS_PROGRAM_LENGTH = 32;
 const MIN_WITNESS_VERSION = 1;
 const MAX_WITNESS_VERSION = 2;
 
-/** Encodes a witness v1/v2 address as bech32m for the given network. */
+/**
+ * Encodes a witness v1/v2 address as bech32m for the given network.
+ *
+ * Throws for a witness version other than 1 or 2 and for a program that is not
+ * 32 bytes.
+ */
 export function encodeAddress(
   address: WitnessAddress,
   network: PearlNetwork,
@@ -85,6 +99,7 @@ export function isValidAddress(address: string, network: PearlNetwork): boolean 
   }
 }
 
+/** What addressInfo reports about an address. */
 export interface AddressInfo {
   type: 'p2tr' | 'p2mr';
   /**
@@ -116,7 +131,11 @@ export function addressInfo(address: string): AddressInfo | null {
   return null;
 }
 
-/** Builds the output script OP_n <32-byte program> for a Pearl address. */
+/**
+ * Builds the output script OP_n <32-byte program> for a Pearl address.
+ *
+ * Throws as decodeAddress does when the text is not an address on the network.
+ */
 export function toOutputScript(
   address: string,
   network: PearlNetwork,
@@ -126,7 +145,11 @@ export function toOutputScript(
   return Uint8Array.from([0x50 + version, WITNESS_PROGRAM_LENGTH, ...program]);
 }
 
-/** Parses a v1/v2 witness output script back into a bech32m address. */
+/**
+ * Parses a v1/v2 witness output script back into a bech32m address.
+ *
+ * Throws when the script is not exactly OP_1 or OP_2 followed by a 32-byte push.
+ */
 export function fromOutputScript(
   script: Uint8Array,
   network: PearlNetwork,

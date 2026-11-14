@@ -8,6 +8,13 @@
 // block (WTEMA) rather than every 2016, and getdifficulty divides by each
 // network's own PowLimitBits.
 
+/**
+ * Consensus data: certificate rules by height, compact bits, difficulty, work,
+ * and the emission curve.
+ *
+ * @module
+ */
+
 import { GRAIN_PER_PEARL } from './amount.js';
 import { isMoECertificate } from './block.js';
 import type { CertificateVersion, PearlCertificate } from './block.js';
@@ -120,7 +127,11 @@ function emissionConstant(network: PearlNetwork): bigint {
   return network.targetSpacing > 0 ? BigInt(Math.floor(FOUR_YEARS / network.targetSpacing)) : DEFAULT_EMISSION_CONSTANT;
 }
 
-/** blockchain.CalcBlockSubsidy: the grain a block at this height may create. Zero for genesis. */
+/**
+ * blockchain.CalcBlockSubsidy: the grain a block at this height may create. Zero for genesis.
+ *
+ * In grain.
+ */
 export function blockSubsidy(network: PearlNetwork, height: number): bigint {
   assertHeight(height);
   if (height === 0) return 0n;
@@ -133,6 +144,8 @@ export function blockSubsidy(network: PearlNetwork, height: number): bigint {
  * Every subsidy from genesis to height inclusive: the most grain that can
  * exist once that block is mined. Fees do not add to it. Sums block by block,
  * as Pearl rounds each subsidy down.
+ *
+ * In grain. Takes time proportional to height.
  */
 export function totalSupply(network: PearlNetwork, height: number): bigint {
   assertHeight(height);

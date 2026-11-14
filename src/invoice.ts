@@ -26,6 +26,8 @@
  *   view marks the invoice "conflicted". Conflicted wins over every other
  *   state: a conflicted invoice never stays confirmed. Late payments that
  *   never counted toward the invoice do not cause a conflict.
+ *
+ * @module
  */
 
 import { decodeAddress } from './address.js';
@@ -252,10 +254,12 @@ export class InvoiceMonitor {
     this.#network = network;
   }
 
+  /** createInvoice for the monitor's network. */
   createInvoice(config: CreateInvoiceConfig): Invoice {
     return createInvoice(config, this.#network);
   }
 
+  /** refreshInvoice against the monitor's chain client. */
   refreshInvoice(invoice: Invoice, now?: number): Promise<Invoice> {
     return refreshInvoice(invoice, this.#client, now);
   }

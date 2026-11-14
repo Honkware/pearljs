@@ -2,6 +2,12 @@
 // v1), P2MR (witness v2, BIP 360) and OP_RETURN data embeds. Pearl has no
 // p2pkh, p2sh, p2wpkh, p2wsh or multisig template, so none is offered here.
 
+/**
+ * P2TR, P2MR and OP_RETURN output scripts, the only outputs Pearl has.
+ *
+ * @module
+ */
+
 import { initEccLib, payments } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { WITNESS_PROGRAM_LENGTH } from './address.js';
@@ -10,11 +16,13 @@ import { scriptPush } from './script.js';
 initEccLib(ecc);
 
 // txscript.MaxDataCarrierSize.
+/** The most data bytes embed puts in an OP_RETURN output (txscript.MaxDataCarrierSize). */
 export const MAX_EMBED_DATA_SIZE = 80;
 
 const OP_RETURN = 0x6a;
 const OP_2 = 0x52;
 
+/** A P2TR output: `output` is the script OP_1 <tweaked key>. */
 export interface P2trPayment {
   name: 'p2tr';
   internalPubkey: Uint8Array;
@@ -23,12 +31,14 @@ export interface P2trPayment {
   output: Uint8Array;
 }
 
+/** A P2MR output: `output` is the script OP_2 <root>. */
 export interface P2mrPayment {
   name: 'p2mr';
   merkleRoot: Uint8Array;
   output: Uint8Array;
 }
 
+/** An OP_RETURN output carrying `data`. */
 export interface EmbedPayment {
   name: 'embed';
   data: Uint8Array;

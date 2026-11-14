@@ -8,6 +8,14 @@
 // checks that a certificate is bound to its header. It does not verify the
 // zero-knowledge proof itself.
 
+/**
+ * Full Pearl blocks: certificate, header and transactions. Parsing,
+ * serialization, Merkle roots, witness commitments and sizes. Proofs are not
+ * verified.
+ *
+ * @module
+ */
+
 import { sha256 } from '@noble/hashes/sha2';
 import { Transaction } from 'bitcoinjs-lib';
 import {
@@ -19,13 +27,19 @@ import {
 import type { PearlBlockHeader } from './blockheader.js';
 
 // wire.CertificateMaxSize, wire.MaxZKProofSize and the public data sizes.
+/** wire.CertificateMaxSize: the most bytes a serialized certificate may have. */
 export const CERTIFICATE_MAX_SIZE = 65000;
+/** wire.MaxZKProofSize: the most bytes a certificate's proof may have. */
 export const MAX_ZK_PROOF_SIZE = 60000;
+/** Bytes of public data in a V1 certificate, exactly. */
 export const PUBLIC_DATA_SIZE_V1 = 164;
+/** The most bytes of public data in a V2 or V3 certificate. */
 export const PUBLIC_DATA_MAX_SIZE_V2 = 4807;
 // A V2 or V3 certificate with more public data than a dense one is MoE.
+/** Bytes of public data in a dense V2 or V3 certificate; one with more is MoE. */
 export const PUBLIC_DATA_SIZE_DENSE_V2 = 164;
 // blockchain.MaxBlockVsize and WitnessScaleFactor.
+/** blockchain.MaxBlockVsize: the largest block, in vbytes, certificate not counted. */
 export const MAX_BLOCK_VSIZE = 1_000_000;
 const WITNESS_SCALE_FACTOR = 4;
 // wire.MaxBlockPayload / minTxPayload + 1.
@@ -37,16 +51,27 @@ const WITNESS_MAGIC = Uint8Array.of(0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed);
 const WITNESS_COMMITMENT_SCRIPT_LENGTH = 38;
 const COINBASE_WITNESS_NONCE_LENGTH = 32;
 
+/**
+ * Certificate versions Pearl defines. Which one a block needs depends on its
+ * height; see requiredCertVersion.
+ */
 export type CertificateVersion = 1 | 2 | 3;
 
+/**
+ * A block's proof-of-work certificate: a ZK proof and its public data. pearljs
+ * parses it and checks its binding to the header; it does not verify the proof.
+ */
 export interface PearlCertificate {
   version: CertificateVersion;
   /** Hash of the block header this certificate proves, in internal order. */
   hash: Uint8Array;
+  /** The proof's public inputs: 164 bytes for V1, up to 4807 for V2 and V3. */
   publicData: Uint8Array;
+  /** The ZK proof, up to 60000 bytes. Not verified by pearljs. */
   proof: Uint8Array;
 }
 
+/** A full block: certificate, header and transactions, in wire order. */
 export interface PearlBlock {
   /** null for a block encoded with certificate version 0. */
   certificate: PearlCertificate | null;
@@ -185,6 +210,9 @@ export function serializeCertificate(certificate: PearlCertificate | null): Uint
 /**
  * Parse a full block. Every transaction must be canonically encoded and the
  * data must end exactly after the last one.
+ *
+ * Throws when a certificate breaks Pearl's size limits, a transaction is not
+ * canonical, or bytes follow the last transaction. The proof is not verified.
  */
 export function parseBlock(bytes: Uint8Array): PearlBlock {
   const reader = new Reader(bytes);

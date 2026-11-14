@@ -4,6 +4,13 @@
 // of a double SHA-256 checksum. Oyster gives an imported key its BIP86
 // key-path P2TR address, which keyPathAddress returns.
 
+/**
+ * Wallet import format as Oyster reads and writes it, and the address of a
+ * single key.
+ *
+ * @module
+ */
+
 import { sha256 } from '@noble/hashes/sha2';
 import * as ecc from 'tiny-secp256k1';
 import { encodeAddress } from './address.js';
@@ -16,7 +23,9 @@ const COMPRESS_MAGIC = 0x01;
 // a byte, so a longer string is the wrong length whatever it holds.
 const MAX_WIF_LENGTH = 52;
 
+/** A private key read from wallet import format. */
 export interface DecodedWif {
+  /** The 32-byte private key. The caller owns it and should overwrite it when done. */
   privateKey: Uint8Array;
   /** Whether the WIF marks the key as compressed; dumpprivkey always does. */
   compressed: boolean;
@@ -59,7 +68,12 @@ function checksum(payload: Uint8Array): Uint8Array {
   return sha256(sha256(payload)).slice(0, 4);
 }
 
-/** Encodes a private key as WIF for a network; compressed matches dumpprivkey. */
+/**
+ * Encodes a private key as WIF for a network; compressed matches dumpprivkey.
+ *
+ * Throws `invalid private key` for bytes that are not a valid secp256k1
+ * private key.
+ */
 export function encodeWif(privateKey: Uint8Array, network: PearlNetwork, compressed = true): string {
   if (!ecc.isPrivate(privateKey)) {
     throw new Error('invalid private key');
@@ -72,6 +86,9 @@ export function encodeWif(privateKey: Uint8Array, network: PearlNetwork, compres
  * Decodes a WIF with the checks of btcutil.DecodeWIF, then refuses a key for
  * another network, as importprivkey does. The private key is returned to the
  * caller, who owns it; pearljs keeps no copy.
+ *
+ * Throws with btcutil's message for a malformed WIF or a bad checksum, and `key
+ * is not intended for <network>` for another network's key.
  */
 export function decodeWif(wif: string, network: PearlNetwork): DecodedWif {
   if (typeof wif !== 'string') {

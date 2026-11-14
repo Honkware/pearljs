@@ -16,6 +16,13 @@
 //   block and loads a longer one only when the first proof hash happens to be
 //   a valid x-only key; its finalizer accepts P2TR inputs only.
 
+/**
+ * Script-path signing for P2TR and P2MR outputs, on the transaction and
+ * through PSBT, and the tapscript signature message as Pearl computes it.
+ *
+ * @module
+ */
+
 import { sha256 } from '@noble/hashes/sha2';
 import { Transaction } from 'bitcoinjs-lib';
 import type { Psbt } from 'bitcoinjs-lib';
@@ -40,12 +47,14 @@ import type { XmssSigner } from './xmss.js';
  */
 export interface TapscriptSigner {
   publicKey: Uint8Array;
+  /** Returns a 64-byte BIP340 signature over a 32-byte hash, made with the untweaked key. */
   signSchnorr(hash: Uint8Array): Uint8Array;
 }
 
 /** A signer that answers asynchronously, such as a hardware wallet. */
 export interface TapscriptSignerAsync {
   publicKey: Uint8Array;
+  /** Resolves to a 64-byte BIP340 signature over a 32-byte hash, made with the untweaked key. */
   signSchnorr(hash: Uint8Array): Promise<Uint8Array>;
 }
 
@@ -65,6 +74,10 @@ const SIGHASH_TYPES = new Set([
   Transaction.SIGHASH_SINGLE | Transaction.SIGHASH_ANYONECANPAY,
 ]);
 
+/**
+ * Throws unless value is a Taproot sighash type: DEFAULT, ALL, NONE or SINGLE,
+ * the last three also with ANYONECANPAY.
+ */
 export function assertTaprootSighashType(value: number): void {
   if (!SIGHASH_TYPES.has(value)) {
     throw new Error(`unsupported Taproot sighash type ${value}`);
@@ -247,6 +260,10 @@ function pearlTapscriptSighash(
 /**
  * Tapscript sighash for one input, as Pearl computes it. prevouts must list
  * every input's spent output in order.
+ *
+ * Returns the 32-byte hash to sign. Throws when prevouts does not have one entry
+ * per input, for an input index out of range, and for a sighash type that is not
+ * a Taproot one.
  */
 export function tapscriptSighash(
   tx: Transaction,
@@ -276,6 +293,9 @@ export function tapscriptSighash(
  * Signs one input for a tapscript leaf and returns the witness signature:
  * 64 bytes for SIGHASH_DEFAULT, otherwise 65 with the sighash byte appended.
  * The signature is checked against the signer's key before it is returned.
+ *
+ * This is the bare primitive: it does not check previous transactions or the
+ * fee, and it cannot tell whether the script will succeed.
  */
 export function signTapscript(
   tx: Transaction,
@@ -339,6 +359,7 @@ export function scriptPathWitness(
  */
 export const DEFAULT_MAX_FEE_RATE = 5_000_000n;
 
+/** The fee limit of the raw-transaction P2MR and XMSS signers. */
 export interface FeeGuardOptions {
   /**
    * Highest fee rate to sign for, in grain per 1000 vbytes. A transaction
@@ -399,10 +420,15 @@ function checkFee(
   }
 }
 
+/** What signP2mrInput needs besides the transaction and the signer. */
 export interface P2mrSignOptions extends FeeGuardOptions {
+  /** Script and value (in grain) of every input's spent output, in input order. */
   prevouts: readonly Prevout[];
+  /** The script tree the spent output commits to. */
   tree: ScriptTree;
+  /** Index in tree.leaves of the leaf to spend through. */
   leafIndex: number;
+  /** A Taproot sighash type. SIGHASH_DEFAULT unless given. */
   sighashType?: number;
   /**
    * Transactions that created the spent outputs. When every input is P2MR,
@@ -570,6 +596,10 @@ export function xmssScriptPathWitness(
   return scriptPathWitness(chunks, script, controlBlock);
 }
 
+/**
+ * Options for signXmssP2mrInput: those of signP2mrInput without sighashType,
+ * since OP_CHECKXMSSSIG only accepts SIGHASH_DEFAULT.
+ */
 export type XmssP2mrSignOptions = Omit<P2mrSignOptions, 'sighashType'>;
 
 /**
@@ -598,10 +628,13 @@ export async function signXmssP2mrInput(
   tx.setWitness(inputIndex, xmssScriptPathWitness(signature, leaf.script, controlBlock));
 }
 
+/** What prepareTaprootScriptPathInput needs. */
 export interface TaprootScriptPathInputOptions {
+  /** The output's 32-byte x-only internal key. */
   internalPubkey: Uint8Array;
   tree: ScriptTree;
   leafIndex: number;
+  /** Value of the spent output, in grain. */
   value: bigint;
   sighashType?: number;
 }
@@ -737,9 +770,11 @@ function checkSignedInput(psbt: Psbt, inputIndex: number): void {
   }
 }
 
+/** What prepareP2mrScriptPathInput needs. */
 export interface P2mrScriptPathInputOptions {
   tree: ScriptTree;
   leafIndex: number;
+  /** Value of the spent output, in grain. */
   value: bigint;
   sighashType?: number;
   /**
@@ -800,6 +835,7 @@ export function prepareP2mrScriptPathInput(
   }
 }
 
+/** Options for the P2MR PSBT signers. */
 export interface P2mrPsbtSignOptions extends PsbtSighashOptions {
   /** Sign without checking input values against each input's nonWitnessUtxo. */
   trustPrevouts?: boolean;

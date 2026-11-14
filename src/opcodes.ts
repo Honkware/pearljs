@@ -3,6 +3,13 @@
 // checks this table against the Go vectors, so edit it only together with
 // a regenerated vectors file.
 
+/**
+ * Pearl's opcode table.
+ *
+ * @module
+ */
+
+/** Pearl's opcode table by name (txscript/opcode.go), aliases included. */
 export const OP_CODES = {
   OP_0: 0x00,
   OP_FALSE: 0x00,
@@ -266,6 +273,7 @@ export const OP_CODES = {
   OP_INVALIDOPCODE: 0xff,
 } as const;
 
+/** The name of an opcode in OP_CODES. */
 export type OpcodeName = keyof typeof OP_CODES;
 
 const ALIASES = new Set<string>(['OP_FALSE', 'OP_NOP2', 'OP_NOP3', 'OP_TRUE']);

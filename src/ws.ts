@@ -12,6 +12,13 @@
 // PearlWsClient carries the same typed methods as PearldClient, from the
 // mixin in rpc.ts, so `ws.getBlock(hash)` works over the socket.
 
+/**
+ * A websocket client for pearld: typed notifications, every RPC method,
+ * reconnect and resubscription.
+ *
+ * @module
+ */
+
 import { blockHashHex, parseBlockHeader, type PearlBlockHeader } from './blockheader.js';
 import {
   PearlRpcError,
@@ -31,6 +38,7 @@ import {
 /** Websocket path of pearld and Oyster. */
 export const PEARLD_WS_PATH = '/ws';
 
+/** How the websocket client reconnects after a session drops. */
 export interface ReconnectOptions {
   /** Delay before the first retry in ms; it doubles on each failed attempt. Default 1000. */
   readonly initialDelay?: number;
@@ -40,6 +48,7 @@ export interface ReconnectOptions {
   readonly attempts?: number;
 }
 
+/** Options for PearlWsClient and JsonRpcWsClient. */
 export interface PearlWsClientOptions {
   /** e.g. wss://127.0.0.1:18334/ws. http(s) URLs and a missing path become ws(s) and /ws. */
   readonly url: string | URL;
@@ -91,6 +100,7 @@ export interface BlockEvent {
   readonly time: number;
 }
 
+/** filteredblockconnected and filteredblockdisconnected. */
 export interface FilteredBlockEvent {
   readonly type: 'connected' | 'disconnected';
   readonly height: number;
@@ -100,6 +110,7 @@ export interface FilteredBlockEvent {
   readonly transactions: string[];
 }
 
+/** txaccepted: a transaction entered the mempool. */
 export interface TxAccepted {
   readonly txid: string;
   /** Sum of the outputs, grains. */
@@ -115,6 +126,7 @@ export interface BlockDetails {
   readonly time: number;
 }
 
+/** recvtx and redeemingtx. */
 export interface TxNotification {
   /** Serialized transaction, hex. */
   readonly transaction: string;
@@ -122,9 +134,11 @@ export interface TxNotification {
   readonly block: BlockDetails | null;
 }
 
+/** rescanprogress and rescanfinished: the block the rescan has reached. */
 export interface RescanEvent {
   readonly hash: string;
   readonly height: number;
+  /** Header timestamp, Unix seconds. */
   readonly time: number;
 }
 
@@ -152,6 +166,7 @@ export interface PearlNotifications {
   rescanfinished: RescanEvent;
 }
 
+/** Everything on() can listen for: pearld's notifications and the client's own connection events. */
 export interface PearlWsEvents extends PearlNotifications {
   /** A session is ready: authenticated and resubscribed. */
   connect: { readonly reconnect: boolean };
@@ -279,6 +294,10 @@ export class JsonRpcWsClient implements Rpc {
     return this.#call(method, params, parse, options) as Promise<T>;
   }
 
+  /**
+   * Listens for a notification by its pearld name, or for connect, disconnect,
+   * error and close. Returns a function that removes the listener.
+   */
   on<K extends keyof PearlWsEvents>(event: K, listener: (value: PearlWsEvents[K]) => void): () => void {
     let set = this.#listeners.get(event);
     if (set === undefined) this.#listeners.set(event, (set = new Set()));
@@ -324,10 +343,12 @@ export class JsonRpcWsClient implements Rpc {
     return this.#iterate((push) => this.watchBlocks({ onBlock: push }));
   }
 
+  /** Filtered block events as an async iterator; leaving the loop unsubscribes. */
   filteredBlocks(): AsyncIterableIterator<FilteredBlockEvent> {
     return this.#iterate((push) => this.watchFilteredBlocks({ onBlock: push }));
   }
 
+  /** New mempool transactions as an async iterator; leaving the loop unsubscribes. */
   transactions(): AsyncIterableIterator<TxAccepted> {
     return this.#iterate((push) => this.watchTransactions({ onTransaction: push }));
   }
@@ -359,6 +380,7 @@ export class JsonRpcWsClient implements Rpc {
     for (const address of addresses) this.#received.add(address);
   }
 
+  /** Stops recvtx for these addresses. The limited RPC user may not call it. */
   async stopNotifyReceived(addresses: readonly string[]): Promise<void> {
     this.#notifications('stopnotifyreceived');
     for (const address of addresses) this.#received.delete(address);
@@ -372,6 +394,7 @@ export class JsonRpcWsClient implements Rpc {
     for (const op of outpoints) this.#spent.set(outPointKey(op), op);
   }
 
+  /** Stops redeemingtx for these outpoints. The limited RPC user may not call it. */
   async stopNotifySpent(outpoints: readonly OutPointRef[]): Promise<void> {
     this.#notifications('stopnotifyspent');
     for (const op of outpoints) this.#spent.delete(outPointKey(op));

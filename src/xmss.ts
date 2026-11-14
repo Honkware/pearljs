@@ -10,13 +10,26 @@
 // reporting success, because the reference code wipes the key before using
 // its last leaf; xmssSign refuses that index, leaving 31 signatures per key.
 
+/**
+ * XMSS signatures with Pearl's parameters: keys, signing, verification, and
+ * signers that take one-time indices from a store.
+ *
+ * @module
+ */
+
 import { shake256 } from '@noble/hashes/sha3';
 
+/** Bytes in the private seed an XMSS key is generated from. */
 export const XMSS_PRIVATE_SEED_LENGTH = 64;
+/** Bytes in the public seed an XMSS key is generated from. */
 export const XMSS_PUBLIC_SEED_LENGTH = 32;
+/** Bytes in an XMSS public key: the 32-byte root, then the public seed. */
 export const XMSS_PUBLIC_KEY_LENGTH = 64;
+/** Bytes in an XMSS secret key as pearljs holds it, without an index. */
 export const XMSS_SECRET_KEY_LENGTH = 128;
+/** Bytes in a message XMSS signs: a 32-byte sighash. */
 export const XMSS_MESSAGE_LENGTH = 32;
+/** Bytes in an XMSS signature. The first four are its index, big-endian. */
 export const XMSS_SIGNATURE_LENGTH = 2340;
 /** Indices 0 to 30 produce valid signatures; see the note at the top. */
 export const XMSS_MAX_SIGNATURES = 31;
@@ -41,6 +54,7 @@ const ADDR_TYPE_OTS = 0;
 const ADDR_TYPE_LTREE = 1;
 const ADDR_TYPE_HASHTREE = 2;
 
+/** An XMSS key pair. */
 export interface XmssKeyPair {
   /** root || public seed */
   publicKey: Uint8Array;
@@ -301,7 +315,12 @@ function checkLength(bytes: Uint8Array, length: number, what: string): void {
   }
 }
 
-/** Derive a key pair from seeds, as Pearl's xmss.Keygen does. */
+/**
+ * Derive a key pair from seeds, as Pearl's xmss.Keygen does.
+ *
+ * privateSeed is 64 bytes and publicSeed 32. Throws for other lengths. Takes
+ * about half a second.
+ */
 export function xmssKeygen(privateSeed: Uint8Array, publicSeed: Uint8Array): XmssKeyPair {
   return keyPairWithTree(privateSeed, publicSeed).pair;
 }
@@ -325,6 +344,10 @@ function keyPairWithTree(
  * caller must make sure no index is ever used twice for the same key. A
  * secret key whose root does not belong to its seeds is refused, and the
  * signature is verified before it is returned.
+ *
+ * Throws for an index outside 0 to 30, a message that is not 32 bytes and a
+ * secret key that is not 128 bytes. Rebuilds the tree on every call;
+ * createXmssSigner keeps it.
  */
 export function xmssSign(secretKey: Uint8Array, msgUid: number, message: Uint8Array): Uint8Array {
   checkLength(secretKey, XMSS_SECRET_KEY_LENGTH, 'XMSS secret key');
@@ -418,10 +441,13 @@ export function xmssVerify(publicKey: Uint8Array, message: Uint8Array, signature
  * a backup repeats the indices used since the backup was taken.
  */
 export interface XmssIndexStore {
+  /** Returns the next unused index for publicKey, having recorded it as used. May be asynchronous. */
   reserve(publicKey: Uint8Array): number | Promise<number>;
 }
 
+/** An XMSS key that signs, taking each one-time index from its store. */
 export interface XmssSigner {
+  /** The 64-byte public key, as xmssLeafScript takes it. */
   readonly publicKey: Uint8Array;
   /**
    * Signs a 32-byte message with a freshly reserved index. Calls run one at
@@ -458,6 +484,10 @@ function toHex(bytes: Uint8Array): string {
  * signer in this process signs a second message at an index another signer
  * for the same key already used. None of this reaches across processes or
  * restarts, which is the store's job.
+ *
+ * privateSeed is 64 bytes and publicSeed 32; throws for other lengths. sign
+ * rejects once the key has used its 31 indices, when the store hands out an
+ * index that is not new, and after destroy.
  */
 export function createXmssSigner(
   privateSeed: Uint8Array,

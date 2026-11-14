@@ -3,6 +3,13 @@
 // that Pearl does not use (pubKeyHash, scriptHash) are deliberately absent
 // rather than filled with Bitcoin defaults.
 
+/**
+ * The five Pearl networks and their parameters, from Pearl's Go source.
+ *
+ * @module
+ */
+
+/** Parameters of one Pearl network, from Pearl's chaincfg. Not a bitcoinjs Network object. */
 export interface PearlNetwork {
   /** Lowercase canonical name, e.g. "mainnet". */
   name: string;
@@ -37,6 +44,7 @@ export interface PearlNetwork {
   forkHeights: ForkHeights;
   /** Known-good blocks, oldest first, hashes as display-order hex. */
   checkpoints: readonly Checkpoint[];
+  /** DNS seed hostnames. Empty on regtest and simnet. */
   dnsSeeds: readonly string[];
   /** TargetTimePerBlock in seconds; also sets the emission curve. */
   targetSpacing: number;
@@ -46,18 +54,26 @@ export interface PearlNetwork {
   powLimit: bigint;
   /** powLimit in compact form, the bits getdifficulty divides by. */
   powLimitBits: number;
+  /** Confirmations before a coinbase output can be spent. 100 on every network. */
   coinbaseMaturity: number;
 }
 
+/** Activation heights of Pearl's forks on one network, 0 where a fork is off. */
 export interface ForkHeights {
+  /** From this height blocks need a V2 certificate. */
   moe: number;
+  /** From this height MoE proofs are refused. */
   denseOnly: number;
+  /** From this height the rank-penalty rule applies. pearljs does not check that rule. */
   rankPenalty: number;
+  /** From this height blocks need a V3 certificate. */
   saltedSeed: number;
 }
 
+/** A known-good block. */
 export interface Checkpoint {
   height: number;
+  /** Display-order hex. */
   hash: string;
 }
 
@@ -70,6 +86,7 @@ const PUBLIC_POW_LIMIT = (1n << 208n) - 1n;
 const LOCAL_POW_LIMIT = (1n << 233n) - 1n;
 const seeds = (domain: string): string[] => ['reef', 'tide', 'stream'].map((name) => `${name}.seeder.${domain}`);
 
+/** Pearl mainnet. Addresses start with prl1, coin type 808276. */
 export const mainnet: PearlNetwork = {
   name: 'mainnet',
   magic: 0x50524c4d, // "PRLM"
@@ -105,6 +122,7 @@ export const mainnet: PearlNetwork = {
   coinbaseMaturity: COINBASE_MATURITY,
 };
 
+/** The first test network. Shares its address prefix (tprl), WIF byte and HD versions with testnet2. */
 export const testnet: PearlNetwork = {
   name: 'testnet',
   magic: 0x50524c31, // "PRL1"
@@ -128,6 +146,7 @@ export const testnet: PearlNetwork = {
 };
 
 // Testnet2 is a fresh chain that keeps the testnet address and HD params.
+/** The test network v2, a fresh chain with testnet's address and key parameters. Pearl's desktop wallet uses it for its Testnet setting. */
 export const testnet2: PearlNetwork = {
   name: 'testnet2',
   magic: 0x50524c32, // "PRL2"
@@ -150,6 +169,7 @@ export const testnet2: PearlNetwork = {
   coinbaseMaturity: COINBASE_MATURITY,
 };
 
+/** The regression test network, for local nodes. Shares its address prefix (rprl) with simnet. */
 export const regtest: PearlNetwork = {
   name: 'regtest',
   magic: 0x50524c52, // "PRLR"
@@ -174,6 +194,7 @@ export const regtest: PearlNetwork = {
 
 // Simnet shares the regtest genesis block but has its own magic, port,
 // WIF byte and HD key IDs (sprv/spub).
+/** The simulation test network. Shares regtest's genesis block and address prefix; has its own WIF byte and HD versions. */
 export const simnet: PearlNetwork = {
   name: 'simnet',
   magic: 0x50524c53, // "PRLS"
@@ -196,6 +217,7 @@ export const simnet: PearlNetwork = {
   coinbaseMaturity: COINBASE_MATURITY,
 };
 
+/** The five Pearl networks by name. */
 export const networks = {
   mainnet,
   testnet,
@@ -204,4 +226,5 @@ export const networks = {
   simnet,
 } as const;
 
+/** A key of networks: mainnet, testnet, testnet2, regtest or simnet. */
 export type PearlNetworkName = keyof typeof networks;

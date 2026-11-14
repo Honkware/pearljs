@@ -13,6 +13,13 @@
 // serves the fetch clients here, the websocket client in ws.ts, and any
 // other transport through PearldRpc and OysterRpc.
 
+/**
+ * Typed JSON-RPC clients for pearld and Oyster over fetch, with transports,
+ * retry, batching and one error type.
+ *
+ * @module
+ */
+
 import { formatPearl, parsePearl } from './amount.js';
 import type { AddressPayment, BlockRef, ChainClient, ChainTransaction } from './client.js';
 import { getBlockFilter } from './gcs.js';
@@ -52,6 +59,7 @@ export const DEFAULT_RPC_TIMEOUT = 60_000;
 // block, importprivkey rescans, and getblocktemplate can long-poll.
 const UNBOUNDED_METHODS = new Set(['generate', 'importprivkey', 'getblocktemplate']);
 
+/** Where and how httpTransport sends requests. */
 export interface HttpTransportOptions {
   /** Server URL, e.g. https://127.0.0.1:44107. Credentials in the URL are moved to the auth header. */
   readonly url: string | URL;
@@ -73,6 +81,7 @@ export interface HttpTransportOptions {
   readonly allowInsecureAuth?: boolean;
 }
 
+/** How a client retries read-only methods. */
 export interface RetryOptions {
   /** Tries after the first. Default 2. */
   readonly attempts?: number;
@@ -82,6 +91,7 @@ export interface RetryOptions {
   readonly maxDelay?: number;
 }
 
+/** How a client gathers calls into JSON-RPC batches. */
 export interface BatchOptions {
   /** How long to collect calls before sending them, in ms. Default 0, which gathers the calls of one tick. */
   readonly wait?: number;
@@ -89,6 +99,7 @@ export interface BatchOptions {
   readonly maxSize?: number;
 }
 
+/** Options for PearldClient, OysterClient and JsonRpcClient. */
 export interface RpcClientOptions extends Omit<HttpTransportOptions, 'url'> {
   /** Server URL; shorthand for `transport: httpTransport(...)` with the other HTTP options given here. */
   readonly url?: string | URL;
@@ -108,6 +119,7 @@ export interface RpcClientOptions extends Omit<HttpTransportOptions, 'url'> {
   readonly batch?: boolean | BatchOptions;
 }
 
+/** Per-call options: how to read numbers in the result, and when to give up. */
 export interface CallOptions {
   /**
    * Object keys whose numeric values are PRL amounts, returned as bigint
@@ -125,9 +137,15 @@ export interface CallOptions {
 
 /** Anything that can make a JSON-RPC call: the fetch clients, the websocket client, or your own. */
 export interface Rpc {
+  /** Calls a method and resolves to its result. Rejects with a PearlRpcError. */
   call<T = unknown>(method: string, params?: readonly unknown[], options?: CallOptions): Promise<T>;
 }
 
+/**
+ * Where a call failed: `rpc` is an error reply from the server, `http` an HTTP
+ * error status, `network` an unreachable server or a timeout, `response` a reply
+ * that is not JSON-RPC.
+ */
 export type RpcErrorKind = 'rpc' | 'http' | 'network' | 'response';
 
 /** Any failed call: an RPC error reply, an HTTP failure, an unreachable server or a malformed reply. */
@@ -238,6 +256,7 @@ export function readReply<T = unknown>(text: string, method: string, id: number 
   return (reply as { result: T }).result;
 }
 
+/** A server URL with its credentials split off. */
 export interface RpcEndpoint {
   /** The URL without credentials. */
   readonly url: URL;
@@ -290,6 +309,7 @@ function isLoopback(hostname: string): boolean {
 
 // Transports
 
+/** What a transport is told about the request it carries. */
 export interface RpcRequestInfo {
   /** For error messages, and for the default timeout. */
   readonly method: string;
@@ -374,6 +394,7 @@ export function httpTransport(options: HttpTransportOptions): RpcTransport {
   };
 }
 
+/** Options for fallbackTransport. */
 export interface FallbackOptions {
   /** Whether a failure moves on to the next transport. Default: every "network" and "http" failure. */
   readonly shouldFallback?: (error: PearlRpcError) => boolean;
@@ -613,6 +634,7 @@ function splitJsonArray(text: string): string[] | null {
 
 // pearld results
 
+/** An output script as pearld decodes it. */
 export interface ScriptPubKeyResult {
   readonly asm: string;
   readonly hex?: string;
@@ -623,6 +645,7 @@ export interface ScriptPubKeyResult {
   readonly addresses?: string[];
 }
 
+/** A transaction output in a decoded transaction. */
 export interface RpcVout {
   /** Grains. */
   readonly value: bigint;
@@ -630,6 +653,7 @@ export interface RpcVout {
   readonly scriptPubKey: ScriptPubKeyResult;
 }
 
+/** A transaction input in a decoded transaction: a coinbase input, or one that spends an output. */
 export type RpcVin =
   | { readonly coinbase: string; readonly sequence: number; /** The coinbase's witness, under this name on coinbase inputs only. */ readonly witness?: string[] }
   | {
@@ -675,6 +699,7 @@ export interface SearchRawTransactionsResult {
   readonly blocktime?: number;
 }
 
+/** A BIP9 deployment in getblockchaininfo. */
 export interface Bip9SoftForkDescription {
   readonly status: string;
   readonly bit: number;
@@ -727,6 +752,7 @@ export interface MempoolInfo {
   readonly cap: number;
 }
 
+/** One transaction in getrawmempool's verbose result. */
 export interface MempoolEntry {
   readonly size: number;
   readonly vsize: number;
@@ -737,6 +763,7 @@ export interface MempoolEntry {
   readonly depends: string[];
 }
 
+/** testmempoolaccept's verdict on one transaction. */
 export interface TestMempoolAcceptResult {
   readonly txid: string;
   readonly wtxid: string;
@@ -763,6 +790,7 @@ export interface TxOutResult {
   readonly coinbase: boolean;
 }
 
+/** Options for searchRawTransactions. */
 export interface SearchOptions {
   readonly skip?: number;
   /** pearld caps this at 10000. */
@@ -806,6 +834,7 @@ export interface BestBlockResult {
   readonly height: number;
 }
 
+/** One entry of getchaintips. */
 export interface ChainTip {
   readonly height: number;
   readonly hash: string;
@@ -939,6 +968,7 @@ export interface BlockTemplateRequest {
   readonly rules?: readonly string[];
 }
 
+/** A transaction in a block template. */
 export interface BlockTemplateTransaction {
   readonly data: string;
   /** The witness transaction id. */
@@ -979,6 +1009,7 @@ export interface BlockTemplate {
   readonly requiredcertversion: number;
 }
 
+/** An output named by transaction id (display hex) and output index. */
 export interface OutPointParam {
   readonly txid: string;
   readonly vout: number;
@@ -993,14 +1024,17 @@ type RpcClass = abstract new (...args: any[]) => Rpc;
  */
 export function pearldMethods<Base extends RpcClass>(Base: Base) {
   abstract class PearldMethods extends Base {
+    /** getblockchaininfo: the chain, its height, best block hash, difficulty and median time. */
     getBlockchainInfo(): Promise<BlockchainInfo> {
       return this.call('getblockchaininfo');
     }
 
+    /** Height of the best chain's tip. */
     getBlockCount(): Promise<number> {
       return this.call('getblockcount');
     }
 
+    /** Hash of the best chain's tip, display hex. */
     getBestBlockHash(): Promise<string> {
       return this.call('getbestblockhash');
     }
@@ -1010,6 +1044,7 @@ export function pearldMethods<Base extends RpcClass>(Base: Base) {
       return this.call('getbestblock');
     }
 
+    /** Hash of the block at a height on the best chain. */
     getBlockHash(height: number): Promise<string> {
       return this.call('getblockhash', [height]);
     }
@@ -1034,23 +1069,27 @@ export function pearldMethods<Base extends RpcClass>(Base: Base) {
       return this.call('getblock', [hash, 2], { amounts: ['value'] });
     }
 
+    /** The block's header fields, decoded. Code -5 for a hash pearld does not know. */
     getBlockHeader(hash: string): Promise<BlockHeaderResult> {
       return this.call('getblockheader', [hash, true]);
     }
 
     /**
      * Headers after the first locator on the best chain, up to hashStop or
-     * 2000 of them. Each is hex of the block as serialized without its
-     * transactions: the certificate, then the 108-byte header.
+     * 100 of them (wire.MaxBlockHeadersPerMsg). Each is hex of the block as
+     * serialized without its transactions: the certificate, then the 108-byte
+     * header.
      */
     getHeaders(blockLocators: readonly string[], hashStop = ''): Promise<string[]> {
       return this.call('getheaders', [[...blockLocators], hashStop]);
     }
 
+    /** Every chain tip pearld knows, the best chain and side branches. */
     getChainTips(): Promise<ChainTip[]> {
       return this.call('getchaintips');
     }
 
+    /** Difficulty of the tip, relative to the network's powLimitBits; see difficultyForBits. */
     getDifficulty(): Promise<number> {
       return this.call('getdifficulty');
     }
@@ -1060,6 +1099,7 @@ export function pearldMethods<Base extends RpcClass>(Base: Base) {
       return this.call('getnetworkhashps', [blocks, height]);
     }
 
+    /** getmininginfo: height, difficulty, network hash rate and what the built-in miner is doing. */
     getMiningInfo(): Promise<MiningInfo> {
       return this.call('getmininginfo');
     }
@@ -1097,14 +1137,20 @@ export function pearldMethods<Base extends RpcClass>(Base: Base) {
       return this.call('getrawtransaction', [txid, 0]);
     }
 
+    /**
+     * The transaction decoded, output values in grain. Mempool transactions
+     * only, unless pearld runs with --txindex.
+     */
     getRawTransaction(txid: string): Promise<TxRawResult> {
       return this.call('getrawtransaction', [txid, 1], { amounts: ['value'] });
     }
 
+    /** Decodes a serialized transaction without looking it up. Output values are in grain. */
     decodeRawTransaction(tx: string | Uint8Array): Promise<DecodedTransaction> {
       return this.call('decoderawtransaction', [toHex(tx)], { amounts: ['value'] });
     }
 
+    /** Decodes a script: its disassembly, type and address. */
     decodeScript(script: string | Uint8Array): Promise<DecodedScript> {
       return this.call('decodescript', [toHex(script)]);
     }
@@ -1146,14 +1192,17 @@ export function pearldMethods<Base extends RpcClass>(Base: Base) {
       return rate;
     }
 
+    /** Number of mempool transactions, their total size and the size cap. pearld reports no fee fields. */
     getMempoolInfo(): Promise<MempoolInfo> {
       return this.call('getmempoolinfo');
     }
 
+    /** Txids of every mempool transaction. */
     getRawMempool(): Promise<string[]> {
       return this.call('getrawmempool', [false]);
     }
 
+    /** Every mempool transaction by txid, with its size, fee in grain and unconfirmed parents. */
     getRawMempoolVerbose(): Promise<Record<string, MempoolEntry>> {
       return this.call('getrawmempool', [true], { amounts: ['fee'] });
     }
@@ -1195,18 +1244,22 @@ export function pearldMethods<Base extends RpcClass>(Base: Base) {
       return this.call('getcfilterheader', [blockHash, 0]);
     }
 
+    /** getinfo: version, height, connections, difficulty and the relay fee in grain per 1000 vbytes. */
     getInfo(): Promise<NodeInfo> {
       return this.call('getinfo', [], { amounts: ['relayfee'] });
     }
 
+    /** getnetworkinfo: protocol version, local addresses and the relay fee. */
     getNetworkInfo(): Promise<NetworkInfo> {
       return this.call('getnetworkinfo', [], { amounts: ['relayfee', 'incrementalfee'] });
     }
 
+    /** Connected peers. Ping times are in microseconds. */
     getPeerInfo(): Promise<PeerInfo[]> {
       return this.call('getpeerinfo', [], { integers: ['feefilter'] });
     }
 
+    /** Number of connected peers. */
     getConnectionCount(): Promise<number> {
       return this.call('getconnectioncount');
     }
@@ -1279,6 +1332,7 @@ export interface WalletTransactionEntry {
   readonly walletconflicts: string[];
 }
 
+/** listsinceblock: the transactions, and the block hash to pass next time. */
 export interface ListSinceBlockResult {
   readonly transactions: WalletTransactionEntry[];
   readonly lastblock: string;
@@ -1317,6 +1371,7 @@ export interface WalletTransaction {
   readonly hex: string;
 }
 
+/** One entry of listreceivedbyaddress. */
 export interface ReceivedByAddress {
   readonly account: string;
   readonly address: string;
@@ -1346,6 +1401,7 @@ export interface RawTxInput extends OutPointParam {
   readonly redeemScript?: string;
 }
 
+/** A sighash type as signrawtransaction names it. */
 export type SighashFlag = 'ALL' | 'NONE' | 'SINGLE' | 'ALL|ANYONECANPAY' | 'NONE|ANYONECANPAY' | 'SINGLE|ANYONECANPAY';
 
 /** Oyster's validateaddress (btcjson.ValidateAddressWalletResult). Fields past `address` are sent only for the wallet's own addresses. */
@@ -1386,6 +1442,7 @@ export interface SyncProgress {
   readonly synced: boolean;
 }
 
+/** Options for sendMany. */
 export interface SendManyOptions {
   /** "default" unless given. */
   readonly fromAccount?: string;
@@ -1433,6 +1490,7 @@ export function oysterMethods<Base extends RpcClass>(Base: Base) {
       return this.call('lockunspent', [unlock, outputs.map(({ txid, vout }) => ({ txid, vout }))]);
     }
 
+    /** Outputs currently locked with lockUnspent. */
     listLockUnspent(): Promise<OutPointParam[]> {
       return this.call('listlockunspent');
     }
@@ -1447,6 +1505,7 @@ export function oysterMethods<Base extends RpcClass>(Base: Base) {
       await this.call('createnewaccount', [account]);
     }
 
+    /** Renames an account. */
     async renameAccount(oldAccount: string, newAccount: string): Promise<void> {
       await this.call('renameaccount', [oldAccount, newAccount]);
     }
@@ -1456,6 +1515,7 @@ export function oysterMethods<Base extends RpcClass>(Base: Base) {
       return this.call('getaccount', [address]);
     }
 
+    /** Every address of an account. */
     getAddressesByAccount(account: string): Promise<string[]> {
       return this.call('getaddressesbyaccount', [account]);
     }
@@ -1508,6 +1568,7 @@ export function oysterMethods<Base extends RpcClass>(Base: Base) {
       return this.call('signmessage', [address, message]);
     }
 
+    /** Oyster's verifymessage. False for a signature that does not match. */
     verifyMessage(address: string, signature: string, message: string): Promise<boolean> {
       return this.call('verifymessage', [address, signature, message]);
     }
@@ -1522,10 +1583,12 @@ export function oysterMethods<Base extends RpcClass>(Base: Base) {
       await this.call('walletpassphrasechange', [oldPassphrase, newPassphrase]);
     }
 
+    /** Locks the wallet, forgetting the private passphrase. */
     async walletLock(): Promise<void> {
       await this.call('walletlock');
     }
 
+    /** Whether the wallet is locked. */
     walletIsLocked(): Promise<boolean> {
       return this.call('walletislocked');
     }
@@ -1577,6 +1640,7 @@ export function oysterMethods<Base extends RpcClass>(Base: Base) {
       await this.call('importprivkey', [wif, 'imported', rescan]);
     }
 
+    /** The WIF private key of an address the wallet holds. Needs the wallet unlocked. */
     dumpPrivKey(address: string): Promise<string> {
       return this.call('dumpprivkey', [address]);
     }
@@ -1596,6 +1660,7 @@ export function oysterMethods<Base extends RpcClass>(Base: Base) {
       return this.call('getbestblock');
     }
 
+    /** How far the wallet has synced with its chain source. */
     getSyncProgress(): Promise<SyncProgress> {
       return this.call('getsyncprogress');
     }
@@ -1675,6 +1740,7 @@ export function desktopOysterClient(credentials: { username: string; password: s
 /** The most transactions searchrawtransactions returns in one call. */
 const MAX_SEARCH_COUNT = 10000;
 
+/** Options for searchAllTransactions. */
 export interface SearchAllOptions {
   /** Transactions per request, 1 to 10000. Default 100. */
   readonly pageSize?: number;

@@ -1,6 +1,12 @@
 // Pearl block headers are 108 bytes: the Bitcoin header layout with the
 // 4-byte nonce replaced by a 32-byte proof commitment.
 
+/**
+ * The 108-byte Pearl block header and its hash.
+ *
+ * @module
+ */
+
 import { sha256 } from '@noble/hashes/sha2';
 
 /** Serialized size of a Pearl block header in bytes. */
@@ -11,12 +17,19 @@ const UINT32_MAX = 0xffffffff;
 const INT32_MIN = -0x80000000;
 const INT32_MAX = 0x7fffffff;
 
+/** A Pearl block header. Hashes are in internal (wire) byte order, the reverse of the hex RPC shows. */
 export interface PearlBlockHeader {
   version: number;
   prevBlock: Uint8Array;
   merkleRoot: Uint8Array;
+  /** Unix seconds. */
   timestamp: number;
+  /** The target in compact form; see bitsToTarget. */
   bits: number;
+  /**
+   * Commitment to the certificate's version and public data; see
+   * certificateProofCommitment. Pearl has no nonce field.
+   */
   proofCommitment: Uint8Array;
 }
 

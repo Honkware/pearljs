@@ -3,6 +3,13 @@
 // account the signatures too. Everything returned has been through
 // checkStandard, so a payment built here is one pearld's mempool takes.
 
+/**
+ * Payments from a list of unspent outputs: coin selection, change, the
+ * unsigned transaction and its PSBT, and signing for a BIP86 account.
+ *
+ * @module
+ */
+
 import { Transaction } from 'bitcoinjs-lib';
 import type { Psbt } from 'bitcoinjs-lib';
 import { formatPearl } from './amount.js';
@@ -26,6 +33,9 @@ const RBF_SEQUENCE = 0xfffffffd;
 /**
  * Adds an input by the transaction id that explorers and RPC show.
  * bitcoinjs's Transaction.addInput wants those bytes reversed instead.
+ *
+ * sequence is 0xffffffff unless given. Throws for a txid that is not 64 hex
+ * characters or an output index outside 32 bits.
  */
 export function addInputByTxid(target: Transaction | Psbt, txid: string, vout: number, sequence = FINAL_SEQUENCE): void {
   if (!/^[0-9a-fA-F]{64}$/.test(txid)) throw new Error('transaction id must be 64 hexadecimal characters');
@@ -38,6 +48,7 @@ export function addInputByTxid(target: Transaction | Psbt, txid: string, vout: n
 /** Where a payment goes. `amount: 'max'` sends everything the fee leaves, for at most one recipient. */
 export type Recipient = ({ address: string } | { script: Uint8Array }) & { amount: bigint | 'max' };
 
+/** What buildPayment needs: the unspent outputs to choose from, the recipients and the fee rate. */
 export interface PaymentOptions<T extends Utxo = Utxo> extends SpendableOptions {
   network: PearlNetwork;
   /** Every unspent output the wallet may use; the ones to spend are chosen from these. */
@@ -51,14 +62,20 @@ export interface PaymentOptions<T extends Utxo = Utxo> extends SpendableOptions 
   rbf?: boolean;
   /** `largest` unless given. A `max` payment always spends every output. */
   strategy?: CoinSelectionStrategy<T>;
+  /**
+   * Source of randomness for the `random` strategy, returning a number in [0,
+   * 1). Math.random unless given.
+   */
   random?: () => number;
   /** pearld's --minrelaytxfee if it is not the default, in grain per 1000 vbytes. */
   minRelayFee?: bigint;
   /** 1 unless given, as Oyster uses. */
   version?: number;
+  /** The transaction's locktime. 0 unless given. */
   locktime?: number;
 }
 
+/** An unsigned payment, as buildPayment returns it. Amounts are in grain. */
 export interface Payment<T extends Utxo = Utxo> {
   /** The unsigned transaction. */
   transaction: Transaction;
@@ -71,6 +88,7 @@ export interface Payment<T extends Utxo = Utxo> {
   /** The outputs being spent, in input order. */
   inputs: T[];
   prevouts: Prevout[];
+  /** Inputs minus outputs, in grain. */
   fee: bigint;
   /** The size the transaction will have once signed. */
   vsize: number;
@@ -181,17 +199,28 @@ function checkUnsigned(tx: Transaction, fee: bigint, vsize: number, relayFee: bi
   }
 }
 
+/**
+ * A signed payment ready to broadcast, as finalizePayment and payFromAccount
+ * return it. Amounts are in grain.
+ */
 export interface SignedPayment<T extends Utxo = Utxo> {
   /** The signed transaction, checked against pearld's relay policy. */
   transaction: Transaction;
   /** What sendrawtransaction takes. */
   hex: string;
+  /** Transaction id as explorers and RPC show it. */
   txid: string;
+  /** The outputs spent, in input order. */
   inputs: T[];
+  /** Script and value of each spent output, in input order. */
   prevouts: Prevout[];
+  /** Inputs minus outputs, in grain. */
   fee: bigint;
+  /** Size of the signed transaction in vbytes. */
   vsize: number;
+  /** Value of the change output in grain, or 0n when there is none. */
   change: bigint;
+  /** Position of the change output, or -1. */
   changeIndex: number;
 }
 
@@ -199,6 +228,11 @@ export interface SignedPayment<T extends Utxo = Utxo> {
  * Turns a payment whose PSBT has been signed into the transaction to
  * broadcast: finalizes every input, extracts, and runs checkStandard with
  * the input values. Pass `signed` for a transaction signed outside the PSBT.
+ *
+ * Throws when the signed transaction is not the one the payment built, when an
+ * input cannot be finalized, and with pearld's message when the result would not
+ * be relayed. minRelayFee is in grain per 1000 vbytes. Signatures of a
+ * transaction passed as `signed` are not verified.
  */
 export function finalizePayment<T extends Utxo>(
   payment: Payment<T>,
@@ -238,6 +272,10 @@ export interface AccountUtxo extends Utxo {
   p2mr?: { tree: ScriptTree; leafIndex: number };
 }
 
+/**
+ * Options for payFromAccount. allowedSighashTypes is not used: payFromAccount
+ * prepares its own inputs and signs them with SIGHASH_DEFAULT.
+ */
 export interface AccountPaymentOptions extends PaymentOptions<AccountUtxo>, P2mrPsbtSignOptions {
   /**
    * Transactions that created the P2MR outputs being spent, attached to
@@ -250,6 +288,11 @@ export interface AccountPaymentOptions extends PaymentOptions<AccountUtxo>, P2mr
  * Builds, signs and finalizes a payment from a BIP86 account in one call.
  * Each unspent output names the child that holds it; P2TR outputs are signed
  * by key path and P2MR outputs through the leaf given for them.
+ *
+ * Throws what buildPayment throws, and also when an unspent output does not pay
+ * the child named for it, a P2MR output comes without its tree or does not
+ * commit to it, or a signer refuses (see signInput and signP2mrScriptPathInput).
+ * Nothing is broadcast.
  */
 export function payFromAccount(account: PearlSigningAccount, options: AccountPaymentOptions): SignedPayment<AccountUtxo> {
   const utxos = options.utxos.map((utxo) => {

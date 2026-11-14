@@ -6,6 +6,12 @@
 // bytes, the size of a whole P2TR output (main.go:223), so it pays for 9
 // vbytes that are not there. The fee here is for the real 34-byte script.
 
+/**
+ * Sweeps every output of a single key into one output.
+ *
+ * @module
+ */
+
 import * as ecc from 'tiny-secp256k1';
 import { toOutputScript } from './address.js';
 import { buildPayment, finalizePayment } from './builder.js';
@@ -16,6 +22,7 @@ import { taggedHash } from './script.js';
 import { Transaction } from './transaction.js';
 import { decodeWif, keyPathAddress } from './wif.js';
 
+/** Options for sweepKey and sweepWif. */
 export interface SweepOptions extends SpendableOptions {
   network: PearlNetwork;
   /** Unspent outputs of the key's address. Each one is spent. */
@@ -24,11 +31,19 @@ export interface SweepOptions extends SpendableOptions {
   destination: string;
   /** Grain per 1000 vbytes. */
   feeRate: bigint;
+  /** Signal replace-by-fee. Off unless given. */
   rbf?: boolean;
+  /** pearld's --minrelaytxfee if it is not the default, in grain per 1000 vbytes. */
   minRelayFee?: bigint;
 }
 
-/** Spends every output of a private key's key-path P2TR address (keyPathAddress) to one destination. */
+/**
+ * Spends every output of a private key's key-path P2TR address (keyPathAddress) to one destination.
+ *
+ * Throws when an unspent output does not pay the key's address, and what
+ * buildPayment throws otherwise. feeRate is in grain per 1000 vbytes. The key
+ * is used as given and not wiped.
+ */
 export function sweepKey(privateKey: Uint8Array, options: SweepOptions): SignedPayment {
   const { network } = options;
   const address = keyPathAddress(privateKey, network);

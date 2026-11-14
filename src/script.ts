@@ -4,6 +4,13 @@
 // These mirror the Pearl Go txscript behavior; this module is not a
 // script execution engine.
 
+/**
+ * Script building blocks: leaf builders, timelocks and sequences, output
+ * classification, script numbers and tagged hashes.
+ *
+ * @module
+ */
+
 import { sha256 } from '@noble/hashes/sha2';
 
 import { OP_CODES } from './opcodes.js';
@@ -12,16 +19,23 @@ export { OP_CODES, OPCODE_NAMES } from './opcodes.js';
 export type { OpcodeName } from './opcodes.js';
 
 // Locktime and sequence constants from the Pearl wire format.
+/** A locktime below this is a block height; at or above it, a Unix time. */
 export const LOCKTIME_THRESHOLD = 500000000;
+/** Sequence bit that turns the relative lock off. */
 export const SEQUENCE_LOCKTIME_DISABLED = 0x80000000;
+/** Sequence bit that makes the relative lock count 512-second units and not blocks. */
 export const SEQUENCE_LOCKTIME_IS_SECONDS = 0x00400000;
+/** The sequence bits that hold the relative lock's value. */
 export const SEQUENCE_LOCKTIME_MASK = 0x0000ffff;
+/** A time-based relative lock counts units of 2^9 = 512 seconds. */
 export const SEQUENCE_LOCKTIME_GRANULARITY = 9;
 
 // txscript.MaxScriptElementSize.
+/** The largest data push a script may contain, in bytes (txscript.MaxScriptElementSize). */
 export const MAX_SCRIPT_ELEMENT_SIZE = 520;
 
 // txscript.BaseLeafVersion.
+/** The tapscript leaf version, the only one Pearl executes (txscript.BaseLeafVersion). */
 export const BASE_LEAF_VERSION = 0xc0;
 
 const MAX_DIRECT_PUSH = 75;
@@ -29,6 +43,7 @@ const WITNESS_PROGRAM_MIN_LENGTH = 2;
 const WITNESS_PROGRAM_MAX_LENGTH = 40;
 const TAPROOT_HASH_LENGTH = 32;
 
+/** What classifyOutputScript returns. */
 export type ScriptClass = 'p2tr' | 'p2mr' | 'nulldata' | 'nonstandard';
 
 /**
@@ -52,6 +67,7 @@ export function classifyOutputScript(script: Uint8Array): ScriptClass {
   return 'nonstandard';
 }
 
+/** A witness program: its version (0 to 16) and 2 to 40 bytes of program. */
 export interface WitnessProgram {
   version: number;
   program: Uint8Array;
@@ -241,6 +257,8 @@ export type RelativeLock = { blocks: number } | { seconds: number };
  * The input sequence for a relative lock, like blockchain.LockTimeToSequence.
  * Seconds round down to a multiple of 512, so pass a multiple of 512 to get
  * the lock asked for. The lock only applies to version 2 transactions.
+ *
+ * Throws for a lock outside 0 to 65535 blocks or 0 to 33553920 seconds.
  */
 export function encodeSequence(lock: RelativeLock): number {
   if ('blocks' in lock) {
@@ -291,6 +309,8 @@ function concatScripts(prefix: Uint8Array, script: Uint8Array): Uint8Array {
  * block height and one at or above it a Unix time; the spending transaction
  * needs a locktime of the same kind at least as large and an input sequence
  * other than 0xffffffff.
+ *
+ * Throws for a locktime that is not an unsigned 32-bit integer.
  */
 export function cltvScript(locktime: number, script: Uint8Array): Uint8Array {
   if (!Number.isInteger(locktime) || locktime < 0 || locktime > 0xffffffff) {
@@ -303,6 +323,8 @@ export function cltvScript(locktime: number, script: Uint8Array): Uint8Array {
  * <sequence> OP_CHECKSEQUENCEVERIFY OP_DROP followed by script, with the
  * sequence from encodeSequence. The spending transaction must be version 2
  * and the input's sequence a lock of the same kind at least as long.
+ *
+ * Throws for a sequence that did not come from encodeSequence.
  */
 export function csvScript(sequence: number, script: Uint8Array): Uint8Array {
   if (

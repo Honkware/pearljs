@@ -18,6 +18,13 @@
 
 /// <reference types="node" />
 
+/**
+ * A file-backed XMSS index store for Node. Not re-exported by the main entry,
+ * because it imports node:fs.
+ *
+ * @module
+ */
+
 import { closeSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { XMSS_PUBLIC_KEY_LENGTH } from './xmss.js';
@@ -25,6 +32,7 @@ import type { XmssIndexStore } from './xmss.js';
 
 const STATE_VERSION = 1;
 
+/** Options for createFileXmssIndexStore. */
 export interface FileXmssIndexStoreOptions {
   /**
    * Start a new state file at index 0. The file must not exist yet. Without
@@ -106,6 +114,10 @@ function readState(path: string): State {
  * Opens the XMSS index state file at path and locks it. Use one file per
  * key, never copy or restore it from a backup, and call close when done. The
  * lock is also released when the process exits normally.
+ *
+ * Throws when the file is locked by another store, when it does not exist and
+ * create is not set, when it exists and create is set, and when it cannot be
+ * parsed. reserve throws for a key other than the one the file belongs to.
  */
 export function createFileXmssIndexStore(path: string, options: FileXmssIndexStoreOptions = {}): FileXmssIndexStore {
   if (typeof path !== 'string' || path.length === 0) {

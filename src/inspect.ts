@@ -3,6 +3,13 @@
 // each output, and how each input was spent, worked out from its witness
 // and the output it spends (verifyWitnessProgram in txscript/engine.go).
 
+/**
+ * Reads a transaction against the outputs it spends: fee, sizes, addresses,
+ * and how each input was spent.
+ *
+ * @module
+ */
+
 import type { Transaction } from 'bitcoinjs-lib';
 import { fromOutputScript } from './address.js';
 import { parseMultiA } from './multia.js';
@@ -24,6 +31,7 @@ const ANNEX_TAG = 0x50;
 /** `checksig` is `<key> OP_CHECKSIG`, `multiA` a k-of-n OP_CHECKSIGADD leaf, `xmss` `<key> OP_CHECKXMSSSIG`. */
 export type LeafKind = 'checksig' | 'multiA' | 'xmss' | 'other';
 
+/** How an input was spent, read from its witness. */
 export type InputSpend =
   | { type: 'keyPath'; sighashType: number }
   | {
@@ -51,10 +59,12 @@ export type InputSpend =
   /** The spent output is not P2TR or P2MR, or the witness cannot spend it. */
   | { type: 'unknown' };
 
+/** One input of an inspected transaction, with the output it spends. */
 export interface InspectedInput {
   txid: string;
   vout: number;
   sequence: number;
+  /** Value of the spent output, in grain. */
   value: bigint;
   script: Uint8Array;
   /** Address of the spent output, or null when it has none. */
@@ -64,7 +74,9 @@ export interface InspectedInput {
   annex?: Uint8Array;
 }
 
+/** One output of an inspected transaction. */
 export interface InspectedOutput {
+  /** In grain. */
   value: bigint;
   script: Uint8Array;
   type: ScriptClass;
@@ -72,6 +84,7 @@ export interface InspectedOutput {
   address: string | null;
 }
 
+/** What inspectTransaction reports. Amounts are in grain. */
 export interface InspectedTransaction {
   txid: string;
   wtxid: string;
@@ -81,6 +94,7 @@ export interface InspectedTransaction {
   size: number;
   weight: number;
   vsize: number;
+  /** Inputs minus outputs, in grain. */
   fee: bigint;
   /** Grain per 1000 vbytes, rounded down. */
   feeRate: bigint;

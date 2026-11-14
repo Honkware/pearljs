@@ -7,6 +7,12 @@
 // encoded number of up to 4 bytes with 1 <= k <= n. A script that uses
 // OP_CHECKSIGADD in any other shape is refused rather than guessed at.
 
+/**
+ * multi_a leaves, Pearl's only multisig: build, parse, and order the witness.
+ *
+ * @module
+ */
+
 import { OP_CODES } from './opcodes.js';
 import { encodeScriptNumber, scriptPush } from './script.js';
 import { decodeScriptNumber, decompileScript } from './scripttools.js';
@@ -14,6 +20,7 @@ import type { ScriptChunk } from './scripttools.js';
 
 const isData = (chunk: ScriptChunk | undefined): chunk is Uint8Array => chunk instanceof Uint8Array;
 
+/** A parsed multi_a leaf: its x-only keys in script order and how many must sign. */
 export interface MultiALeaf {
   keys: Uint8Array[];
   threshold: number;
@@ -27,6 +34,9 @@ const MAX_MULTI_A_KEYS = 999;
  * A k-of-n multi_a leaf over 32-byte x-only keys, in the order given. The
  * threshold is a small-int opcode up to 16 and a minimal push above, the
  * forms Pearl's psbt package recognises. Duplicate keys are refused.
+ *
+ * Throws for no keys or more than 999, a key that is not 32 bytes, and a
+ * threshold outside 1 to the number of keys.
  */
 export function multiAScript(keys: readonly Uint8Array[], threshold: number): Uint8Array {
   if (keys.length === 0 || keys.length > MAX_MULTI_A_KEYS) {
@@ -95,6 +105,10 @@ export function parseMultiA(script: Uint8Array): MultiALeaf | null {
  * item per key in reverse script order, empty for keys without a signature.
  * NUMEQUAL needs exactly k successful checks, so signatures beyond k are
  * dropped in script order.
+ *
+ * signatures maps each key, as lowercase hex, to its signature. Throws when
+ * fewer than the threshold are present or one is for a key the leaf does not
+ * have.
  */
 export function multiAStack(leaf: MultiALeaf, signatures: ReadonlyMap<string, Uint8Array>): Uint8Array[] {
   const hex = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');

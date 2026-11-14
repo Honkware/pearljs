@@ -2,9 +2,16 @@
 // hash256 for txids, block hashes and checksums, and hash160 for BIP32 key
 // fingerprints.
 
+/**
+ * SHA-256, double SHA-256 and HASH160.
+ *
+ * @module
+ */
+
 import { ripemd160 } from '@noble/hashes/legacy';
 import { sha256 as nobleSha256 } from '@noble/hashes/sha2';
 
+/** SHA-256. */
 export function sha256(data: Uint8Array): Uint8Array {
   return nobleSha256(data);
 }

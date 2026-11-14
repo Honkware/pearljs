@@ -13,6 +13,13 @@
 // does not raise its parent's priority in pearld's own templates. CPFP here
 // is package arithmetic for miners that do ancestor scoring.
 
+/**
+ * Fee bumping under pearld's rules: replace-by-fee, child pays for parent, and
+ * the package limits.
+ *
+ * @module
+ */
+
 import type { Transaction } from 'bitcoinjs-lib';
 import { DEFAULT_MIN_RELAY_FEE, feeForVsize, minRelayFee } from './policy.js';
 
@@ -36,11 +43,13 @@ export interface MempoolTx {
 /** Unconfirmed transactions keyed by txid, in the order they were accepted. */
 export type Mempool = ReadonlyMap<string, MempoolTx>;
 
+/** A transaction's fee in grain and its size in vbytes. */
 export interface FeeAndVsize {
   fee: bigint;
   vsize: number;
 }
 
+/** Options for checkReplacement. */
 export interface ReplacementOptions {
   /** pearld's --minrelaytxfee, in grain per 1000 vbytes. */
   minRelayFee?: bigint;
@@ -50,12 +59,17 @@ export interface ReplacementOptions {
   vsize?: number;
 }
 
+/** pearld's limits on chains of unconfirmed transactions. */
 export interface PackageLimits {
+  /** Most transactions in a transaction's unconfirmed ancestry, itself included. */
   ancestorCount: number;
+  /** Most vbytes across a transaction and its unconfirmed ancestors. */
   ancestorSize: number;
+  /** Most transactions among an ancestor and its descendants. */
   descendantCount: number;
 }
 
+/** Options for checkPackageLimits. */
 export interface PackageLimitOptions {
   /** Txids the transaction replaces, as checkReplacement returns them. They do not count. */
   replaced?: Iterable<string>;
@@ -129,6 +143,9 @@ function signals(tx: Transaction, mempool: Mempool | undefined, cache: Map<strin
  * The smallest fee a replacement of this vsize can pay: above the fee rate of
  * every transaction it evicts, and at least their fees plus its own relay fee.
  * Pass every evicted transaction, the conflicts' descendants included.
+ *
+ * Returns grain. vsize is the replacement's size in vbytes and relayFee the
+ * relay fee rate in grain per 1000 vbytes, DEFAULT_MIN_RELAY_FEE unless given.
  */
 export function replacementFee(
   evicted: readonly FeeAndVsize[],

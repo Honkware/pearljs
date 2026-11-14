@@ -2,6 +2,12 @@
 // These helpers keep address encoding and amount validation in Pearl's
 // modules instead of relying on bitcoinjs's Bitcoin-mainnet defaults.
 
+/**
+ * Transactions and PSBTs: parse, create, and finalize the way Pearl accepts.
+ *
+ * @module
+ */
+
 import { Psbt, Transaction } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { MAX_GRAIN } from './amount.js';
@@ -25,11 +31,13 @@ function checkHex(hex: string, what: string): void {
   }
 }
 
+/** Parses a serialized transaction from hex. Throws on malformed input. */
 export function parseTransaction(hex: string): Transaction {
   checkHex(hex, 'transaction');
   return Transaction.fromHex(hex);
 }
 
+/** Serializes a transaction to hex, with witnesses unless includeWitness is false. */
 export function serializeTransaction(
   tx: Transaction,
   includeWitness = true,
@@ -40,6 +48,7 @@ export function serializeTransaction(
   return copy.toHex();
 }
 
+/** An empty transaction. Version 1 unless given, as Oyster uses; CSV leaves need version 2. */
 export function createTransaction(version = 1): Transaction {
   if (!Number.isInteger(version) || version < -0x80000000 || version > 0x7fffffff) {
     throw new RangeError('transaction version must be a signed 32-bit integer');
@@ -49,10 +58,12 @@ export function createTransaction(version = 1): Transaction {
   return tx;
 }
 
+/** The txid as explorers and RPC show it: the hash of the transaction without witnesses, reversed, in hex. */
 export function transactionId(tx: Transaction): string {
   return tx.getId();
 }
 
+/** The wtxid in display hex: the hash of the transaction with its witnesses. */
 export function witnessTransactionId(tx: Transaction): string {
   return Array.from(tx.getHash(true))
     .reverse()
@@ -144,6 +155,11 @@ function psbtEnd(bytes: Uint8Array, inputs: number, outputs: number): number {
   return offset;
 }
 
+/**
+ * Starts a PSBT from an unsigned transaction. Throws when the transaction
+ * already carries signatures or witnesses. The inputs are bare; prepareInput and
+ * the script-path prepare functions fill them in.
+ */
 export function createPsbt(tx: Transaction): Psbt {
   const psbt = new Psbt();
   psbt.setVersion(tx.version);
@@ -174,6 +190,10 @@ export function createPsbt(tx: Transaction): Psbt {
  * For the inputs finalized here, the leaf must open the output and every
  * signature for a key in the leaf must verify, so a PSBT that cannot make a
  * valid spend fails here and not at the node.
+ *
+ * Throws when an input lacks the signatures its leaf needs, when a script-path
+ * signature does not verify, and when bitcoinjs's fee-rate guard refuses the
+ * result.
  */
 export function finalizePsbt(psbt: Psbt): Transaction {
   psbt.data.inputs.forEach((input, index) => {
@@ -284,6 +304,11 @@ export function serializeWitness(witness: readonly Uint8Array[]): Uint8Array {
   ]);
 }
 
+/**
+ * Adds an output paying a Pearl address to a PSBT. value is in grain. Throws
+ * when the address is not valid on the network or the value is outside Pearl's
+ * bounds.
+ */
 export function addPearlOutput(
   psbt: Psbt,
   address: string,

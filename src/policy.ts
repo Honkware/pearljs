@@ -7,6 +7,13 @@
 // standard, and the default relay fee is 1000 grain per 1000 vbytes. Errors
 // carry pearld's own messages.
 
+/**
+ * pearld's relay policy: standardness, dust, the relay fee, and size estimates
+ * for unsigned transactions.
+ *
+ * @module
+ */
+
 import { Transaction } from 'bitcoinjs-lib';
 import { MAX_GRAIN } from './amount.js';
 import { classifyOutputScript, extractWitnessProgram } from './script.js';
@@ -18,6 +25,7 @@ import type { ScriptTree } from './scripttree.js';
 
 /** mempool.DefaultMinRelayTxFee, in grain per 1000 vbytes. */
 export const DEFAULT_MIN_RELAY_FEE = 1000n;
+/** The largest transaction pearld relays, in vbytes. */
 export const MAX_STANDARD_TX_VSIZE = 100_000;
 /** pearld's default maximum transaction version (server.go). */
 export const MAX_STANDARD_TX_VERSION = 2;
@@ -32,7 +40,12 @@ const MAX_COINBASE_SCRIPT_LEN = 100;
 const LOCK_TIME_THRESHOLD = 500_000_000;
 const MAX_INT64 = (1n << 63n) - 1n;
 
-/** mempool.GetDustThreshold: three times the size of the output plus a typical input spending it. */
+/**
+ * mempool.GetDustThreshold: three times the size of the output plus a typical input spending it.
+ *
+ * In grain, at the default relay fee of 1000 grain per 1000 vbytes: 333 for a
+ * P2TR or P2MR output.
+ */
 export function dustThreshold(script: Uint8Array): bigint {
   const outputSize = 8 + varIntSize(script.length) + script.length;
   // 107 witness bytes count as CalcVsize(0, 107) = 27 vbytes.
@@ -48,7 +61,13 @@ export function isDust(output: { script: Uint8Array; value: bigint }, minRelayFe
   return output.value * 1000n < dustThreshold(output.script) * minRelayFee;
 }
 
-/** calcMinRequiredTxRelayFee: the smallest fee pearld relays for a transaction of this vsize. */
+/**
+ * calcMinRequiredTxRelayFee: the smallest fee pearld relays for a transaction of this vsize.
+ *
+ * Returns grain. The second argument is the relay fee rate in grain per 1000
+ * vbytes, DEFAULT_MIN_RELAY_FEE unless given. Not to be confused with the
+ * minRelayFee option elsewhere, which is that rate.
+ */
 export function minRelayFee(vsize: number, feeRate = DEFAULT_MIN_RELAY_FEE): bigint {
   const size = BigInt(vsize);
   if (feeRate > 0n && size > MAX_INT64 / feeRate) return MAX_GRAIN;
@@ -63,6 +82,7 @@ export function feeForVsize(vsize: number, feeRate: bigint): bigint {
   return (BigInt(vsize) * feeRate + 999n) / 1000n;
 }
 
+/** Context for checkStandard. Each field that is left out skips the checks that need it. */
 export interface StandardOptions {
   /** The input values and scripts, in input order. Enables the input and relay fee checks. */
   prevouts?: readonly Prevout[];
@@ -72,6 +92,7 @@ export interface StandardOptions {
   medianTimePast?: number;
   /** pearld's --minrelaytxfee, in grain per 1000 vbytes. */
   minRelayFee?: bigint;
+  /** Highest transaction version to accept. MAX_STANDARD_TX_VERSION (2) unless given. */
   maxTxVersion?: number;
 }
 
@@ -247,6 +268,10 @@ export type SpendEstimate =
  * described for it. Schnorr signatures have a fixed size, so the estimate is
  * exact for key paths, checksig, multi_a (with exactly the threshold signing)
  * and XMSS leaves.
+ *
+ * spends has one entry per input, in input order. Throws when the counts differ,
+ * when a leaf index is out of range, and for a leaf it cannot size without
+ * `stack`.
  */
 export function estimateVsize(tx: Transaction, spends: readonly SpendEstimate[]): number {
   if (spends.length !== tx.ins.length) throw new Error('spends must match the transaction inputs');

@@ -15,6 +15,13 @@
 // signing and for verifying; a caller that wants Oyster's reading passes
 // message.toWellFormed().
 
+/**
+ * Message signing and verification in the format of Pearl's wallet (Oyster's
+ * signmessage and verifymessage).
+ *
+ * @module
+ */
+
 import { Transaction } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { decodeAddress } from './address.js';
@@ -108,6 +115,7 @@ function decodeBase64(text: string): Uint8Array {
   return Uint8Array.from(atob(text), (char) => char.charCodeAt(0));
 }
 
+/** Options for signMessage. */
 export interface SignMessageOptions {
   /**
    * The 32 bytes of auxiliary randomness BIP340 mixes into the nonce. Fresh
@@ -132,6 +140,9 @@ function auxRandOf(options: SignMessageOptions): Uint8Array {
  * Signs a message for the BIP86 P2TR address of privateKey, as Oyster's
  * signmessage does, and returns the base64 signature. Signatures differ from
  * call to call unless auxRand is fixed; every one verifies.
+ *
+ * Throws for a message over MAX_MESSAGE_LENGTH bytes of UTF-8, a string with a
+ * lone surrogate, and an invalid private key.
  */
 export function signMessage(privateKey: Uint8Array, message: string, options: SignMessageOptions = {}): string {
   const bytes = messageBytes(message);
@@ -177,6 +188,11 @@ export function signMessage(privateKey: Uint8Array, message: string, options: Si
  * Oyster's full script engine could accept, are reported as unsupported
  * instead of invalid. An address whose program is not a point on the curve
  * can have no valid signature, so the answer for it is false, as Oyster's is.
+ *
+ * Returns false for a well-formed signature that does not match. Throws for an
+ * address that is not P2TR on the network, a signature that is not base64 or is
+ * malformed, a script-path signature, and a message that could not have been
+ * signed.
  */
 export function verifyMessage(
   address: string,

@@ -5,6 +5,8 @@
  * Electrum or Esplora endpoint, a full node, or an in-memory fake for
  * tests and demos). The invoice module depends only on this interface,
  * never on a concrete RPC transport.
+ *
+ * @module
  */
 
 /** Reference to a block in the best chain. */

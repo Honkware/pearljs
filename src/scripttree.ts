@@ -9,6 +9,13 @@
 // the proof. A P2MR control block has no internal key: it is leafVersion|1
 // followed by the proof, and the output commits to the Merkle root directly.
 
+/**
+ * Script trees in Pearl's leaf order, control blocks for P2TR and P2MR, and
+ * leaf commitment checks.
+ *
+ * @module
+ */
+
 import * as ecc from 'tiny-secp256k1';
 import { BASE_LEAF_VERSION, tapBranchHash, tapLeafHash, taggedHash } from './script.js';
 
@@ -18,6 +25,7 @@ const TAPROOT_CONTROL_BLOCK_BASE_SIZE = 1 + HASH_SIZE;
 const P2MR_CONTROL_BLOCK_BASE_SIZE = 1;
 const LEAF_VERSION_MASK = 0xfe;
 
+/** One leaf of a script tree, with the proof that it is in the tree. */
 export interface ScriptTreeLeaf {
   script: Uint8Array;
   leafVersion: number;
@@ -26,7 +34,9 @@ export interface ScriptTreeLeaf {
   proof: Uint8Array;
 }
 
+/** A script tree: its Merkle root and its leaves in the order the scripts were given. */
 export interface ScriptTree {
+  /** The 32-byte Merkle root: a P2MR witness program, or the merkleRoot of a P2TR output. */
   root: Uint8Array;
   leaves: ScriptTreeLeaf[];
 }
@@ -62,6 +72,8 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
  *
  * Duplicate scripts are rejected: Pearl indexes proofs by leaf hash, so a
  * repeated leaf would get the wrong proof there.
+ *
+ * Throws for an empty list and for duplicate scripts.
  */
 export function assembleScriptTree(scripts: readonly Uint8Array[]): ScriptTree {
   if (scripts.length === 0) {
@@ -187,6 +199,7 @@ export function p2mrControlBlock(tree: ScriptTree, leafIndex: number): Uint8Arra
   return concat([Uint8Array.of(leaf.leafVersion | 1), leaf.proof]);
 }
 
+/** A parsed P2TR control block. */
 export interface TaprootControlBlock {
   leafVersion: number;
   outputKeyYIsOdd: boolean;
@@ -194,6 +207,7 @@ export interface TaprootControlBlock {
   proof: Uint8Array;
 }
 
+/** A parsed P2MR control block. */
 export interface P2mrControlBlock {
   leafVersion: number;
   proof: Uint8Array;

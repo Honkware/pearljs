@@ -1,3 +1,10 @@
+/**
+ * Everything pearljs exports, except the Node-only `pearljs/xmss-file-store`.
+ * Each module here is also its own subpath, such as `pearljs/amount`.
+ *
+ * @module
+ */
+
 export * from './address.js';
 export * from './amount.js';
 export * from './backend.js';

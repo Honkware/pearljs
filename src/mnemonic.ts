@@ -1,6 +1,12 @@
 // BIP39 helpers that read seeds the way Pearl's wallet does. Pure JS with no
 // Buffer or secp256k1 dependency, so this module is safe in any browser.
 
+/**
+ * BIP39 recovery phrases and seeds, read the way Pearl's wallet reads them.
+ *
+ * @module
+ */
+
 import {
   entropyToMnemonic as scureEntropyToMnemonic,
   generateMnemonic as scureGenerateMnemonic,
@@ -12,10 +18,12 @@ import { wordlist } from '@scure/bip39/wordlists/english';
 
 /** Word counts BIP39 allows, for 128 to 256 bits of entropy. */
 export const MNEMONIC_WORD_COUNTS = [12, 15, 18, 21, 24] as const;
+/** A word count generateMnemonic accepts: 12, 15, 18, 21 or 24. */
 export type MnemonicWordCount = (typeof MNEMONIC_WORD_COUNTS)[number];
 
 /** Seed lengths Pearl's wallet accepts as raw hex (hdkeychain Min/MaxSeedBytes). */
 export const MIN_HEX_SEED_BYTES = 16;
+/** The longest raw hex seed Pearl's wallet accepts, in bytes. */
 export const MAX_HEX_SEED_BYTES = 64;
 
 /** Trim, lowercase and collapse whitespace runs, as the desktop wallet does before validating. */
@@ -72,6 +80,10 @@ export function mnemonicToSeed(mnemonic: string, passphrase = ''): Uint8Array {
   return mnemonicToSeedSync(phrase, passphrase);
 }
 
+/**
+ * What parseSeedInput made of its input: a seed from a mnemonic, a raw hex seed,
+ * or the reason it is neither.
+ */
 export type ParsedSeedInput =
   | { kind: 'mnemonic'; seed: Uint8Array; wordCount: number }
   | { kind: 'hex'; seed: Uint8Array }

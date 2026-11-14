@@ -5,6 +5,13 @@
 //
 // Fee rates are grain per 1000 vbytes, as in policy.ts and Oyster's RPC.
 
+/**
+ * Coin selection as Oyster does it. Pure functions over a list of unspent
+ * outputs.
+ *
+ * @module
+ */
+
 import { Transaction } from 'bitcoinjs-lib';
 import { formatPearl, MAX_GRAIN } from './amount.js';
 import { COINBASE_MATURITY } from './consensus.js';
@@ -12,11 +19,15 @@ import { DEFAULT_MIN_RELAY_FEE, estimateVsize, isDust, minRelayFee } from './pol
 import type { SpendEstimate } from './policy.js';
 import { classifyOutputScript } from './script.js';
 
+/** An unspent output as coin selection takes it. */
 export interface Utxo {
   /** Transaction id as explorers and RPC show it. */
   txid: string;
+  /** Index of the output in its transaction. */
   vout: number;
+  /** In grain. */
   value: bigint;
+  /** The output script (scriptPubKey). */
   script: Uint8Array;
   /** As listunspent reports them; left out or 0 for an unconfirmed output. */
   confirmations?: number;
@@ -29,9 +40,11 @@ export interface Utxo {
   spend?: SpendEstimate;
 }
 
+/** Which unspent outputs may be spent. */
 export interface SpendableOptions {
   /** Confirmations an output needs. Oyster's sends use 1. */
   minConfirmations?: number;
+  /** Confirmations a coinbase output needs. COINBASE_MATURITY (100) unless given. */
   coinbaseMaturity?: number;
 }
 
@@ -107,11 +120,13 @@ function yieldsPositively(utxo: Utxo, feeRate: bigint): boolean {
   return (feeRate * BigInt(size)) / 1000n < utxo.value;
 }
 
+/** An output to create: its script and value in grain. */
 export interface TxOutput {
   script: Uint8Array;
   value: bigint;
 }
 
+/** What selectCoins needs. */
 export interface SelectCoinsOptions<T extends Utxo = Utxo> {
   utxos: readonly T[];
   outputs: readonly TxOutput[];
@@ -124,10 +139,13 @@ export interface SelectCoinsOptions<T extends Utxo = Utxo> {
   random?: () => number;
 }
 
+/** The result of selectCoins. Amounts are in grain. */
 export interface CoinSelection<T extends Utxo = Utxo> {
   /** The coins to spend, in input order. */
   inputs: T[];
+  /** Sum of the chosen coins, in grain. */
   totalInput: bigint;
+  /** In grain: the fee rate times vsize, rounded down, plus any remainder too small to be change. */
   fee: bigint;
   /** Value of the change output, or 0n when there is none. */
   change: bigint;
@@ -167,6 +185,9 @@ export class InsufficientFundsError extends Error {
  * again for the inputs actually taken, and takes more if that fee no longer
  * fits. What is left becomes change unless it is zero or dust, in which case
  * it goes to the fee.
+ *
+ * Throws InsufficientFundsError when every coin together does not cover the
+ * outputs and the fee.
  */
 export function selectCoins<T extends Utxo>(options: SelectCoinsOptions<T>): CoinSelection<T> {
   const { outputs, feeRate, changeScript } = options;

@@ -7,6 +7,13 @@
 // more than 20 addresses is restored in full by Oyster and would lose funds
 // under the BIP44 limit, so 250 is the default here.
 
+/**
+ * BIP86 account discovery through a wallet backend, with Oyster's recovery
+ * window.
+ *
+ * @module
+ */
+
 import type { WalletBackend, WalletBalance, WalletUtxo } from './backend.js';
 import { sumBalance } from './backend.js';
 import type { AccountUtxo } from './builder.js';
@@ -15,6 +22,7 @@ import type { PearlAccount } from './keys.js';
 /** The recovery window Oyster restores with. */
 export const OYSTER_RECOVERY_WINDOW = 250;
 
+/** Options for discoverAccount. */
 export interface DiscoveryOptions {
   /** Consecutive unused addresses that end the scan of a chain. Default OYSTER_RECOVERY_WINDOW; BIP44 wallets use 20. */
   gap?: number;
@@ -24,12 +32,14 @@ export interface DiscoveryOptions {
   signal?: AbortSignal;
 }
 
+/** An address of the account and where it sits: its index, and whether it is on the change chain. */
 export interface DiscoveredAddress {
   address: string;
   index: number;
   change: boolean;
 }
 
+/** What discovery found on one chain of an account, receive or change. */
 export interface DiscoveredChain {
   /** Addresses that have been paid, in index order. */
   used: DiscoveredAddress[];
@@ -37,6 +47,7 @@ export interface DiscoveredChain {
   nextIndex: number;
 }
 
+/** The result of discoverAccount. */
 export interface AccountDiscovery {
   receive: DiscoveredChain;
   change: DiscoveredChain;
@@ -50,6 +61,9 @@ export interface AccountDiscovery {
  * watch-only account works as well as a signing one, since only addresses
  * are derived. An address counts as used once anything has paid it,
  * confirmed or not.
+ *
+ * Rejects with whatever the backend rejects with, such as MissingIndexError from
+ * pearldBackend without --addrindex, and with the signal's reason when aborted.
  */
 export async function discoverAccount(
   account: Pick<PearlAccount, 'deriveAddress'>,

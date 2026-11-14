@@ -9,6 +9,13 @@
 // nothing either server has that a compact-filter scanner or a Blockbook
 // client could not also answer: every query is by address or output script.
 
+/**
+ * Wallet backends: what a wallet needs from the chain, answered by pearld's
+ * address index or by an Oyster wallet.
+ *
+ * @module
+ */
+
 import { fromOutputScript, toOutputScript } from './address.js';
 import type { AddressPayment, BlockRef, ChainClient, ChainTransaction } from './client.js';
 import type { Utxo } from './coinselect.js';
@@ -37,6 +44,7 @@ export interface WalletUtxo extends Utxo {
   coinbase: boolean;
 }
 
+/** A balance in grain, split by how spendable it is. */
 export interface WalletBalance {
   /** Outputs in a block, coinbase outputs once mature. */
   confirmed: bigint;
@@ -46,6 +54,7 @@ export interface WalletBalance {
   immature: bigint;
 }
 
+/** One transaction in the history of an address. */
 export interface AddressHistoryEntry {
   txid: string;
   /** Confirming block, or null while in the mempool. */
@@ -56,6 +65,7 @@ export interface AddressHistoryEntry {
   spent?: bigint;
 }
 
+/** What a backend knows about one output: unspent, spent, or unknown. */
 export type SpendStatus =
   | { status: 'unspent'; confirmations: number }
   /** `spender` is left out when the backend knows the output is gone but not where it went. */
@@ -75,6 +85,7 @@ export interface WalletBackend extends ChainClient {
    * spends is left out.
    */
   getUtxos(watched: readonly Watched[]): Promise<WalletUtxo[]>;
+  /** Confirmed, unconfirmed and immature grain held by these addresses or scripts. */
   getBalance(watched: readonly Watched[]): Promise<WalletBalance>;
   /** Transactions paying or spending from one address, confirmed ones first. */
   getHistory(watched: Watched): Promise<AddressHistoryEntry[]>;
@@ -82,6 +93,10 @@ export interface WalletBackend extends ChainClient {
   broadcast(tx: string | Uint8Array): Promise<string>;
   /** Grain per 1000 vbytes to confirm within `blocks`, never under the relay fee. */
   estimateFeeRate(blocks?: number): Promise<bigint>;
+  /**
+   * Whether an output is unspent, spent (and by which transaction, when known),
+   * or unknown to the backend.
+   */
   getSpendStatus(outpoint: OutPointParam): Promise<SpendStatus>;
   /** Which of these addresses have ever been paid, when the backend can answer for many at once. Discovery falls back to getAddressActivity. */
   findUsed?(addresses: readonly string[]): Promise<string[]>;
@@ -115,6 +130,7 @@ export function sumBalance(utxos: readonly Utxo[], coinbaseMaturity: number): Wa
   return balance;
 }
 
+/** Options for pearldBackend. */
 export interface PearldBackendOptions {
   network: PearlNetwork;
   /** Transactions per searchrawtransactions request. Default 100. */
@@ -252,6 +268,7 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletBa
 /** txrules.DefaultRelayFeePerKb, the rate Oyster falls back to (wallet/wallet/txrules/rules.go:19). */
 export const OYSTER_DEFAULT_FEE_RATE = 1000n;
 
+/** Options for oysterBackend. */
 export interface OysterBackendOptions {
   network: PearlNetwork;
 }

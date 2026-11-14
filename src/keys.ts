@@ -10,6 +10,13 @@
 // moved an object) wait for the garbage collector, which frees memory without
 // clearing it, and a string such as a mnemonic cannot be overwritten at all.
 
+/**
+ * BIP86 accounts: watch-only accounts that derive addresses, and signing
+ * accounts that also sign.
+ *
+ * @module
+ */
+
 import { BIP32Factory } from 'bip32';
 import type { BIP32Interface } from 'bip32';
 import { crypto as bitcoinCrypto, Transaction } from 'bitcoinjs-lib';
@@ -84,13 +91,22 @@ export interface PearlAccount {
   deriveAddress(index: number, change?: boolean): string;
 }
 
+/** Options for prepareInput: the child that holds the spent output, and its value. */
 export interface PearlInputOptions {
+  /** Address index of the child, 0 to 2147483647. */
   index: number;
+  /** Whether the child is on the change chain. False unless given. */
   change?: boolean;
+  /** Value of the spent output, in grain. */
   value: bigint;
+  /**
+   * Written into the PSBT input when it is not SIGHASH_DEFAULT. Signing with it
+   * needs the same type in allowedSighashTypes.
+   */
   sighashType?: number;
 }
 
+/** Which child signs, and optionally the auxiliary randomness to sign with. */
 export interface PearlSignOptions {
   index: number;
   change?: boolean;
@@ -115,6 +131,10 @@ export interface PearlScriptPathSignOptions extends P2mrPsbtSignOptions {
   auxRand?: Uint8Array;
 }
 
+/**
+ * Options for account.signP2mrInput: the child whose key the leaf pushes, plus
+ * everything signP2mrInput takes.
+ */
 export interface PearlP2mrSignOptions extends P2mrSignOptions {
   index: number;
   change?: boolean;
@@ -128,10 +148,19 @@ export interface PearlP2mrSignOptions extends P2mrSignOptions {
  * key, which is the key derivePublicKey returns and a leaf script names.
  */
 export interface PearlSigningAccount {
+  /** Account derivation path, m/86'/coinType'/account'. */
   readonly path: string;
+  /** The same account without private keys. */
   watchOnlyAccount(): PearlAccount;
+  /** x-only internal (untweaked) public key of a child; see PearlAccount.derivePublicKey. */
   derivePublicKey(index: number, change?: boolean): Uint8Array;
+  /** BIP86 P2TR address of a child; see PearlAccount.deriveAddress. */
   deriveAddress(index: number, change?: boolean): string;
+  /**
+   * Adds the witness UTXO, internal key and BIP86 derivation record of a child's
+   * output to a PSBT input. Prepare every input before signing any. Throws when
+   * the value is not a bigint of grain within Pearl's bounds.
+   */
   prepareInput(psbt: Psbt, inputIndex: number, options: PearlInputOptions): void;
   /**
    * Signs a BIP86 key-path PSBT input. The input's sighash type must be in
@@ -238,6 +267,9 @@ function toWatchOnlyAccount(
  *
  * The seed must be 16 to 64 bytes (128 to 512 bits) per BIP39. The returned
  * account node is neutered; private key material never leaves this function.
+ *
+ * account is the BIP86 account number, 0 unless given. Throws for a seed of
+ * another length, an invalid network, or a hardened or negative account number.
  */
 export function deriveAccountFromSeed(
   seed: Uint8Array,
@@ -301,6 +333,9 @@ function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
 /**
  * Derive a BIP86 spending account. The watch-only account returned by
  * watchOnlyAccount never retains the private account node.
+ *
+ * Takes the same arguments as deriveAccountFromSeed and throws for the same
+ * input. Call destroy on the result when signing is done.
  */
 export function deriveSigningAccountFromSeed(
   seed: Uint8Array,
@@ -458,6 +493,9 @@ export function deriveSigningAccountFromSeed(
  *
  * The key must carry the network's HD public version bytes, sit at depth 3,
  * and must not contain private key material.
+ *
+ * Throws for an extended private key, a key whose version bytes belong to
+ * another network, and a key at any other depth.
  */
 export function importWatchOnlyAccount(
   extendedKey: string,

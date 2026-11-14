@@ -6,6 +6,13 @@
 // writing leaves: OP_CAT is enabled, and the BIP 342 OP_SUCCESS rule is gone,
 // so a reserved or unknown opcode makes a leaf fail instead of succeed.
 
+/**
+ * Compile and decompile scripts, Pearl's one-line disassembly, and script
+ * number decoding.
+ *
+ * @module
+ */
+
 import { OP_CODES, OPCODE_NAMES } from './opcodes.js';
 import { scriptPush } from './script.js';
 
@@ -113,6 +120,7 @@ const toHex = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString
 // "10" to "16" are both OP_10 to OP_16 and a one-byte push of 0x10 to 0x16.
 const AMBIGUOUS_WORD = /^1[0-6]$/;
 
+/** Options for scriptToAsm. */
 export interface ScriptToAsmOptions {
   /**
    * Print the words DisasmString leaves ambiguous in a form scriptFromAsm
@@ -220,8 +228,11 @@ export function isPushOnlyScript(script: Uint8Array): boolean {
   return error === null && tokens.every((token) => token.opcode <= OP_CODES.OP_16);
 }
 
+/** Options for decodeScriptNumber and decodeScriptNumberBigInt. */
 export interface DecodeScriptNumberOptions {
+  /** Refuse an encoding longer than the number needs. True unless given. */
   requireMinimal?: boolean;
+  /** Most bytes the encoding may have. 4 unless given; lock times use 5. */
   maxLength?: number;
 }
 
