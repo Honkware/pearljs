@@ -440,24 +440,30 @@ describe('wallet: restart and restore', () => {
   });
 });
 
+function fakeNotifier() {
+  const listeners = new Map<string, (value: never) => void>();
+  let onBlock: ((event: BlockEvent) => void) | undefined;
+  const watched: string[] = [];
+  const notifier: WalletNotifier = {
+    on: (<K extends keyof PearlWsEvents>(event: K, listener: (value: PearlWsEvents[K]) => void) => {
+      listeners.set(event, listener as (value: never) => void);
+      return () => listeners.delete(event);
+    }) as WalletNotifier['on'],
+    watchBlocks: (options) => {
+      onBlock = options.onBlock;
+      return () => undefined;
+    },
+    notifyReceived: async (addresses) => void watched.push(...addresses),
+  };
+  const send = (event: 'recvtx' | 'redeemingtx', value: PearlWsEvents['recvtx']): void => (listeners.get(event) as (value: PearlWsEvents['recvtx']) => void)(value);
+  return { notifier, listeners, watched, send, block: (event: BlockEvent) => onBlock!(event) };
+}
+
 describe('wallet: notifications', () => {
   it('takes payments and blocks from a notifier as they happen', async () => {
     const chain = new FakeChain();
     const wallet = await newWallet(chain);
-    const listeners = new Map<string, (value: never) => void>();
-    let onBlock: ((event: BlockEvent) => void) | undefined;
-    const watched: string[] = [];
-    const notifier: WalletNotifier = {
-      on: (<K extends keyof PearlWsEvents>(event: K, listener: (value: PearlWsEvents[K]) => void) => {
-        listeners.set(event, listener as (value: never) => void);
-        return () => listeners.delete(event);
-      }) as WalletNotifier['on'],
-      watchBlocks: (options) => {
-        onBlock = options.onBlock;
-        return () => undefined;
-      },
-      notifyReceived: async (addresses) => void watched.push(...addresses),
-    };
+    const { notifier, listeners, watched, block } = fakeNotifier();
     const stop = wallet.watch({ notifier, intervalMs: 3_600_000 });
     const address = await wallet.receiveAddress();
     expect(watched).toContain(address);
@@ -467,12 +473,29 @@ describe('wallet: notifications', () => {
     (listeners.get('recvtx') as (value: PearlWsEvents['recvtx']) => void)({ transaction: payment.toHex(), block: null });
     await received;
     expect(wallet.balance().unconfirmed).toBe(prl('1'));
-    const [block] = chain.mine();
-    onBlock!({ type: 'connected', hash: block!.hash, height: block!.height, time: 0 });
+    const [mined] = chain.mine();
+    block({ type: 'connected', hash: mined!.hash, height: mined!.height, time: 0 });
     await confirmed;
     expect(wallet.balance().confirmed).toBe(prl('1'));
     expect(chain.calls.get('getHistory') ?? 0).toBe(0);
     stop();
     await wallet.close();
+  });
+
+  it('conflicts a pending send at once when a notification shows its double spend confirmed', async () => {
+    const { chain, wallet } = await funded(['10']);
+    const { notifier, send } = fakeNotifier();
+    const stop = wallet.watch({ notifier, intervalMs: 3_600_000 });
+    const sent = await wallet.send({ recipients: [{ address: STRANGER, amount: prl('3') }], feeRate: 2000n });
+    const rival = chain.doubleSpend(sent.txid);
+    const block = chain.blocks[chain.height]!;
+    const conflicts: WalletEvents['conflict'][] = [];
+    wallet.on('conflict', (event) => conflicts.push(event));
+    send('redeemingtx', { transaction: rival.toHex(), block: { hash: block.hash, height: block.height, index: 1, time: 0 } });
+    // Queued behind the notification, so it has been handled once this returns.
+    await wallet.exportState();
+    expect(conflicts).toEqual([{ txid: sent.txid, status: 'conflicted', by: rival.getId() }]);
+    expect(wallet.balance().total).toBe(0n);
+    stop();
   });
 });
