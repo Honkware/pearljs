@@ -5,8 +5,11 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  OysterRpc,
   PearlRpcError,
   PearlWsClient,
+  pearldChainClient,
+  prlAmount,
   parseTransaction,
   transactionId,
   type BlockEvent,
@@ -17,6 +20,7 @@ import {
   type TxAccepted,
 } from '../src/index.js';
 import fixtureFile from './fixtures/ws-frames.json' with { type: 'json' };
+import { fixture as rpcFixture } from './rpc-helpers.js';
 import { bytesToHex } from './vector-helpers.js';
 
 interface Fixture {
@@ -201,11 +205,15 @@ describe('pearld websocket client', () => {
     const ws = client();
     await Promise.all([ws.connect(), serve()]);
     const socket = last();
+    // A bare bigint is a count, here of blocks; only prlAmount is an amount.
     const balance = ws.call('estimatefee', [6n], { amounts: ['result'] });
     await flush();
-    expect(socket.raw.at(-1)).toContain('"params":[0.00000006]');
+    expect(socket.raw.at(-1)).toContain('"params":[6]');
     socket.push(`{"jsonrpc":"1.0","result":0.00012345,"error":null,"id":${socket.sent.at(-1)!.id}}`);
     expect(await balance).toBe(12345n);
+    void ws.call('testmempoolaccept', [['00'], prlAmount(10000000n)]).catch(() => {});
+    await flush();
+    expect(socket.raw.at(-1)).toContain('"params":[["00"],0.1]');
     const session = ws.session();
     await flush();
     socket.push(replyFrame('reply-session', socket.sent.at(-1)!.id));
@@ -569,6 +577,53 @@ describe('pearld websocket client', () => {
     controller.abort();
     await expect(aborted).rejects.toThrow(/aborted/);
     await ws.close();
+  });
+
+  it('runs the typed pearld methods of the fetch client over the socket', async () => {
+    const ws = client();
+    await Promise.all([ws.connect(), serve()]);
+    const socket = last();
+    const answer = async (name: string) => {
+      await flush();
+      socket.push(rpcFixture(name).body.trim().replace(/"id":\d+}$/, `"id":${socket.sent.at(-1)!.id}}`));
+    };
+    const block = ws.getBlockWithTransactions('00'.repeat(32));
+    await answer('getblock-transactions');
+    expect((await block).rawtx[0]!.vout[0]!.value).toBe(0n);
+    expect(socket.sent.at(-1)).toMatchObject({ method: 'getblock', params: ['00'.repeat(32), 2] });
+
+    const rejected = ws.submitBlock('00').catch((e: unknown) => e);
+    await answer('submitblock-rejected');
+    expect(await rejected).toMatchObject({ kind: 'rpc', code: -25, method: 'submitblock' });
+
+    const template = ws.getBlockTemplate();
+    await answer('getblocktemplate');
+    expect((await template).coinbasevalue).toBe(BigInt(rpcFixture('getblocktemplate').expect!.coinbaseValue as string));
+
+    // The chain client for the invoice monitor takes the websocket client as it takes the fetch one.
+    const tip = pearldChainClient(ws).getTip();
+    await answer('getblockchaininfo');
+    expect((await tip).height).toBe(321);
+
+    const balance = new OysterRpc(ws).getBalance();
+    await answer('getbalance');
+    expect(await balance).toBe(BigInt(rpcFixture('getbalance').expect!.balance as string));
+    await ws.close();
+  });
+
+  it('keeps the password out of a malformed URL error and off plain ws to another host', () => {
+    let error: unknown;
+    try {
+      client({ url: 'wss://alice:hunter2@127.0.0.1:port' });
+    } catch (err) {
+      error = err;
+    }
+    expect(error).toBeInstanceOf(TypeError);
+    expect(JSON.stringify([String(error), Object.values(error as object)])).not.toContain('hunter2');
+    expect(() => client({ url: 'ws://node.example:44107' })).toThrow('refusing to send the RPC password');
+    expect(() => client({ url: 'http://node.example:44107' })).toThrow('refusing to send the RPC password');
+    expect(() => client({ url: 'ws://node.example:44107', allowInsecureAuth: true })).not.toThrow();
+    expect(() => client({ url: 'ws://127.0.0.1:18334' })).not.toThrow();
   });
 
   it('leaves no unhandled rejection when watchers outlive a failed connection', async () => {

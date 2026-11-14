@@ -8,10 +8,25 @@
 // other first message or on wrong credentials without a reply, and drops the
 // client after 10 seconds. It answers commands concurrently, so replies are
 // matched to requests by id, and it sends notifications with a null id.
+//
+// PearlWsClient carries the same typed methods as PearldClient, from the
+// mixin in rpc.ts, so `ws.getBlock(hash)` works over the socket.
 
-import { formatPearl } from './amount.js';
 import { blockHashHex, parseBlockHeader, type PearlBlockHeader } from './blockheader.js';
-import { PearlRpcError, decimalToGrain, parseJson, type CallOptions, type RpcErrorKind, type TxRawResult } from './rpc.js';
+import {
+  PearlRpcError,
+  basicAuth,
+  decimalToGrain,
+  encodeJson,
+  parseJson,
+  pearldMethods,
+  rpcEndpoint,
+  rpcError,
+  type CallOptions,
+  type Rpc,
+  type RpcErrorKind,
+  type TxRawResult,
+} from './rpc.js';
 
 /** Websocket path of pearld and Oyster. */
 export const PEARLD_WS_PATH = '/ws';
@@ -54,12 +69,12 @@ export interface PearlWsClientOptions {
    * connection, so the client refuses them.
    */
   readonly server?: 'pearld' | 'oyster';
+  /** Both logins send the password as it is, so ws:// is refused for any host but loopback unless this is set. */
+  readonly allowInsecureAuth?: boolean;
 }
 
-export interface WsCallOptions extends CallOptions {
-  readonly signal?: AbortSignal;
-  readonly timeout?: number;
-}
+/** The websocket client takes the same per-call options as the fetch clients. */
+export type WsCallOptions = CallOptions;
 
 /** A transaction output, named as in pearljs's RPC results. */
 export interface OutPointRef {
@@ -181,8 +196,11 @@ const OPEN = 1;
 const BLOCK_EVENTS = ['blockconnected', 'blockdisconnected'] as const;
 const FILTERED_EVENTS = ['filteredblockconnected', 'filteredblockdisconnected'] as const;
 
-/** pearld's websocket RPC with typed notifications, reconnect and resubscription. */
-export class PearlWsClient {
+/**
+ * pearld's websocket RPC with typed notifications, reconnect and
+ * resubscription, without the typed methods; PearlWsClient adds those.
+ */
+export class JsonRpcWsClient implements Rpc {
   readonly #url: string;
   readonly #origin: string;
   readonly #username: string;
@@ -221,15 +239,13 @@ export class PearlWsClient {
   readonly #spent = new Map<string, OutPointRef>();
 
   constructor(options: PearlWsClientOptions) {
-    const url = new URL(options.url);
+    const { url, username, password } = rpcEndpoint(options);
     if (url.protocol === 'https:') url.protocol = 'wss:';
     else if (url.protocol === 'http:') url.protocol = 'ws:';
     if (url.protocol !== 'ws:' && url.protocol !== 'wss:') throw new TypeError(`not a websocket URL: ${url.protocol}`);
     if (url.pathname === '/' || url.pathname === '') url.pathname = PEARLD_WS_PATH;
-    this.#username = options.username ?? decodeURIComponent(url.username);
-    this.#password = options.password ?? decodeURIComponent(url.password);
-    url.username = '';
-    url.password = '';
+    this.#username = username;
+    this.#password = password;
     this.#url = url.href;
     this.#origin = url.host;
     const ctor = options.WebSocket ?? (globalThis as { WebSocket?: unknown }).WebSocket;
@@ -255,10 +271,12 @@ export class PearlWsClient {
     }
   }
 
-  /** Calls any method. bigint params are sent as exact PRL amounts. */
+  /** Calls any method. Wrap amounts among the params in prlAmount. */
   async call<T = unknown>(method: string, params: readonly unknown[] = [], options: WsCallOptions = {}): Promise<T> {
     const amounts = new Set(options.amounts);
-    return this.#call(method, params, (text) => resultOf(text, amounts), options) as Promise<T>;
+    const integers = new Set(options.integers);
+    const parse = (text: string) => (parseJson(text, amounts, integers) as { result: unknown }).result;
+    return this.#call(method, params, parse, options) as Promise<T>;
   }
 
   on<K extends keyof PearlWsEvents>(event: K, listener: (value: PearlWsEvents[K]) => void): () => void {
@@ -378,8 +396,11 @@ export class PearlWsClient {
   }
 
   /** pearld's random id for this connection; it changes when the client reconnects. */
-  session(): Promise<bigint> {
-    return this.#call('session', [], sessionId, {}) as Promise<bigint>;
+  async session(): Promise<bigint> {
+    // Session ids are random uint64s, past what a JS number holds exactly.
+    const { sessionid } = await this.call<{ sessionid?: unknown }>('session', [], { integers: ['sessionid'] });
+    if (typeof sessionid !== 'bigint') throw new PearlRpcError('response', 'session', 'no sessionid in the reply');
+    return sessionid;
   }
 
   /** Stops reconnecting, fails pending calls and closes the socket. */
@@ -483,7 +504,7 @@ export class PearlWsClient {
     let socket: Socket;
     try {
       const auth = this.#auth === 'header' && (this.#username || this.#password);
-      const headers = auth ? { Authorization: `Basic ${base64(`${this.#username}:${this.#password}`)}` } : undefined;
+      const headers = auth ? { Authorization: basicAuth(this.#username, this.#password) } : undefined;
       const init =
         headers === undefined
           ? this.#init
@@ -843,6 +864,13 @@ export class PearlWsClient {
   }
 }
 
+/** pearld's websocket client: every typed method of PearldClient, plus notifications. */
+export class PearlWsClient extends /* @__PURE__ */ pearldMethods(JsonRpcWsClient) {
+  constructor(options: PearlWsClientOptions) {
+    super(options);
+  }
+}
+
 // Decoding
 
 const TXACCEPTED_RE = /"params"\s*:\s*\[\s*"([0-9a-f]{64})"\s*,\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*\]/;
@@ -913,25 +941,8 @@ function int(value: unknown, label: string): number {
   return value as number;
 }
 
-function resultOf(text: string, amounts: ReadonlySet<string>): unknown {
-  return (parseJson(text, amounts) as { result: unknown }).result;
-}
-
-// session ids are random uint64s, past what a JS number holds exactly.
-function sessionId(text: string): bigint {
-  const m = /"sessionid"\s*:\s*(\d+)/.exec(text);
-  if (m === null) throw new Error('no sessionid in the reply');
-  return BigInt(m[1]!);
-}
-
 function isError(error: unknown): error is { code?: unknown; message?: unknown } {
   return typeof error === 'object' && error !== null;
-}
-
-function rpcError(method: string, error: { code?: unknown; message?: unknown }): PearlRpcError {
-  const code = typeof error.code === 'number' ? error.code : 0;
-  const message = typeof error.message === 'string' && error.message !== '' ? error.message : 'unknown error';
-  return new PearlRpcError('rpc', method, `${message} (code ${code})`, { code });
 }
 
 function wireOutPoint(op: OutPointRef): { hash: string; index: number } {
@@ -942,25 +953,8 @@ function outPointKey(op: OutPointRef): string {
   return `${op.txid}:${op.vout}`;
 }
 
-// JSON.stringify with bigint grains written as exact PRL numbers.
-function encodeJson(value: unknown): string {
-  if (typeof value === 'bigint') return formatPearl(value);
-  if (Array.isArray(value)) return `[${value.map((v) => encodeJson(v === undefined ? null : v)).join(',')}]`;
-  if (typeof value === 'object' && value !== null) {
-    const fields = Object.entries(value).filter(([, v]) => v !== undefined);
-    return `{${fields.map(([k, v]) => `${JSON.stringify(k)}:${encodeJson(v)}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
 function decode(data: ArrayBuffer | ArrayBufferView): string {
   return new TextDecoder().decode(data);
-}
-
-function base64(text: string): string {
-  let binary = '';
-  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
-  return btoa(binary);
 }
 
 function hexBytes(hex: string): Uint8Array {

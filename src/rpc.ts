@@ -5,11 +5,18 @@
 // with a self-signed rpc.cert, and answer with HTTP 200 and a JSON-RPC 1.0
 // envelope whose "error" carries the failure. There are no cookie files.
 // Amounts arrive as PRL JSON numbers; they are converted to bigint grain from
-// the response text, never through a JS number, and bigint params are sent
-// back as exact PRL numbers.
+// the response text, never through a JS number. Amount params are wrapped in
+// prlAmount, which writes them as exact PRL numbers; a bare bigint param is
+// written as the integer it is.
+//
+// The typed methods are mixins over anything with `call`, so the same set
+// serves the fetch clients here, the websocket client in ws.ts, and any
+// other transport through PearldRpc and OysterRpc.
 
 import { formatPearl, parsePearl } from './amount.js';
 import type { AddressPayment, BlockRef, ChainClient, ChainTransaction } from './client.js';
+import { getBlockFilter } from './gcs.js';
+import type { BlockFilter } from './gcs.js';
 import type { PearlNetworkName } from './networks.js';
 
 /** pearld's default RPC port per network (node/params.go). */
@@ -30,7 +37,22 @@ export const OYSTER_RPC_PORTS: Readonly<Record<PearlNetworkName, number>> = {
   simnet: 18554,
 };
 
-export interface RpcClientOptions {
+/**
+ * Where Pearl's desktop wallet runs its Oyster, on mainnet and testnet2
+ * alike: plain HTTP on loopback (--rpclisten=127.0.0.1:8335 --noservertls),
+ * in SPV mode (--usespv). The username and password are the wallet's own
+ * settings, not constants.
+ */
+export const DESKTOP_OYSTER_URL = 'http://127.0.0.1:8335';
+
+/** Applied when neither the call nor the client names a timeout, in ms. */
+export const DEFAULT_RPC_TIMEOUT = 60_000;
+
+// Calls that are slow by design get no default timeout: generate proves every
+// block, importprivkey rescans, and getblocktemplate can long-poll.
+const UNBOUNDED_METHODS = new Set(['generate', 'importprivkey', 'getblocktemplate']);
+
+export interface HttpTransportOptions {
   /** Server URL, e.g. https://127.0.0.1:44107. Credentials in the URL are moved to the auth header. */
   readonly url: string | URL;
   readonly username?: string;
@@ -42,14 +64,68 @@ export interface RpcClientOptions {
    * undici Agent that trusts the server's rpc.cert.
    */
   readonly init?: RequestInit & Record<string, unknown>;
+  /** Limit per request in ms, 0 for none. Default DEFAULT_RPC_TIMEOUT, and none for generate, importprivkey and getblocktemplate. */
+  readonly timeout?: number;
+  /**
+   * Basic auth over plain http:// sends the password in the clear, so it is
+   * refused for any host but loopback unless this is set.
+   */
+  readonly allowInsecureAuth?: boolean;
+}
+
+export interface RetryOptions {
+  /** Tries after the first. Default 2. */
+  readonly attempts?: number;
+  /** Delay before the first retry in ms; it doubles each time. Default 250. */
+  readonly delay?: number;
+  /** Default 5000. */
+  readonly maxDelay?: number;
+}
+
+export interface BatchOptions {
+  /** How long to collect calls before sending them, in ms. Default 0, which gathers the calls of one tick. */
+  readonly wait?: number;
+  /** Most calls in one request. Default 100. */
+  readonly maxSize?: number;
+}
+
+export interface RpcClientOptions extends Omit<HttpTransportOptions, 'url'> {
+  /** Server URL; shorthand for `transport: httpTransport(...)` with the other HTTP options given here. */
+  readonly url?: string | URL;
+  /** Where requests go instead of `url`, e.g. a fallbackTransport. */
+  readonly transport?: RpcTransport;
+  /**
+   * Retry read-only methods after a network failure or an HTTP 429 or 5xx,
+   * with a doubling delay. Off by default. Methods that send, sign, create
+   * addresses or change server state are never retried.
+   */
+  readonly retry?: boolean | number | RetryOptions;
+  /**
+   * Send calls made close together as one JSON-RPC batch. pearld accepts
+   * batches; Oyster does not, and OysterClient refuses the option. A call
+   * with its own signal or timeout is sent alone.
+   */
+  readonly batch?: boolean | BatchOptions;
 }
 
 export interface CallOptions {
   /**
    * Object keys whose numeric values are PRL amounts, returned as bigint
-   * grain. "result" names the result itself, as in getbalance.
+   * grain. "result" names the result itself, as in getbalance, and "*" every
+   * number inside the result, as in listaccounts.
    */
   readonly amounts?: readonly string[];
+  /** Object keys whose integer values are returned as bigint, digit for digit: grain counts and 64-bit ids. */
+  readonly integers?: readonly string[];
+  /** Abandons the call when aborted. */
+  readonly signal?: AbortSignal;
+  /** Limit for this call in ms, 0 for none. */
+  readonly timeout?: number;
+}
+
+/** Anything that can make a JSON-RPC call: the fetch clients, the websocket client, or your own. */
+export interface Rpc {
+  call<T = unknown>(method: string, params?: readonly unknown[], options?: CallOptions): Promise<T>;
 }
 
 export type RpcErrorKind = 'rpc' | 'http' | 'network' | 'response';
@@ -84,8 +160,10 @@ export const RPC_ERROR_CODES = {
   WALLET: -4,
   INVALID_ADDRESS_OR_KEY: -5,
   NO_TX_INFO: -5,
+  BLOCK_NOT_FOUND: -5,
   INSUFFICIENT_FUNDS: -6,
   INVALID_PARAMETER: -8,
+  CLIENT_NOT_CONNECTED: -9,
   DESERIALIZATION: -22,
   VERIFY: -25,
   TX_REJECTED: -26,
@@ -98,75 +176,439 @@ export const RPC_ERROR_CODES = {
   INTERNAL: -32603,
 } as const;
 
+/** A PRL amount among the params of a call; see prlAmount. */
+export class PrlAmount {
+  constructor(readonly grain: bigint) {
+    if (typeof grain !== 'bigint') throw new TypeError('a PRL amount is a bigint number of grains');
+  }
+}
+
+/**
+ * Marks a param as an amount in grains, sent as the exact PRL number the
+ * servers expect: `call('sendtoaddress', [address, prlAmount(150000000n), prlAmount(1000n)])`.
+ * A bare bigint is sent as an integer, which is right for heights and counts
+ * and wrong by a factor of 10^8 for an amount.
+ */
+export function prlAmount(grain: bigint): PrlAmount {
+  return new PrlAmount(grain);
+}
+
+/** JSON.stringify, with PrlAmount written as an exact PRL number and bigint as an exact integer. */
+export function encodeJson(value: unknown): string {
+  if (value instanceof PrlAmount) return formatPearl(value.grain);
+  if (typeof value === 'bigint') return value.toString();
+  if (Array.isArray(value)) return `[${value.map((v) => encodeJson(v === undefined ? null : v)).join(',')}]`;
+  if (value instanceof Uint8Array) return JSON.stringify(bytesToHex(value));
+  if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
+    const fields = Object.entries(value).filter(([, v]) => v !== undefined);
+    return `{${fields.map(([k, v]) => `${JSON.stringify(k)}:${encodeJson(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** The PearlRpcError for the "error" member of a reply. */
+export function rpcError(method: string, error: { code?: unknown; message?: unknown }): PearlRpcError {
+  // btcjson.RPCError tags both fields omitempty, so either can be missing.
+  const code = typeof error.code === 'number' ? error.code : 0;
+  const message = typeof error.message === 'string' && error.message !== '' ? error.message : 'unknown error';
+  return new PearlRpcError('rpc', method, `${message} (code ${code})`, { code });
+}
+
+/**
+ * The result in one reply's text, or the PearlRpcError the reply amounts to.
+ * `id` is the request's; null skips the check, for transports that have
+ * matched the reply already.
+ */
+export function readReply<T = unknown>(text: string, method: string, id: number | null, options: CallOptions = {}, origin = 'the server'): T {
+  let reply: unknown;
+  try {
+    reply = parseJson(text, new Set(options.amounts), new Set(options.integers));
+  } catch (err) {
+    const reason = text.trim() === '' ? 'an empty body' : (err as Error).message;
+    throw new PearlRpcError('response', method, `unreadable reply from ${origin}: ${reason}`, { cause: err });
+  }
+  if (isErrorReply(reply)) throw rpcError(method, reply.error);
+  if (typeof reply !== 'object' || reply === null || !('result' in reply)) {
+    throw new PearlRpcError('response', method, `expected a JSON-RPC reply, got ${JSON.stringify(text.slice(0, 120))}`);
+  }
+  const replyId = (reply as { id?: unknown }).id;
+  if (id !== null && replyId !== id) {
+    throw new PearlRpcError('response', method, `reply id ${JSON.stringify(replyId)} does not match request id ${id}`);
+  }
+  return (reply as { result: T }).result;
+}
+
+export interface RpcEndpoint {
+  /** The URL without credentials. */
+  readonly url: URL;
+  readonly username: string;
+  readonly password: string;
+}
+
+/**
+ * Splits a server URL from its credentials and refuses to send them in the
+ * clear to anything but loopback. Shared by the HTTP and websocket clients.
+ */
+export function rpcEndpoint(options: {
+  readonly url: string | URL;
+  readonly username?: string;
+  readonly password?: string;
+  readonly allowInsecureAuth?: boolean;
+}): RpcEndpoint {
+  let url: URL;
+  try {
+    url = new URL(options.url);
+  } catch {
+    // The URL constructor's error carries its input, which may hold the password.
+    throw new TypeError('invalid RPC URL (not shown, since it may hold credentials)');
+  }
+  const username = options.username ?? decodeURIComponent(url.username);
+  const password = options.password ?? decodeURIComponent(url.password);
+  // fetch and WebSocket refuse URLs with credentials, so they travel apart.
+  url.username = '';
+  url.password = '';
+  const plain = url.protocol === 'http:' || url.protocol === 'ws:';
+  if (plain && (username || password) && options.allowInsecureAuth !== true && !isLoopback(url.hostname)) {
+    throw new TypeError(
+      `refusing to send the RPC password to ${url.host} over ${url.protocol}//, which is not encrypted; use TLS or set allowInsecureAuth`,
+    );
+  }
+  return { url, username, password };
+}
+
+/** The value of an HTTP Basic Authorization header. */
+export function basicAuth(username: string, password: string): string {
+  let binary = '';
+  for (const byte of new TextEncoder().encode(`${username}:${password}`)) binary += String.fromCharCode(byte);
+  return `Basic ${btoa(binary)}`;
+}
+
+function isLoopback(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  return host === 'localhost' || host.endsWith('.localhost') || host === '::1' || /^127(\.\d{1,3}){3}$/.test(host);
+}
+
+// Transports
+
+export interface RpcRequestInfo {
+  /** For error messages, and for the default timeout. */
+  readonly method: string;
+  readonly signal?: AbortSignal;
+  readonly timeout?: number;
+}
+
+/** Carries request bodies to a server. httpTransport and fallbackTransport make them; a custom one can add signing, a proxy or a mock. */
+export interface RpcTransport {
+  /** host:port, for messages. */
+  readonly origin: string;
+  /** Sends one body and returns the reply text. Fails with a PearlRpcError of kind "network" or "http". */
+  send(body: string, request: RpcRequestInfo): Promise<string>;
+}
+
+/** POSTs to one pearld or Oyster with Basic auth. */
+export function httpTransport(options: HttpTransportOptions): RpcTransport {
+  const endpoint = rpcEndpoint(options);
+  if (endpoint.url.protocol !== 'http:' && endpoint.url.protocol !== 'https:') {
+    throw new TypeError(`not an HTTP URL: ${endpoint.url.protocol}`);
+  }
+  const url = endpoint.url.href;
+  const origin = endpoint.url.host;
+  const auth = endpoint.username || endpoint.password ? basicAuth(endpoint.username, endpoint.password) : undefined;
+  const fetcher = options.fetch ?? globalThis.fetch;
+  if (typeof fetcher !== 'function') throw new TypeError('no fetch implementation available');
+  const init = options.init ?? {};
+
+  return {
+    origin,
+    async send(body, request) {
+      const { method } = request;
+      const timeout = request.timeout ?? options.timeout ?? (UNBOUNDED_METHODS.has(method) ? 0 : DEFAULT_RPC_TIMEOUT);
+      const headers = new Headers(init.headers);
+      headers.set('Content-Type', 'application/json');
+      if (auth !== undefined) headers.set('Authorization', auth);
+
+      // One controller for the caller's signal, the client's and the timeout.
+      // The fetch is also raced against it, for a fetch that ignores signals.
+      const controller = new AbortController();
+      let timedOut = false;
+      const signals = [request.signal, init.signal].filter((s): s is AbortSignal => s !== undefined && s !== null);
+      const onAbort = () => controller.abort();
+      for (const signal of signals) {
+        if (signal.aborted) controller.abort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      }
+      const timer =
+        timeout > 0
+          ? setTimeout(() => {
+              timedOut = true;
+              controller.abort();
+            }, timeout)
+          : undefined;
+      const aborted = new Promise<never>((_, reject) => {
+        const fail = () => reject(new DOMException('The operation was aborted', 'AbortError'));
+        if (controller.signal.aborted) fail();
+        else controller.signal.addEventListener('abort', fail, { once: true });
+      });
+      aborted.catch(() => {});
+
+      try {
+        let response: Response;
+        let text: string;
+        try {
+          response = await Promise.race([fetcher(url, { ...init, method: 'POST', headers, body, signal: controller.signal }), aborted]);
+          text = await Promise.race([response.text(), aborted]);
+        } catch (err) {
+          const message = timedOut ? `no reply from ${origin} within ${timeout} ms` : networkMessage(err, origin);
+          throw new PearlRpcError('network', method, message, { cause: err });
+        }
+        // A server that answers an RPC error with an HTTP error status still gets its error read.
+        if (!response.ok && !holdsErrorReply(text)) {
+          throw new PearlRpcError('http', method, httpMessage(response, text, origin), { status: response.status });
+        }
+        return text;
+      } finally {
+        clearTimeout(timer);
+        for (const signal of signals) signal.removeEventListener('abort', onAbort);
+      }
+    },
+  };
+}
+
+export interface FallbackOptions {
+  /** Whether a failure moves on to the next transport. Default: every "network" and "http" failure. */
+  readonly shouldFallback?: (error: PearlRpcError) => boolean;
+}
+
+/**
+ * Tries each transport in order until one answers, in the style of viem's
+ * `fallback`. An RPC error reply is an answer and is not retried elsewhere,
+ * and a call the caller aborted stops at once. A send that timed out on one
+ * server may still have reached it: the next server can then answer that it
+ * already has the transaction.
+ */
+export function fallbackTransport(transports: readonly RpcTransport[], options: FallbackOptions = {}): RpcTransport {
+  if (transports.length === 0) throw new TypeError('fallbackTransport needs at least one transport');
+  const shouldFallback = options.shouldFallback ?? (() => true);
+  return {
+    origin: transports.map((t) => t.origin).join(', '),
+    async send(body, request) {
+      let last: unknown;
+      for (const transport of transports) {
+        try {
+          return await transport.send(body, request);
+        } catch (err) {
+          last = err;
+          if (request.signal?.aborted || !(err instanceof PearlRpcError) || !shouldFallback(err)) throw err;
+        }
+      }
+      throw last;
+    },
+  };
+}
+
+// Methods that only read, so sending them twice is harmless. Left out on
+// purpose: anything that sends or signs, getnewaddress and
+// getrawchangeaddress (each call takes an address), and getblocktemplate.
+const IDEMPOTENT_METHODS = new Set([
+  'chainsynced',
+  'decoderawtransaction',
+  'decodescript',
+  'estimatefee',
+  'getaccount',
+  'getaddressesbyaccount',
+  'getbalance',
+  'getbestblock',
+  'getbestblockhash',
+  'getblock',
+  'getblockchaininfo',
+  'getblockcount',
+  'getblockhash',
+  'getblockheader',
+  'getcfilter',
+  'getcfilterheader',
+  'getchaintips',
+  'getconnectioncount',
+  'getdifficulty',
+  'getheaders',
+  'getinfo',
+  'getmempoolinfo',
+  'getmininginfo',
+  'getnetworkhashps',
+  'getnetworkinfo',
+  'getpeerinfo',
+  'getrawmempool',
+  'getrawtransaction',
+  'getreceivedbyaddress',
+  'getsyncprogress',
+  'gettransaction',
+  'gettxout',
+  'gettxspendingprevout',
+  'getunconfirmedbalance',
+  'listaccounts',
+  'listaddresstransactions',
+  'listalltransactions',
+  'listlockunspent',
+  'listreceivedbyaddress',
+  'listsinceblock',
+  'listtransactions',
+  'listunspent',
+  'searchrawtransactions',
+  'testmempoolaccept',
+  'validateaddress',
+  'verifymessage',
+  'walletislocked',
+]);
+
+interface Queued {
+  readonly id: number;
+  readonly method: string;
+  readonly body: string;
+  readonly options: CallOptions;
+  readonly resolve: (value: unknown) => void;
+  readonly reject: (error: unknown) => void;
+}
+
 /** A bare JSON-RPC client; PearldClient and OysterClient add typed methods. */
-export class JsonRpcClient {
-  readonly #url: string;
-  readonly #origin: string;
-  readonly #auth: string | undefined;
-  readonly #fetch: typeof fetch;
-  readonly #init: RequestInit & Record<string, unknown>;
+export class JsonRpcClient implements Rpc {
+  readonly #transport: RpcTransport;
+  readonly #retry: Required<RetryOptions> | null;
+  readonly #batch: Required<BatchOptions> | null;
+  #queue: Queued[] = [];
+  #flushTimer: ReturnType<typeof setTimeout> | undefined;
   #id = 0;
 
   constructor(options: RpcClientOptions) {
-    const url = new URL(options.url);
-    const username = options.username ?? decodeURIComponent(url.username);
-    const password = options.password ?? decodeURIComponent(url.password);
-    // fetch refuses URLs with credentials, so they travel in the header only.
-    url.username = '';
-    url.password = '';
-    this.#url = url.href;
-    this.#origin = url.host;
-    this.#auth = username || password ? `Basic ${base64(`${username}:${password}`)}` : undefined;
-    const fetcher = options.fetch ?? globalThis.fetch;
-    if (typeof fetcher !== 'function') throw new TypeError('no fetch implementation available');
-    this.#fetch = fetcher;
-    this.#init = options.init ?? {};
+    const { url, transport, retry = false, batch = false, ...http } = options;
+    if ((url === undefined) === (transport === undefined)) throw new TypeError('give either url or transport');
+    this.#transport = transport ?? httpTransport({ ...http, url: url! });
+    this.#retry =
+      retry === false
+        ? null
+        : { attempts: 2, delay: 250, maxDelay: 5000, ...(typeof retry === 'number' ? { attempts: retry } : retry === true ? {} : retry) };
+    this.#batch = batch === false ? null : { wait: 0, maxSize: 100, ...(batch === true ? {} : batch) };
   }
 
-  /** Calls any method. bigint params are sent as exact PRL amounts. */
+  /** Calls any method. Wrap amounts among the params in prlAmount. */
   async call<T = unknown>(method: string, params: readonly unknown[] = [], options: CallOptions = {}): Promise<T> {
     const id = ++this.#id;
     // pearld rejects requests without params or with a null id.
     const body = encodeJson({ jsonrpc: '1.0', id, method, params });
-    const headers = new Headers(this.#init.headers);
-    headers.set('Content-Type', 'application/json');
-    if (this.#auth !== undefined) headers.set('Authorization', this.#auth);
-
-    let response: Response;
-    try {
-      response = await this.#fetch(this.#url, { ...this.#init, method: 'POST', headers, body });
-    } catch (err) {
-      throw new PearlRpcError('network', method, networkMessage(err, this.#origin), { cause: err });
+    const alone = options.signal !== undefined || options.timeout !== undefined || UNBOUNDED_METHODS.has(method);
+    if (this.#batch === null || alone) {
+      const info: RpcRequestInfo = {
+        method,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
+        ...(options.timeout === undefined ? {} : { timeout: options.timeout }),
+      };
+      const text = await this.#send(body, info, IDEMPOTENT_METHODS.has(method));
+      return readReply<T>(text, method, id, options, this.#transport.origin);
     }
-    const text = await response.text();
-    const amounts = new Set(options.amounts);
-    if (!response.ok) {
-      let reply: unknown;
-      try {
-        reply = parseJson(text, amounts);
-      } catch {
-        // Not JSON: report the HTTP failure.
-      }
-      if (isErrorReply(reply)) throw rpcError(method, reply.error);
-      throw new PearlRpcError('http', method, httpMessage(response, text, this.#origin), { status: response.status });
-    }
-    let reply: unknown;
-    try {
-      reply = parseJson(text, amounts);
-    } catch (err) {
-      const reason = text.trim() === '' ? 'an empty body' : (err as Error).message;
-      throw new PearlRpcError('response', method, `unreadable reply from ${this.#origin}: ${reason}`, { cause: err });
-    }
-    if (typeof reply !== 'object' || reply === null || !('result' in reply)) {
-      throw new PearlRpcError('response', method, `expected a JSON-RPC reply, got ${JSON.stringify(text.slice(0, 120))}`);
-    }
-    if (isErrorReply(reply)) throw rpcError(method, reply.error);
-    const replyId = (reply as { id?: unknown }).id;
-    if (replyId !== id) {
-      throw new PearlRpcError('response', method, `reply id ${JSON.stringify(replyId)} does not match request id ${id}`);
-    }
-    return (reply as { result: T }).result;
+    return new Promise<T>((resolve, reject) => {
+      this.#queue.push({ id, method, body, options, resolve: resolve as (value: unknown) => void, reject });
+      if (this.#queue.length >= this.#batch!.maxSize) this.#flush();
+      else this.#flushTimer ??= setTimeout(() => this.#flush(), this.#batch!.wait);
+    });
   }
+
+  async #send(body: string, info: RpcRequestInfo, idempotent: boolean): Promise<string> {
+    const retry = idempotent ? this.#retry : null;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.#transport.send(body, info);
+      } catch (err) {
+        if (retry === null || attempt >= retry.attempts || info.signal?.aborted || !isTransient(err)) throw err;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(retry.maxDelay, retry.delay * 2 ** attempt)));
+      }
+    }
+  }
+
+  #flush(): void {
+    clearTimeout(this.#flushTimer);
+    this.#flushTimer = undefined;
+    const entries = this.#queue;
+    this.#queue = [];
+    if (entries.length === 0) return;
+    const origin = this.#transport.origin;
+    const single = entries.length === 1;
+    const body = single ? entries[0]!.body : `[${entries.map((e) => e.body).join(',')}]`;
+    const method = single ? entries[0]!.method : 'batch';
+    this.#send(body, { method }, entries.every((e) => IDEMPOTENT_METHODS.has(e.method))).then(
+      (text) => {
+        // pearld answers a batch with an array in request order, and anything
+        // it could not read as a batch with one error object.
+        const replies = single ? [text] : splitJsonArray(text);
+        const byId = new Map<unknown, string>();
+        for (const reply of replies ?? []) {
+          try {
+            byId.set((JSON.parse(reply) as { id?: unknown }).id, reply);
+          } catch {
+            // Reported below, to the calls left without a reply.
+          }
+        }
+        for (const entry of entries) {
+          try {
+            if (replies === null) {
+              // readReply throws the error the server gave for the whole batch.
+              readReply(text, entry.method, null, {}, origin);
+              throw new PearlRpcError('response', entry.method, `expected a batch reply from ${origin}, got ${JSON.stringify(text.slice(0, 120))}`);
+            }
+            const reply = single ? text : byId.get(entry.id);
+            if (reply === undefined) {
+              throw new PearlRpcError('response', entry.method, `${origin} left this call out of its batch reply`);
+            }
+            entry.resolve(readReply(reply, entry.method, entry.id, entry.options, origin));
+          } catch (err) {
+            entry.reject(err);
+          }
+        }
+      },
+      (err: unknown) => {
+        for (const entry of entries) entry.reject(err instanceof PearlRpcError ? renamed(err, entry.method) : err);
+      },
+    );
+  }
+}
+
+function isTransient(err: unknown): boolean {
+  if (!(err instanceof PearlRpcError)) return false;
+  return err.kind === 'network' || (err.kind === 'http' && (err.status === 429 || (err.status ?? 0) >= 500));
+}
+
+// The same failure under another method's name, for the calls of a batch.
+function renamed(err: PearlRpcError, method: string): PearlRpcError {
+  return new PearlRpcError(err.kind, method, err.message.slice(err.method.length + 2), {
+    ...(err.code === undefined ? {} : { code: err.code }),
+    ...(err.status === undefined ? {} : { status: err.status }),
+    cause: err.cause,
+  });
+}
+
+// The texts of a JSON array's elements, so each batch reply keeps its own
+// digits for amount conversion. null when the text is not an array.
+function splitJsonArray(text: string): string[] | null {
+  const start = text.search(/\S/);
+  if (start < 0 || text[start] !== '[') return null;
+  const parts: string[] = [];
+  let depth = 0;
+  let from = start + 1;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === '"') {
+      for (i++; i < text.length && text[i] !== '"'; i++) if (text[i] === '\\') i++;
+    } else if (c === '[' || c === '{') {
+      depth++;
+    } else if (c === ']' || c === '}') {
+      depth--;
+      if (depth === 0) {
+        if (text.slice(from, i).trim() !== '') parts.push(text.slice(from, i));
+        return parts;
+      }
+    } else if (c === ',' && depth === 1) {
+      parts.push(text.slice(from, i));
+      from = i + 1;
+    }
+  }
+  return null;
 }
 
 // pearld results
@@ -189,7 +631,7 @@ export interface RpcVout {
 }
 
 export type RpcVin =
-  | { readonly coinbase: string; readonly txinwitness?: string[]; readonly sequence: number }
+  | { readonly coinbase: string; readonly sequence: number; /** The coinbase's witness, under this name on coinbase inputs only. */ readonly witness?: string[] }
   | {
       readonly txid: string;
       readonly vout: number;
@@ -330,103 +772,464 @@ export interface SearchOptions {
   readonly vinExtra?: boolean;
 }
 
-/** Typed methods for pearld. */
-export class PearldClient extends JsonRpcClient {
-  getBlockchainInfo(): Promise<BlockchainInfo> {
-    return this.call('getblockchaininfo');
-  }
+/** getblock with verbosity 1 (btcjson.GetBlockVerboseResult). */
+export interface BlockResult {
+  /** As the caller wrote it; pearld echoes the hash it was asked for. */
+  readonly hash: string;
+  readonly confirmations: number;
+  readonly size: number;
+  readonly strippedsize: number;
+  readonly vsize: number;
+  readonly height: number;
+  readonly version: number;
+  readonly versionHex: string;
+  readonly merkleroot: string;
+  /** Transaction ids, in block order. */
+  readonly tx: string[];
+  readonly time: number;
+  readonly bits: string;
+  readonly difficulty: number;
+  /** All zeros for the genesis block. */
+  readonly previousblockhash: string;
+  readonly nextblockhash?: string;
+  readonly proofcommitment: string;
+}
 
-  getBlockCount(): Promise<number> {
-    return this.call('getblockcount');
-  }
+/** getblock with verbosity 2. pearld puts the transactions under `rawtx`, where Bitcoin Core uses `tx`. */
+export interface BlockWithTransactionsResult extends Omit<BlockResult, 'tx'> {
+  readonly rawtx: TxRawResult[];
+}
 
-  getBestBlockHash(): Promise<string> {
-    return this.call('getbestblockhash');
-  }
+/** getbestblock, on pearld and Oyster. */
+export interface BestBlockResult {
+  readonly hash: string;
+  readonly height: number;
+}
 
-  getBlockHash(height: number): Promise<string> {
-    return this.call('getblockhash', [height]);
-  }
+export interface ChainTip {
+  readonly height: number;
+  readonly hash: string;
+  /** Blocks between this tip and the best chain; 0 for the best chain itself. */
+  readonly branchlen: number;
+  /** "active", "valid-fork", "valid-headers", "headers-only" or "invalid". */
+  readonly status: string;
+}
 
-  /** The serialized block, certificate first, as hex. */
-  getBlockHex(hash: string): Promise<string> {
-    return this.call('getblock', [hash, 0]);
-  }
+/** gettxspendingprevout. pearld looks in the mempool only, so a spend that has confirmed is not reported. */
+export interface TxSpendingPrevOut {
+  readonly txid: string;
+  readonly vout: number;
+  /** The mempool transaction spending the output, if there is one. */
+  readonly spendingtxid?: string;
+}
 
-  /** The serialized block as bytes, ready for parseBlock. */
-  async getRawBlock(hash: string): Promise<Uint8Array> {
-    return hexToBytes(await this.getBlockHex(hash));
-  }
+/** decoderawtransaction (btcjson.TxRawDecodeResult). */
+export interface DecodedTransaction {
+  readonly txid: string;
+  readonly version: number;
+  readonly locktime: number;
+  readonly vin: RpcVin[];
+  readonly vout: RpcVout[];
+}
 
-  getBlockHeader(hash: string): Promise<BlockHeaderResult> {
-    return this.call('getblockheader', [hash, true]);
-  }
+/** decodescript (btcjson.DecodeScriptResult). */
+export type DecodedScript = Omit<ScriptPubKeyResult, 'hex'>;
 
-  /** Mempool transactions only, unless pearld runs with --txindex. */
-  getRawTransactionHex(txid: string): Promise<string> {
-    return this.call('getrawtransaction', [txid, 0]);
-  }
+/** pearld's validateaddress (btcjson.ValidateAddressChainResult). Only `isvalid` is sent for an invalid address. */
+export interface ValidateAddressResult {
+  readonly isvalid: boolean;
+  readonly address?: string;
+  readonly iswitness?: boolean;
+  readonly witness_version?: number;
+  readonly witness_program?: string;
+}
 
-  getRawTransaction(txid: string): Promise<TxRawResult> {
-    return this.call('getrawtransaction', [txid, 1], { amounts: ['value'] });
-  }
+/** pearld's getinfo (btcjson.InfoChainResult). */
+export interface NodeInfo {
+  readonly version: number;
+  readonly protocolversion: number;
+  readonly blocks: number;
+  readonly timeoffset: number;
+  readonly connections: number;
+  readonly proxy: string;
+  readonly difficulty: number;
+  readonly testnet: boolean;
+  /** --minrelaytxfee, grain per 1000 vbytes. */
+  readonly relayfee: bigint;
+  readonly errors: string;
+}
 
-  /** Returns the txid. pearld ignores Bitcoin Core's maxfeerate argument, so none is sent. */
-  sendRawTransaction(tx: string | Uint8Array): Promise<string> {
-    return this.call('sendrawtransaction', [typeof tx === 'string' ? tx : bytesToHex(tx)]);
-  }
+/** getnetworkinfo (btcjson.GetNetworkInfoResult). */
+export interface NetworkInfo {
+  readonly version: number;
+  readonly subversion: string;
+  readonly protocolversion: number;
+  readonly localservices: string;
+  readonly localservicesnames: string[];
+  readonly localrelay: boolean;
+  readonly timeoffset: number;
+  readonly connections: number;
+  readonly connections_in: number;
+  readonly connections_out: number;
+  readonly networkactive: boolean;
+  readonly networks: {
+    readonly name: string;
+    readonly limited: boolean;
+    readonly reachable: boolean;
+    readonly proxy: string;
+    readonly proxy_randomize_credentials: boolean;
+  }[];
+  /** Grain per 1000 vbytes. */
+  readonly relayfee: bigint;
+  /** pearld reports its relay fee here too. */
+  readonly incrementalfee: bigint;
+  readonly localaddresses: { readonly address: string; readonly port: number; readonly score: number }[];
+  readonly warnings: string[];
+}
 
-  /**
-   * maxFeeRate is grain per 1000 vbytes. pearld refuses the call without it,
-   * and reads 0, sent when none is given, as its default of 10000000 (0.1
-   * PRL/kvB). A transaction above the rate is refused as "max-fee-exceeded".
-   */
-  async testMempoolAccept(txs: readonly (string | Uint8Array)[], maxFeeRate = 0n): Promise<TestMempoolAcceptResult[]> {
-    const hexes = txs.map((tx) => (typeof tx === 'string' ? tx : bytesToHex(tx)));
-    const results = await this.call<Omit<TestMempoolAcceptResult, 'allowed'>[]>('testmempoolaccept', [hexes, maxFeeRate], {
-      amounts: ['base', 'effective-feerate'],
-    });
-    return results.map((r) => ({ ...r, allowed: (r as { allowed?: boolean }).allowed === true }));
-  }
+/** getpeerinfo (btcjson.GetPeerInfoResult). */
+export interface PeerInfo {
+  readonly id: number;
+  readonly addr: string;
+  readonly addrlocal?: string;
+  readonly services: string;
+  readonly relaytxes: boolean;
+  readonly lastsend: number;
+  readonly lastrecv: number;
+  readonly bytessent: number;
+  readonly bytesrecv: number;
+  readonly conntime: number;
+  readonly timeoffset: number;
+  /** Microseconds, where Bitcoin Core reports seconds. */
+  readonly pingtime: number;
+  readonly pingwait?: number;
+  readonly version: number;
+  readonly subver: string;
+  readonly inbound: boolean;
+  readonly startingheight: number;
+  readonly currentheight?: number;
+  readonly banscore: number;
+  /** The peer's feefilter, grain per 1000 vbytes. */
+  readonly feefilter: bigint;
+  readonly syncnode: boolean;
+  readonly v2_connection: boolean;
+}
 
-  /**
-   * estimatefee: grain per 1000 bytes, for 1 to 25 blocks. It is 0 until
-   * pearld has seen transactions confirm, so floor it at the relay fee. A
-   * node that has connected fewer than three blocks answers with an error.
-   * pearld has no estimatesmartfee.
-   */
-  estimateFee(blocks: number): Promise<bigint> {
-    return this.call('estimatefee', [blocks], { amounts: ['result'] });
-  }
+/** getmininginfo (btcjson.GetMiningInfoResult). */
+export interface MiningInfo {
+  readonly blocks: number;
+  readonly currentblocksize: number;
+  readonly currentblockvsize: number;
+  readonly currentblocktx: number;
+  readonly difficulty: number;
+  readonly errors: string;
+  readonly generate: boolean;
+  readonly genproclimit: number;
+  readonly networkhashps: number;
+  readonly pooledtx: number;
+  readonly testnet: boolean;
+}
 
-  getMempoolInfo(): Promise<MempoolInfo> {
-    return this.call('getmempoolinfo');
-  }
+/** The request object of getblocktemplate (btcjson.TemplateRequest), template mode. */
+export interface BlockTemplateRequest {
+  /** "coinbasetxn" asks for a coinbase paying --miningaddr; pearld sends only `coinbasevalue` otherwise. */
+  readonly capabilities?: readonly string[];
+  /** Waits for a new template instead of returning the one this id names. */
+  readonly longpollid?: string;
+  readonly rules?: readonly string[];
+}
 
-  getRawMempool(): Promise<string[]> {
-    return this.call('getrawmempool', [false]);
-  }
+export interface BlockTemplateTransaction {
+  readonly data: string;
+  /** The witness transaction id. */
+  readonly hash: string;
+  readonly txid: string;
+  /** 1-based positions in `transactions` of the transactions this one spends. */
+  readonly depends: number[];
+  /** Grains. */
+  readonly fee: bigint;
+  readonly vsize: number;
+}
 
-  getRawMempoolVerbose(): Promise<Record<string, MempoolEntry>> {
-    return this.call('getrawmempool', [true], { amounts: ['fee'] });
-  }
+/** getblocktemplate (btcjson.GetBlockTemplateResult). */
+export interface BlockTemplate {
+  readonly bits: string;
+  readonly curtime: number;
+  readonly height: number;
+  readonly previousblockhash: string;
+  readonly vsizelimit?: number;
+  readonly transactions: BlockTemplateTransaction[];
+  readonly version: number;
+  readonly coinbaseaux?: { readonly flags: string };
+  readonly coinbasetxn?: BlockTemplateTransaction;
+  /** Subsidy plus fees, in grains. */
+  readonly coinbasevalue?: bigint;
+  readonly default_witness_commitment?: string;
+  readonly longpollid?: string;
+  readonly longpolluri?: string;
+  readonly submitold?: boolean;
+  readonly target?: string;
+  readonly expires?: number;
+  readonly maxtime?: number;
+  readonly mintime?: number;
+  readonly mutable?: string[];
+  readonly noncerange?: string;
+  readonly capabilities?: string[];
+  /** Pearl's addition: the certificate version a block at `height` must carry (1, 2 or 3). */
+  readonly requiredcertversion: number;
+}
 
-  /**
-   * null when the output is unknown or a block has spent it. pearld does not
-   * count spends that are still in the mempool, whatever includeMempool says;
-   * the flag only adds outputs of mempool transactions.
-   */
-  getTxOut(txid: string, vout: number, includeMempool = true): Promise<TxOutResult | null> {
-    return this.call('gettxout', [txid, vout, includeMempool], { amounts: ['value'] });
-  }
+export interface OutPointParam {
+  readonly txid: string;
+  readonly vout: number;
+}
 
-  /** Needs pearld with --addrindex and --txindex. Mempool transactions come last unless reversed. */
-  searchRawTransactions(address: string, options: SearchOptions = {}): Promise<SearchRawTransactionsResult[]> {
-    const { skip = 0, count = 100, reverse = false, vinExtra = false } = options;
-    return this.call('searchrawtransactions', [address, 1, skip, count, vinExtra ? 1 : 0, reverse], {
-      amounts: ['value'],
-    });
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- TypeScript requires this constructor shape of a mixin base.
+type RpcClass = abstract new (...args: any[]) => Rpc;
+
+/**
+ * Adds pearld's typed methods to a class with `call`. PearldClient,
+ * PearldRpc and PearlWsClient are built with it.
+ */
+export function pearldMethods<Base extends RpcClass>(Base: Base) {
+  abstract class PearldMethods extends Base {
+    getBlockchainInfo(): Promise<BlockchainInfo> {
+      return this.call('getblockchaininfo');
+    }
+
+    getBlockCount(): Promise<number> {
+      return this.call('getblockcount');
+    }
+
+    getBestBlockHash(): Promise<string> {
+      return this.call('getbestblockhash');
+    }
+
+    /** Height and hash of the tip from one snapshot. */
+    getBestBlock(): Promise<BestBlockResult> {
+      return this.call('getbestblock');
+    }
+
+    getBlockHash(height: number): Promise<string> {
+      return this.call('getblockhash', [height]);
+    }
+
+    /** The serialized block, certificate first, as hex. */
+    getBlockHex(hash: string): Promise<string> {
+      return this.call('getblock', [hash, 0]);
+    }
+
+    /** The serialized block as bytes, ready for parseBlock. */
+    async getRawBlock(hash: string): Promise<Uint8Array> {
+      return hexToBytes(await this.getBlockHex(hash));
+    }
+
+    /** The block's header fields, sizes and transaction ids. */
+    getBlock(hash: string): Promise<BlockResult> {
+      return this.call('getblock', [hash, 1]);
+    }
+
+    /** The block with every transaction decoded, output values in grains. */
+    getBlockWithTransactions(hash: string): Promise<BlockWithTransactionsResult> {
+      return this.call('getblock', [hash, 2], { amounts: ['value'] });
+    }
+
+    getBlockHeader(hash: string): Promise<BlockHeaderResult> {
+      return this.call('getblockheader', [hash, true]);
+    }
+
+    /**
+     * Headers after the first locator on the best chain, up to hashStop or
+     * 2000 of them. Each is hex of the block as serialized without its
+     * transactions: the certificate, then the 108-byte header.
+     */
+    getHeaders(blockLocators: readonly string[], hashStop = ''): Promise<string[]> {
+      return this.call('getheaders', [[...blockLocators], hashStop]);
+    }
+
+    getChainTips(): Promise<ChainTip[]> {
+      return this.call('getchaintips');
+    }
+
+    getDifficulty(): Promise<number> {
+      return this.call('getdifficulty');
+    }
+
+    /** Estimated network hashes per second over the last `blocks` blocks ending at `height`, -1 for the tip. */
+    getNetworkHashPs(blocks = 120, height = -1): Promise<number> {
+      return this.call('getnetworkhashps', [blocks, height]);
+    }
+
+    getMiningInfo(): Promise<MiningInfo> {
+      return this.call('getmininginfo');
+    }
+
+    /**
+     * A block template in template mode. `coinbasevalue` and each
+     * transaction's `fee` are grains; `requiredcertversion` says which
+     * certificate version the block must carry.
+     */
+    getBlockTemplate(request: BlockTemplateRequest = {}, options: Pick<CallOptions, 'signal' | 'timeout'> = {}): Promise<BlockTemplate> {
+      return this.call('getblocktemplate', [request], { ...options, integers: ['fee', 'coinbasevalue'] });
+    }
+
+    /**
+     * Submits a mined block. pearld answers a block it refuses with the
+     * string "rejected: ..." as a successful result; that becomes a
+     * PearlRpcError of kind "rpc" with code -25 here.
+     */
+    async submitBlock(block: string | Uint8Array): Promise<void> {
+      const result = await this.call<string | null>('submitblock', [toHex(block)]);
+      if (typeof result === 'string') throw new PearlRpcError('rpc', 'submitblock', result, { code: RPC_ERROR_CODES.VERIFY });
+    }
+
+    /**
+     * Mines blocks to --miningaddr and returns their hashes; regtest and
+     * simnet only. Every block is proven, seconds each, so no default
+     * timeout applies.
+     */
+    generate(blocks: number, options: Pick<CallOptions, 'signal' | 'timeout'> = {}): Promise<string[]> {
+      return this.call('generate', [blocks], options);
+    }
+
+    /** Mempool transactions only, unless pearld runs with --txindex. */
+    getRawTransactionHex(txid: string): Promise<string> {
+      return this.call('getrawtransaction', [txid, 0]);
+    }
+
+    getRawTransaction(txid: string): Promise<TxRawResult> {
+      return this.call('getrawtransaction', [txid, 1], { amounts: ['value'] });
+    }
+
+    decodeRawTransaction(tx: string | Uint8Array): Promise<DecodedTransaction> {
+      return this.call('decoderawtransaction', [toHex(tx)], { amounts: ['value'] });
+    }
+
+    decodeScript(script: string | Uint8Array): Promise<DecodedScript> {
+      return this.call('decodescript', [toHex(script)]);
+    }
+
+    /** Whether pearld can decode the address for its network. It never throws for a bad one. */
+    validateAddress(address: string): Promise<ValidateAddressResult> {
+      return this.call('validateaddress', [address]);
+    }
+
+    /** Returns the txid. pearld ignores Bitcoin Core's maxfeerate argument, so none is sent. */
+    sendRawTransaction(tx: string | Uint8Array): Promise<string> {
+      return this.call('sendrawtransaction', [toHex(tx)]);
+    }
+
+    /**
+     * maxFeeRate is grain per 1000 vbytes. pearld refuses the call without it,
+     * and reads 0, sent when none is given, as its default of 10000000 (0.1
+     * PRL/kvB). A transaction above the rate is refused as "max-fee-exceeded".
+     */
+    async testMempoolAccept(txs: readonly (string | Uint8Array)[], maxFeeRate = 0n): Promise<TestMempoolAcceptResult[]> {
+      const results = await this.call<Omit<TestMempoolAcceptResult, 'allowed'>[]>(
+        'testmempoolaccept',
+        [txs.map(toHex), prlAmount(maxFeeRate)],
+        { amounts: ['base', 'effective-feerate'] },
+      );
+      return results.map((r) => ({ ...r, allowed: (r as { allowed?: boolean }).allowed === true }));
+    }
+
+    /**
+     * estimatefee: grain per 1000 bytes, for 1 to 25 blocks. It is 0 until
+     * pearld has seen transactions confirm, so floor it at the relay fee. A
+     * node that has connected fewer than three blocks answers with an error
+     * of code -1, and so does this method for a server that answers -1, as
+     * Bitcoin Core's estimatefee did. pearld has no estimatesmartfee.
+     */
+    async estimateFee(blocks: number): Promise<bigint> {
+      const rate = await this.call<bigint>('estimatefee', [blocks], { amounts: ['result'] });
+      if (rate < 0n) throw new PearlRpcError('rpc', 'estimatefee', 'the server has no fee estimate', { code: RPC_ERROR_CODES.MISC });
+      return rate;
+    }
+
+    getMempoolInfo(): Promise<MempoolInfo> {
+      return this.call('getmempoolinfo');
+    }
+
+    getRawMempool(): Promise<string[]> {
+      return this.call('getrawmempool', [false]);
+    }
+
+    getRawMempoolVerbose(): Promise<Record<string, MempoolEntry>> {
+      return this.call('getrawmempool', [true], { amounts: ['fee'] });
+    }
+
+    /**
+     * null when the output is unknown or a block has spent it. pearld does not
+     * count spends that are still in the mempool, whatever includeMempool says;
+     * the flag only adds outputs of mempool transactions. getTxSpendingPrevOut
+     * finds the mempool spends.
+     */
+    getTxOut(txid: string, vout: number, includeMempool = true): Promise<TxOutResult | null> {
+      return this.call('gettxout', [txid, vout, includeMempool], { amounts: ['value'] });
+    }
+
+    /** The mempool transaction spending each output, if any. Spends that have confirmed are not found. */
+    getTxSpendingPrevOut(outputs: readonly OutPointParam[]): Promise<TxSpendingPrevOut[]> {
+      return this.call('gettxspendingprevout', [outputs.map(({ txid, vout }) => ({ txid, vout }))]);
+    }
+
+    /** Needs pearld with --addrindex and --txindex. Mempool transactions come last unless reversed. */
+    searchRawTransactions(address: string, options: SearchOptions = {}): Promise<SearchRawTransactionsResult[]> {
+      const { skip = 0, count = 100, reverse = false, vinExtra = false } = options;
+      return this.call('searchrawtransactions', [address, 1, skip, count, vinExtra ? 1 : 0, reverse], {
+        amounts: ['value'],
+      });
+    }
+
+    /**
+     * The block's BIP158 basic filter, decoded. With the filter header of the
+     * block before, it is also checked against getcfilterheader; see
+     * getBlockFilter. pearld needs its CF index, on unless --nocfilters.
+     */
+    getCFilter(blockHash: string, prevHeader?: string): Promise<BlockFilter> {
+      return getBlockFilter(this, blockHash, prevHeader);
+    }
+
+    /** The block's basic filter header, as hex in display order. */
+    getCFilterHeader(blockHash: string): Promise<string> {
+      return this.call('getcfilterheader', [blockHash, 0]);
+    }
+
+    getInfo(): Promise<NodeInfo> {
+      return this.call('getinfo', [], { amounts: ['relayfee'] });
+    }
+
+    getNetworkInfo(): Promise<NetworkInfo> {
+      return this.call('getnetworkinfo', [], { amounts: ['relayfee', 'incrementalfee'] });
+    }
+
+    getPeerInfo(): Promise<PeerInfo[]> {
+      return this.call('getpeerinfo', [], { integers: ['feefilter'] });
+    }
+
+    getConnectionCount(): Promise<number> {
+      return this.call('getconnectioncount');
+    }
+
+    /** addnode: "add" keeps the peer, "onetry" connects once, "remove" drops a kept peer. */
+    async addNode(address: string, command: 'add' | 'remove' | 'onetry'): Promise<void> {
+      await this.call('addnode', [address, command]);
+    }
+
+    /**
+     * pearld's node command. The target is an address, or for "disconnect"
+     * and "remove" a peer id; "connect" takes "perm" or "temp".
+     */
+    async node(command: 'connect' | 'remove' | 'disconnect', target: string | number, connect?: 'perm' | 'temp'): Promise<void> {
+      await this.call('node', connect === undefined ? [command, String(target)] : [command, String(target), connect]);
+    }
+
+    /** Asks pearld to shut down. It answers before it stops. */
+    stop(): Promise<string> {
+      return this.call('stop');
+    }
   }
+  return PearldMethods;
 }
 
 // Oyster results
@@ -445,84 +1248,509 @@ export interface ListUnspentResult {
 }
 
 /**
- * Typed methods for Oyster. Methods Oyster does not handle are passed through
- * to its pearld, so `call` reaches node methods too. Oyster has no PSBT
- * methods.
+ * One entry of listtransactions and its relatives
+ * (btcjson.ListTransactionsResult). A transaction lists a "send" for every
+ * output the wallet paid out and a "receive", "generate" or "immature" for
+ * every output paid to it; change lists nothing.
  */
-export class OysterClient extends JsonRpcClient {
-  /** A new P2TR address. Oyster only makes bech32m Taproot addresses. */
-  getNewAddress(account?: string): Promise<string> {
-    return this.call('getnewaddress', account === undefined ? [] : [account]);
-  }
-
-  /** Spendable balance in grains; account "*" is the whole wallet. */
-  getBalance(account = '*', minConf = 1): Promise<bigint> {
-    return this.call('getbalance', [account, minConf], { amounts: ['result'] });
-  }
-
-  getUnconfirmedBalance(account?: string): Promise<bigint> {
-    return this.call('getunconfirmedbalance', account === undefined ? [] : [account], { amounts: ['result'] });
-  }
-
-  /** Oyster refuses the address filter Bitcoin Core takes, so none is offered. */
-  listUnspent(minConf = 1, maxConf = 9999999): Promise<ListUnspentResult[]> {
-    return this.call('listunspent', [minConf, maxConf], { amounts: ['amount'] });
-  }
-
-  /** Oyster's BIP-322-style signature, base64; P2TR addresses only. */
-  signMessage(address: string, message: string): Promise<string> {
-    return this.call('signmessage', [address, message]);
-  }
-
-  verifyMessage(address: string, signature: string, message: string): Promise<boolean> {
-    return this.call('verifymessage', [address, signature, message]);
-  }
-
-  /** Unlocks for timeoutSeconds. In Oyster a timeout of 0 never relocks. */
-  async walletPassphrase(passphrase: string, timeoutSeconds: number): Promise<void> {
-    await this.call('walletpassphrase', [passphrase, timeoutSeconds]);
-  }
-
-  async walletLock(): Promise<void> {
-    await this.call('walletlock');
-  }
-
-  walletIsLocked(): Promise<boolean> {
-    return this.call('walletislocked');
-  }
-
+export interface WalletTransactionEntry {
+  readonly abandoned: boolean;
+  /** The receiving account; empty on sends. */
+  readonly account: string;
+  readonly address?: string;
+  /** Grains, negative on a send. */
+  readonly amount: bigint;
+  readonly blockhash?: string;
+  readonly blocktime?: number;
+  readonly category: 'send' | 'receive' | 'generate' | 'immature';
+  readonly confirmations: number;
   /**
-   * Sends from the default account and returns the txid. Oyster requires a
-   * fee rate, here in grain per 1000 bytes, where Bitcoin Core has none.
+   * On sends only, the fee of the whole transaction in grains, negative. It
+   * is 0 unless every input is the wallet's.
    */
-  sendToAddress(address: string, amount: bigint, feeRatePerKb: bigint): Promise<string> {
-    return this.call('sendtoaddress', [address, amount, feeRatePerKb]);
+  readonly fee?: bigint;
+  /** Set on the outputs of a coinbase. */
+  readonly generated?: boolean;
+  readonly time: number;
+  readonly timereceived: number;
+  readonly trusted: boolean;
+  readonly txid: string;
+  readonly vout: number;
+  readonly walletconflicts: string[];
+}
+
+export interface ListSinceBlockResult {
+  readonly transactions: WalletTransactionEntry[];
+  readonly lastblock: string;
+}
+
+/** gettransaction (btcjson.GetTransactionResult). */
+export interface WalletTransaction {
+  /** Grains received by the wallet, change left out. Not reduced by what it sent. */
+  readonly amount: bigint;
+  /** Grains, positive, and only when the wallet funded the transaction and owns every input. */
+  readonly fee?: bigint;
+  readonly confirmations: number;
+  /** Empty while unconfirmed. */
+  readonly blockhash: string;
+  readonly blockindex: number;
+  readonly blocktime: number;
+  readonly txid: string;
+  readonly walletconflicts: string[];
+  readonly time: number;
+  readonly timereceived: number;
+  /**
+   * One "send" entry for the whole transaction when the wallet funded it,
+   * with the total of its inputs as a negative amount, then one entry per
+   * output received.
+   */
+  readonly details: {
+    readonly account: string;
+    readonly address?: string;
+    /** Grains, negative on the send entry. */
+    readonly amount: bigint;
+    readonly category: 'send' | 'receive' | 'generate' | 'immature';
+    /** Grains, positive, on the send entry. */
+    readonly fee?: bigint;
+    readonly vout: number;
+  }[];
+  readonly hex: string;
+}
+
+export interface ReceivedByAddress {
+  readonly account: string;
+  readonly address: string;
+  /** Grains. */
+  readonly amount: bigint;
+  /** Confirmations of the latest payment. */
+  readonly confirmations: number;
+  readonly txids?: string[];
+}
+
+/** signrawtransaction (btcjson.SignRawTransactionResult). */
+export interface SignRawTransactionResult {
+  readonly hex: string;
+  readonly complete: boolean;
+  readonly errors?: {
+    readonly txid: string;
+    readonly vout: number;
+    readonly scriptSig: string;
+    readonly sequence: number;
+    readonly error: string;
+  }[];
+}
+
+/** An input of signrawtransaction whose previous output Oyster cannot look up. */
+export interface RawTxInput extends OutPointParam {
+  readonly scriptPubKey: string;
+  readonly redeemScript?: string;
+}
+
+export type SighashFlag = 'ALL' | 'NONE' | 'SINGLE' | 'ALL|ANYONECANPAY' | 'NONE|ANYONECANPAY' | 'SINGLE|ANYONECANPAY';
+
+/** Oyster's validateaddress (btcjson.ValidateAddressWalletResult). Fields past `address` are sent only for the wallet's own addresses. */
+export interface WalletAddressInfo {
+  readonly isvalid: boolean;
+  readonly address?: string;
+  readonly ismine?: boolean;
+  readonly iswatchonly?: boolean;
+  readonly isscript?: boolean;
+  readonly pubkey?: string;
+  readonly iscompressed?: boolean;
+  readonly account?: string;
+  readonly addresses?: string[];
+  readonly hex?: string;
+  readonly script?: string;
+}
+
+/** Oyster's getinfo (btcjson.InfoWalletResult): pearld's, with the wallet's fields filled in. */
+export interface WalletInfo extends NodeInfo {
+  readonly walletversion: number;
+  /** Spendable grains at one confirmation. */
+  readonly balance: bigint;
+  readonly keypoololdest: number;
+  readonly keypoolsize: number;
+  readonly unlocked_until: number;
+  /** Oyster writes its default relay fee here as a bare count of grains per 1000 vbytes, not in PRL like the other amounts. */
+  readonly paytxfee: number;
+}
+
+/** getsyncprogress, Pearl's addition for wallets in SPV mode. */
+export interface SyncProgress {
+  readonly header_height: number;
+  readonly filter_header_height: number;
+  /** The height the wallet has processed. */
+  readonly block_height: number;
+  readonly best_peer_height: number;
+  readonly connections: number;
+  readonly synced: boolean;
+}
+
+export interface SendManyOptions {
+  /** "default" unless given. */
+  readonly fromAccount?: string;
+  /** Confirmations the spent outputs need. Default 1. */
+  readonly minConf?: number;
+}
+
+/**
+ * Adds Oyster's typed methods to a class with `call`. OysterClient and
+ * OysterRpc are built with it.
+ */
+export function oysterMethods<Base extends RpcClass>(Base: Base) {
+  abstract class OysterMethods extends Base {
+    /** A new P2TR address. Oyster only makes bech32m Taproot addresses. */
+    getNewAddress(account?: string): Promise<string> {
+      return this.call('getnewaddress', account === undefined ? [] : [account]);
+    }
+
+    /** A new address on the account's change chain. */
+    getRawChangeAddress(account?: string): Promise<string> {
+      return this.call('getrawchangeaddress', account === undefined ? [] : [account]);
+    }
+
+    /** Spendable balance in grains; account "*" is the whole wallet. */
+    getBalance(account = '*', minConf = 1): Promise<bigint> {
+      return this.call('getbalance', [account, minConf], { amounts: ['result'] });
+    }
+
+    /** What the account holds beyond its spendable balance at one confirmation: unconfirmed and immature outputs. */
+    getUnconfirmedBalance(account?: string): Promise<bigint> {
+      return this.call('getunconfirmedbalance', account === undefined ? [] : [account], { amounts: ['result'] });
+    }
+
+    /**
+     * Unspent outputs Oyster would spend: immature coinbase outputs and
+     * outputs locked with lockUnspent are left out. Oyster refuses the
+     * address filter Bitcoin Core takes, so none is offered.
+     */
+    listUnspent(minConf = 1, maxConf = 9999999): Promise<ListUnspentResult[]> {
+      return this.call('listunspent', [minConf, maxConf], { amounts: ['amount'] });
+    }
+
+    /** Keeps outputs out of coin selection until unlocked or Oyster restarts. Unlocking with no outputs unlocks all. */
+    lockUnspent(unlock: boolean, outputs: readonly OutPointParam[] = []): Promise<boolean> {
+      return this.call('lockunspent', [unlock, outputs.map(({ txid, vout }) => ({ txid, vout }))]);
+    }
+
+    listLockUnspent(): Promise<OutPointParam[]> {
+      return this.call('listlockunspent');
+    }
+
+    /** Grains in each account at minConf confirmations, by account name. */
+    async listAccounts(minConf = 1): Promise<Record<string, bigint>> {
+      return this.call('listaccounts', [minConf], { amounts: ['*'] });
+    }
+
+    /** Needs the wallet unlocked. */
+    async createNewAccount(account: string): Promise<void> {
+      await this.call('createnewaccount', [account]);
+    }
+
+    async renameAccount(oldAccount: string, newAccount: string): Promise<void> {
+      await this.call('renameaccount', [oldAccount, newAccount]);
+    }
+
+    /** The account an address of the wallet belongs to. */
+    getAccount(address: string): Promise<string> {
+      return this.call('getaccount', [address]);
+    }
+
+    getAddressesByAccount(account: string): Promise<string[]> {
+      return this.call('getaddressesbyaccount', [account]);
+    }
+
+    /**
+     * The newest `count` transactions after skipping `from`, as entries; see
+     * WalletTransactionEntry. Oyster lists the whole wallet and refuses any
+     * account but "*".
+     */
+    listTransactions(count = 10, from = 0): Promise<WalletTransactionEntry[]> {
+      return this.call('listtransactions', ['*', count, from], { amounts: ['amount', 'fee'] });
+    }
+
+    /** Every wallet transaction, newest first. */
+    listAllTransactions(): Promise<WalletTransactionEntry[]> {
+      return this.call('listalltransactions', [], { amounts: ['amount', 'fee'] });
+    }
+
+    /** Entries of the wallet transactions that pay any of these addresses, oldest first. */
+    listAddressTransactions(addresses: readonly string[]): Promise<WalletTransactionEntry[]> {
+      return this.call('listaddresstransactions', [[...addresses]], { amounts: ['amount', 'fee'] });
+    }
+
+    /**
+     * Transactions in blocks after the given one, or all of them, and the
+     * hash to pass next time. Oyster needs a pearld RPC connection for this;
+     * in SPV mode it answers "Chain RPC is inactive".
+     */
+    listSinceBlock(blockHash?: string, targetConfirmations = 1): Promise<ListSinceBlockResult> {
+      return this.call('listsinceblock', blockHash === undefined ? [] : [blockHash, targetConfirmations], { amounts: ['amount', 'fee'] });
+    }
+
+    /** A wallet transaction; code -5 for one the wallet does not hold. */
+    getTransaction(txid: string): Promise<WalletTransaction> {
+      return this.call('gettransaction', [txid], { amounts: ['amount', 'fee'] });
+    }
+
+    /** Grains received by an address in transactions with minConf confirmations. */
+    getReceivedByAddress(address: string, minConf = 1): Promise<bigint> {
+      return this.call('getreceivedbyaddress', [address, minConf], { amounts: ['result'] });
+    }
+
+    /** Totals per address. Oyster lists every active address, used or not, whatever includeEmpty says. */
+    listReceivedByAddress(minConf = 1): Promise<ReceivedByAddress[]> {
+      return this.call('listreceivedbyaddress', [minConf], { amounts: ['amount'] });
+    }
+
+    /** Oyster's BIP-322-style signature, base64; P2TR addresses only. */
+    signMessage(address: string, message: string): Promise<string> {
+      return this.call('signmessage', [address, message]);
+    }
+
+    verifyMessage(address: string, signature: string, message: string): Promise<boolean> {
+      return this.call('verifymessage', [address, signature, message]);
+    }
+
+    /** Unlocks for timeoutSeconds. In Oyster a timeout of 0 never relocks. */
+    async walletPassphrase(passphrase: string, timeoutSeconds: number): Promise<void> {
+      await this.call('walletpassphrase', [passphrase, timeoutSeconds]);
+    }
+
+    /** Changes the private passphrase and locks the wallet. Code -14 when the old one is wrong. */
+    async walletPassphraseChange(oldPassphrase: string, newPassphrase: string): Promise<void> {
+      await this.call('walletpassphrasechange', [oldPassphrase, newPassphrase]);
+    }
+
+    async walletLock(): Promise<void> {
+      await this.call('walletlock');
+    }
+
+    walletIsLocked(): Promise<boolean> {
+      return this.call('walletislocked');
+    }
+
+    /**
+     * Sends from the default account and returns the txid. Oyster requires a
+     * fee rate, here in grain per 1000 vbytes, where Bitcoin Core has none.
+     */
+    sendToAddress(address: string, amount: bigint, feeRate: bigint): Promise<string> {
+      return this.call('sendtoaddress', [address, prlAmount(amount), prlAmount(feeRate)]);
+    }
+
+    /**
+     * Pays several addresses in one transaction and returns the txid; this
+     * is what Pearl's desktop wallet sends with. Amounts are grains by
+     * address, and the fee rate is grain per 1000 vbytes.
+     */
+    sendMany(amounts: Readonly<Record<string, bigint>>, feeRate: bigint, options: SendManyOptions = {}): Promise<string> {
+      const pairs = Object.fromEntries(Object.entries(amounts).map(([address, amount]) => [address, prlAmount(amount)]));
+      return this.call('sendmany', [options.fromAccount ?? 'default', pairs, prlAmount(feeRate), options.minConf ?? 1]);
+    }
+
+    /**
+     * Signs the inputs the wallet has keys for. `inputs` describes previous
+     * outputs Oyster cannot find. Oyster needs a pearld RPC connection for
+     * this; in SPV mode it answers "Chain RPC is inactive".
+     */
+    signRawTransaction(
+      tx: string | Uint8Array,
+      options: { inputs?: readonly RawTxInput[]; privateKeys?: readonly string[]; sighash?: SighashFlag } = {},
+    ): Promise<SignRawTransactionResult> {
+      const { inputs = [], privateKeys = [], sighash = 'ALL' } = options;
+      const prevouts = inputs.map((input) => ({ redeemScript: '', ...input }));
+      return this.call('signrawtransaction', [toHex(tx), prevouts, [...privateKeys], sighash]);
+    }
+
+    /** Forgets an unconfirmed wallet transaction and those that spend it, freeing their inputs. Returns the txids removed. */
+    async removeTransaction(txid: string): Promise<string[]> {
+      return (await this.call<{ removed: string[] }>('removetransaction', [txid])).removed;
+    }
+
+    /** Announces an unconfirmed wallet transaction and its unconfirmed ancestors again. Returns the txids announced. */
+    async rebroadcastTransaction(txid: string): Promise<string[]> {
+      return (await this.call<{ announced: string[] }>('rebroadcasttransaction', [txid])).announced;
+    }
+
+    /** Imports into the "imported" account, the only label Oyster accepts. */
+    async importPrivKey(wif: string, rescan = true): Promise<void> {
+      await this.call('importprivkey', [wif, 'imported', rescan]);
+    }
+
+    dumpPrivKey(address: string): Promise<string> {
+      return this.call('dumpprivkey', [address]);
+    }
+
+    /** Whether the address is valid, and what the wallet knows about it when it is its own. */
+    validateAddress(address: string): Promise<WalletAddressInfo> {
+      return this.call('validateaddress', [address]);
+    }
+
+    /** Needs a pearld RPC connection; in SPV mode Oyster answers "Chain RPC is inactive". */
+    getInfo(): Promise<WalletInfo> {
+      return this.call('getinfo', [], { amounts: ['balance', 'relayfee'] });
+    }
+
+    /** The block the wallet has processed up to, which can trail the node's tip. */
+    getBestBlock(): Promise<BestBlockResult> {
+      return this.call('getbestblock');
+    }
+
+    getSyncProgress(): Promise<SyncProgress> {
+      return this.call('getsyncprogress');
+    }
+
+    /** Whether the wallet has caught up with its chain source. */
+    chainSynced(): Promise<boolean> {
+      return this.call('chainsynced');
+    }
+
+    /** Asks Oyster to shut down. */
+    stop(): Promise<string> {
+      return this.call('stop');
+    }
+  }
+  return OysterMethods;
+}
+
+/** Typed methods for pearld over fetch. */
+export class PearldClient extends /* @__PURE__ */ pearldMethods(JsonRpcClient) {
+  // The mixin's constructor takes anything; this one says what the client takes.
+  constructor(options: RpcClientOptions) {
+    super(options);
+  }
+}
+
+/**
+ * Typed methods for Oyster over fetch. Methods Oyster does not handle are
+ * passed through to its pearld when it has an RPC connection to one, so
+ * `call` reaches node methods too. Oyster has no PSBT methods and reads one
+ * request per POST, so batching is refused.
+ */
+export class OysterClient extends /* @__PURE__ */ oysterMethods(JsonRpcClient) {
+  constructor(options: Omit<RpcClientOptions, 'batch'>) {
+    if ((options as RpcClientOptions).batch) throw new TypeError('Oyster does not accept JSON-RPC batches');
+    super(options);
+  }
+}
+
+/** Forwards to another Rpc, adding options to every call. */
+class RpcView implements Rpc {
+  readonly #rpc: Rpc;
+  readonly #defaults: CallOptions;
+
+  constructor(rpc: Rpc, defaults: CallOptions = {}) {
+    this.#rpc = rpc;
+    this.#defaults = defaults;
   }
 
-  /** Imports into the "imported" account, the only label Oyster accepts. */
-  async importPrivKey(wif: string, rescan = true): Promise<void> {
-    await this.call('importprivkey', [wif, 'imported', rescan]);
+  call<T = unknown>(method: string, params: readonly unknown[] = [], options: CallOptions = {}): Promise<T> {
+    return this.#rpc.call<T>(method, params, { ...this.#defaults, ...options });
   }
+}
 
-  dumpPrivKey(address: string): Promise<string> {
-    return this.call('dumpprivkey', [address]);
+/**
+ * pearld's typed methods over anything with `call`, with options added to
+ * every call: `new PearldRpc(node, { signal })` aborts whatever it started,
+ * and `new PearldRpc(oyster)` reaches pearld through Oyster's passthrough.
+ */
+export class PearldRpc extends /* @__PURE__ */ pearldMethods(RpcView) {
+  constructor(rpc: Rpc, defaults: Pick<CallOptions, 'signal' | 'timeout'> = {}) {
+    super(rpc, defaults);
   }
+}
+
+/** Oyster's typed methods over anything with `call`, e.g. a PearlWsClient made with `server: 'oyster'`. */
+export class OysterRpc extends /* @__PURE__ */ oysterMethods(RpcView) {
+  constructor(rpc: Rpc, defaults: Pick<CallOptions, 'signal' | 'timeout'> = {}) {
+    super(rpc, defaults);
+  }
+}
+
+/** The desktop wallet's Oyster, given the RPC username and password from the wallet's settings. */
+export function desktopOysterClient(credentials: { username: string; password: string }, options: Omit<RpcClientOptions, 'batch' | 'url' | 'transport'> = {}): OysterClient {
+  return new OysterClient({ ...options, ...credentials, url: DESKTOP_OYSTER_URL });
 }
 
 /** The most transactions searchrawtransactions returns in one call. */
 const MAX_SEARCH_COUNT = 10000;
 
+export interface SearchAllOptions {
+  /** Transactions per request, 1 to 10000. Default 100. */
+  readonly pageSize?: number;
+  /** Requests before giving up on an address. Default 10000. */
+  readonly maxPages?: number;
+  /** Adds `prevOut` to every input; see SearchOptions. */
+  readonly vinExtra?: boolean;
+}
+
 /**
- * A ChainClient over pearld for the invoice monitor. Address activity comes
- * from searchrawtransactions, so pearld must run with --addrindex and
- * --txindex.
+ * Every transaction touching an address, confirmed ones first in block
+ * order, each once. An address pearld has never seen gives an empty list.
+ * Needs --addrindex and --txindex. The pages are separate requests, so a
+ * reorganization in between can hide a transaction until the next call.
  */
-export function pearldChainClient(client: PearldClient, pageSize = 100): ChainClient {
+export async function searchAllTransactions(
+  client: { searchRawTransactions(address: string, options?: SearchOptions): Promise<SearchRawTransactionsResult[]> },
+  address: string,
+  options: SearchAllOptions = {},
+): Promise<SearchRawTransactionsResult[]> {
+  const { pageSize = 100, maxPages = 10000, vinExtra = false } = options;
+  if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > MAX_SEARCH_COUNT) {
+    throw new RangeError(`pageSize must be an integer from 1 to ${MAX_SEARCH_COUNT}`);
+  }
+  const found = new Map<string, SearchRawTransactionsResult>();
+  const add = (page: readonly SearchRawTransactionsResult[]): number => {
+    const before = found.size;
+    for (const tx of page) if (!found.has(tx.txid)) found.set(tx.txid, tx);
+    return found.size - before;
+  };
+  try {
+    // Confirmed transactions come first, in a fixed order, so skip counts only those.
+    for (let confirmed = 0, pages = 0; ; pages++) {
+      if (pages >= maxPages) {
+        throw new PearlRpcError('response', 'searchrawtransactions', `${address} has more than ${maxPages} pages of ${pageSize} transactions`);
+      }
+      const page = await client.searchRawTransactions(address, { skip: confirmed, count: pageSize, vinExtra });
+      // A short page is everything that was left, in one reply.
+      if (page.length < pageSize) {
+        add(page);
+        break;
+      }
+      const mined = page.filter((tx) => tx.blockhash !== undefined && tx.blockhash !== '');
+      // A server that ignores skip would send the first page forever.
+      if (mined.length > 0 && add(mined) === 0) {
+        throw new PearlRpcError('response', 'searchrawtransactions', 'the server sent the same page twice; it does not honor skip');
+      }
+      confirmed += mined.length;
+      if (mined.length < pageSize) {
+        // The page ran into the mempool, which pearld lists in a different
+        // order on every call: paging through it can miss transactions,
+        // so all of it is read in one request.
+        add(await client.searchRawTransactions(address, { skip: confirmed, count: MAX_SEARCH_COUNT, vinExtra }));
+        break;
+      }
+    }
+  } catch (err) {
+    if (!isUnusedAddress(err)) throw err;
+  }
+  return [...found.values()];
+}
+
+/**
+ * A ChainClient over pearld for the invoice monitor, from a PearldClient, a
+ * PearlWsClient or a PearldRpc. Address activity comes from
+ * searchrawtransactions, so pearld must run with --addrindex and --txindex.
+ */
+export function pearldChainClient(
+  client: Pick<PearldRpc, 'getBlockchainInfo' | 'getBlockHeader' | 'getRawTransaction' | 'searchRawTransactions'>,
+  pageSize = 100,
+): ChainClient {
   const blockRef = async (hash: string | undefined, heights: Map<string, number>): Promise<BlockRef | null> => {
     if (hash === undefined || hash === '') return null;
     let height = heights.get(hash);
     if (height === undefined) {
-      height = (await client.getBlockHeader(hash)).height;
+      height = safeHeight((await client.getBlockHeader(hash)).height, 'getblockheader');
       heights.set(hash, height);
     }
     return { height, hash };
@@ -532,46 +1760,15 @@ export function pearldChainClient(client: PearldClient, pageSize = 100): ChainCl
     async getTip() {
       // One call, so the height and hash come from the same snapshot.
       const info = await client.getBlockchainInfo();
-      return { height: info.blocks, hash: info.bestblockhash };
+      return { height: safeHeight(info.blocks, 'getblockchaininfo'), hash: info.bestblockhash };
     },
 
     async getAddressActivity(address) {
-      const found = new Map<string, { amount: bigint; blockhash: string | undefined }>();
-      const add = (page: SearchRawTransactionsResult[]): void => {
-        for (const tx of page) {
-          const amount = tx.vout
-            .filter((out) => out.scriptPubKey.address === address)
-            .reduce((sum, out) => sum + out.value, 0n);
-          if (amount > 0n && !found.has(tx.txid)) found.set(tx.txid, { amount, blockhash: tx.blockhash });
-        }
-      };
-      try {
-        // Confirmed transactions come first, in a fixed order, so skip counts only those.
-        for (let confirmed = 0; ; ) {
-          const page = await client.searchRawTransactions(address, { skip: confirmed, count: pageSize });
-          // A short page is everything that was left, in one reply.
-          if (page.length < pageSize) {
-            add(page);
-            break;
-          }
-          const mined = page.filter((tx) => tx.blockhash !== undefined && tx.blockhash !== '');
-          add(mined);
-          confirmed += mined.length;
-          if (mined.length < pageSize) {
-            // The page ran into the mempool, which pearld lists in a different
-            // order on every call: paging through it can miss transactions,
-            // so all of it is read in one request.
-            add(await client.searchRawTransactions(address, { skip: confirmed, count: MAX_SEARCH_COUNT }));
-            break;
-          }
-        }
-      } catch (err) {
-        if (!isUnusedAddress(err)) throw err;
-      }
       const heights = new Map<string, number>();
       const payments: AddressPayment[] = [];
-      for (const [txid, { amount, blockhash }] of found) {
-        payments.push({ txid, amount, block: await blockRef(blockhash, heights) });
+      for (const tx of await searchAllTransactions(client, address, { pageSize })) {
+        const amount = paidTo(tx, address);
+        if (amount > 0n) payments.push({ txid: tx.txid, amount, block: await blockRef(tx.blockhash, heights) });
       }
       return payments;
     },
@@ -581,12 +1778,47 @@ export function pearldChainClient(client: PearldClient, pageSize = 100): ChainCl
       try {
         tx = await client.getRawTransaction(txid);
       } catch (err) {
-        if (err instanceof PearlRpcError && err.code === RPC_ERROR_CODES.NO_TX_INFO) return null;
+        if (isUnknownTransaction(err)) return null;
         throw err;
       }
       return { txid: tx.txid, block: await blockRef(tx.blockhash, new Map()) };
     },
   };
+}
+
+/** A block height from a reply, refused unless it is one: the invoice monitor and wallets do arithmetic on it. */
+export function safeHeight(value: unknown, method: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new PearlRpcError('response', method, `expected a block height, got ${JSON.stringify(value)}`);
+  }
+  return value as number;
+}
+
+/** Grains a transaction pays to an address, over all its outputs. */
+export function paidTo(tx: { readonly vout: readonly RpcVout[] }, address: string): bigint {
+  let sum = 0n;
+  for (const out of tx.vout) {
+    if (out.scriptPubKey.address !== address) continue;
+    if (typeof out.value !== 'bigint' || out.value < 0n) {
+      throw new PearlRpcError('response', 'searchrawtransactions', `output ${out.n} has no valid value`);
+    }
+    sum += out.value;
+  }
+  return sum;
+}
+
+/**
+ * Whether an error is pearld or Oyster saying it has no such transaction.
+ * pearld also answers code -5 when it runs without --txindex and the
+ * transaction is not in the mempool, which says nothing about the
+ * transaction; that case is not this one.
+ */
+export function isUnknownTransaction(err: unknown): boolean {
+  return (
+    err instanceof PearlRpcError &&
+    err.code === RPC_ERROR_CODES.NO_TX_INFO &&
+    (err.message.includes('No information available about transaction') || err.message.includes('No information for transaction'))
+  );
 }
 
 // pearld answers -5 for an address it has never seen, for a skip past the
@@ -600,16 +1832,17 @@ function isUnusedAddress(err: unknown): boolean {
   );
 }
 
-function rpcError(method: string, error: { code?: unknown; message?: unknown }): PearlRpcError {
-  // btcjson.RPCError tags both fields omitempty, so either can be missing.
-  const code = typeof error.code === 'number' ? error.code : 0;
-  const message = typeof error.message === 'string' && error.message !== '' ? error.message : 'unknown error';
-  return new PearlRpcError('rpc', method, `${message} (code ${code})`, { code });
-}
-
 function isErrorReply(reply: unknown): reply is { error: { code?: unknown; message?: unknown } } {
   const error = typeof reply === 'object' && reply !== null ? (reply as { error?: unknown }).error : undefined;
   return typeof error === 'object' && error !== null;
+}
+
+function holdsErrorReply(text: string): boolean {
+  try {
+    return isErrorReply(JSON.parse(text));
+  } catch {
+    return false;
+  }
 }
 
 function httpMessage(response: Response, text: string, origin: string): string {
@@ -657,18 +1890,23 @@ function networkMessage(err: unknown, origin: string): string {
 }
 
 const NUMBER_RE = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+const NO_KEYS: ReadonlySet<string> = new Set();
 
 /**
- * JSON.parse, except that numbers under the given keys become bigint grain.
- * Those numbers are quoted in the text first, so their digits never pass
- * through a float.
+ * JSON.parse, except that numbers under amountKeys become bigint grain and
+ * numbers under integerKeys become bigint as written. Those numbers are
+ * quoted in the text first, so their digits never pass through a float. The
+ * amount key "*" takes every number inside the top-level "result".
  */
-export function parseJson(text: string, amountKeys: ReadonlySet<string> = new Set()): unknown {
-  if (amountKeys.size === 0) return JSON.parse(text);
+export function parseJson(text: string, amountKeys: ReadonlySet<string> = NO_KEYS, integerKeys: ReadonlySet<string> = NO_KEYS): unknown {
+  if (amountKeys.size === 0 && integerKeys.size === 0) return JSON.parse(text);
+  const everyAmount = amountKeys.has('*');
   let out = '';
   let copied = 0;
   let lastString = '';
   let underKey: string | null = null;
+  let depth = 0;
+  let inResult = false;
   for (let i = 0; i < text.length; i++) {
     const c = text[i]!;
     if (c === '"') {
@@ -679,24 +1917,35 @@ export function parseJson(text: string, amountKeys: ReadonlySet<string> = new Se
       i = j;
     } else if (c === ':') {
       underKey = lastString;
+      if (depth === 1) inResult = lastString === 'result';
     } else if (c === '-' || (c >= '0' && c <= '9')) {
       NUMBER_RE.lastIndex = i;
       const match = NUMBER_RE.exec(text);
       if (match === null) break;
-      if (underKey !== null && amountKeys.has(underKey)) {
-        out += `${text.slice(copied, i)}"${match[0]}"`;
+      const kind =
+        underKey !== null && integerKeys.has(underKey)
+          ? 'i'
+          : (everyAmount && inResult) || (underKey !== null && amountKeys.has(underKey))
+            ? 'a'
+            : null;
+      if (kind !== null) {
+        // A NUL in front tells these apart from strings the server sent.
+        out += `${text.slice(copied, i)}"\\u0000${kind}${match[0]}"`;
         copied = i + match[0].length;
       }
       underKey = null;
       i += match[0].length - 1;
     } else if (c !== ' ' && c !== '\n' && c !== '\r' && c !== '\t') {
+      if (c === '{' || c === '[') depth++;
+      else if (c === '}' || c === ']') depth--;
       underKey = null;
     }
   }
   out += text.slice(copied);
-  return JSON.parse(out, (key, value: unknown) =>
-    amountKeys.has(key) && typeof value === 'string' ? decimalToGrain(value) : value,
-  );
+  return JSON.parse(out, (_key, value: unknown) => {
+    if (typeof value !== 'string' || value.charCodeAt(0) !== 0) return value;
+    return value[1] === 'a' ? decimalToGrain(value.slice(2)) : BigInt(value.slice(2));
+  });
 }
 
 const DECIMAL_RE = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/;
@@ -723,21 +1972,8 @@ export function decimalToGrain(text: string): bigint {
   return sign === '-' ? -grain : grain;
 }
 
-// JSON.stringify with bigint grains written as exact PRL numbers.
-function encodeJson(value: unknown): string {
-  if (typeof value === 'bigint') return formatPearl(value);
-  if (Array.isArray(value)) return `[${value.map((v) => encodeJson(v === undefined ? null : v)).join(',')}]`;
-  if (typeof value === 'object' && value !== null && !(value instanceof Date)) {
-    const fields = Object.entries(value).filter(([, v]) => v !== undefined);
-    return `{${fields.map(([k, v]) => `${JSON.stringify(k)}:${encodeJson(v)}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function base64(text: string): string {
-  let binary = '';
-  for (const byte of new TextEncoder().encode(text)) binary += String.fromCharCode(byte);
-  return btoa(binary);
+function toHex(value: string | Uint8Array): string {
+  return typeof value === 'string' ? value : bytesToHex(value);
 }
 
 function bytesToHex(bytes: Uint8Array): string {

@@ -2,12 +2,22 @@
 // handlers and btcjson types (vectors/rpcfixtures_test.go), through an injected
 // fetch. The expected grain values come from the same Go program.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  DESKTOP_OYSTER_URL,
   JsonRpcClient,
   OysterClient,
-  PearlRpcError,
+  OysterRpc,
   PearldClient,
+  PearldRpc,
+  checkFilterHeaders,
+  desktopOysterClient,
+  fallbackTransport,
+  filterKey,
+  httpTransport,
+  matchFilter,
+  prlAmount,
+  searchAllTransactions,
   blockHashHex,
   createInvoice,
   decimalToGrain,
@@ -20,45 +30,7 @@ import {
   refreshInvoice,
   verifyMessage,
 } from '../src/index.js';
-import fixtureFile from './fixtures/rpc-responses.json' with { type: 'json' };
-
-interface Fixture {
-  body: string;
-  expect?: Record<string, unknown>;
-}
-const fixtures = fixtureFile as Record<string, Fixture>;
-const fixture = (name: string): Fixture => {
-  const found = fixtures[name];
-  if (found === undefined) throw new Error(`missing fixture ${name}`);
-  return found;
-};
-const expected = (name: string, key: string) => fixture(name).expect![key];
-
-interface SentRequest {
-  url: string;
-  init: RequestInit & Record<string, unknown>;
-  body: { jsonrpc: string; id: number; method: string; params: unknown[] };
-  text: string;
-}
-
-type Route = string | Response | ((request: SentRequest) => string | Response);
-
-/** A fetch that answers each method from a fixture, with the reply id set to the request's. */
-function fakeFetch(routes: Record<string, Route>) {
-  const sent: SentRequest[] = [];
-  const fetch = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
-    const text = init.body as string;
-    const request = { url: String(input), init, body: JSON.parse(text), text } as SentRequest;
-    sent.push(request);
-    const route = routes[request.body.method];
-    if (route === undefined) throw new Error(`unexpected method ${request.body.method}`);
-    const answer = typeof route === 'function' ? route(request) : route;
-    if (answer instanceof Response) return answer;
-    const body = fixture(answer).body.replace(/"id":\d+}\n$/, `"id":${request.body.id}}\n`);
-    return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
-  };
-  return { fetch: fetch as typeof globalThis.fetch, sent };
-}
+import { expected, fakeFetch, fixture, rejection, type Route } from './rpc-helpers.js';
 
 function pearld(routes: Record<string, Route>) {
   const fake = fakeFetch(routes);
@@ -70,16 +42,6 @@ function oyster(routes: Record<string, Route>) {
   const fake = fakeFetch(routes);
   const client = new OysterClient({ url: 'https://127.0.0.1:18332', username: 'alice', password: 'pw', fetch: fake.fetch });
   return { client, sent: fake.sent };
-}
-
-async function rejection(promise: Promise<unknown>): Promise<PearlRpcError> {
-  try {
-    await promise;
-  } catch (err) {
-    expect(err).toBeInstanceOf(PearlRpcError);
-    return err as PearlRpcError;
-  }
-  throw new Error('expected the call to fail');
 }
 
 const txid = expected('getrawtransaction-hex', 'txid') as string;
@@ -161,7 +123,19 @@ describe('requests', () => {
     ]);
   });
 
-  it('writes bigint grain params as exact PRL numbers', async () => {
+  it('writes amounts wrapped in prlAmount as PRL and bare bigints as the integers they are', async () => {
+    const fake = fakeFetch({ getblockhash: 'getblockhash', sendtoaddress: 'sendtoaddress' });
+    const client = new JsonRpcClient({ url: 'http://127.0.0.1:18332', fetch: fake.fetch });
+    await client.call('getblockhash', [150n]);
+    expect(fake.sent[0]!.text).toContain('"params":[150]');
+    await client.call('getblockhash', [18446744073709551615n]);
+    expect(fake.sent[1]!.text).toContain('"params":[18446744073709551615]');
+    await client.call('sendtoaddress', [address, prlAmount(150n), prlAmount(1000n)]);
+    expect(fake.sent[2]!.text).toContain(`"params":["${address}",0.0000015,0.00001]`);
+    expect(() => prlAmount(1.5 as unknown as bigint)).toThrow('bigint number of grains');
+  });
+
+  it('writes the grain amounts of typed methods as exact PRL numbers', async () => {
     const { client: node, sent: nodeSent } = pearld({ testmempoolaccept: 'testmempoolaccept-allowed' });
     await node.testMempoolAccept(['00'], 10000000n);
     expect(nodeSent[0]!.text).toContain('"params":[["00"],0.1]');
@@ -551,5 +525,668 @@ describe('pearldChainClient', () => {
     });
     const err = await rejection(pearldChainClient(client).getAddressActivity(address));
     expect(err.message).toContain('--addrindex');
+  });
+});
+
+const hex = (bytes: Uint8Array) => Buffer.from(bytes).toString('hex');
+const unhex = (text: string) => Uint8Array.from(Buffer.from(text, 'hex'));
+
+describe('more pearld methods', () => {
+  it('sends the positional params pearld parses for them', async () => {
+    const { client, sent } = pearld({
+      getblock: (r) => (r.body.params[1] === 1 ? 'getblock-verbose' : 'getblock-transactions'),
+      getbestblock: 'getbestblock',
+      getchaintips: 'getchaintips',
+      gettxspendingprevout: 'gettxspendingprevout',
+      decoderawtransaction: 'decoderawtransaction',
+      decodescript: 'decodescript',
+      validateaddress: 'validateaddress',
+      getcfilterheader: 'getcfilterheader',
+      getheaders: 'getheaders',
+      getnetworkhashps: 'getnetworkhashps',
+      getblocktemplate: 'getblocktemplate',
+      submitblock: 'submitblock-accepted',
+      generate: 'generate',
+      addnode: 'addnode',
+      node: 'node',
+      stop: 'stop',
+    });
+    await client.getBlock(genesisHash);
+    await client.getBlockWithTransactions(genesisHash);
+    await client.getBestBlock();
+    await client.getChainTips();
+    await client.getTxSpendingPrevOut([{ txid, vout: 1 }]);
+    await client.decodeRawTransaction(Uint8Array.of(1, 2));
+    await client.decodeScript('51');
+    await client.validateAddress(address);
+    await client.getCFilterHeader(genesisHash);
+    await client.getHeaders([genesisHash]);
+    await client.getNetworkHashPs();
+    await client.getBlockTemplate({ capabilities: ['coinbasevalue'] });
+    await client.submitBlock(Uint8Array.of(0xab));
+    await client.generate(2);
+    await client.addNode('127.0.0.1:18444', 'onetry');
+    await client.node('disconnect', 7);
+    await client.node('connect', '127.0.0.1:18444', 'temp');
+    expect(await client.stop()).toBe('pearld stopping.');
+    expect(sent.map((r) => [r.body.method, r.body.params])).toEqual([
+      ['getblock', [genesisHash, 1]],
+      ['getblock', [genesisHash, 2]],
+      ['getbestblock', []],
+      ['getchaintips', []],
+      ['gettxspendingprevout', [[{ txid, vout: 1 }]]],
+      ['decoderawtransaction', ['0102']],
+      ['decodescript', ['51']],
+      ['validateaddress', [address]],
+      ['getcfilterheader', [genesisHash, 0]],
+      ['getheaders', [[genesisHash], '']],
+      ['getnetworkhashps', [120, -1]],
+      ['getblocktemplate', [{ capabilities: ['coinbasevalue'] }]],
+      ['submitblock', ['ab']],
+      ['generate', [2]],
+      ['addnode', ['127.0.0.1:18444', 'onetry']],
+      ['node', ['disconnect', '7']],
+      ['node', ['connect', '127.0.0.1:18444', 'temp']],
+      ['stop', []],
+    ]);
+  });
+
+  it('reads getblock with transaction ids, and with transactions under rawtx', async () => {
+    const { client } = pearld({ getblock: (r) => (r.body.params[1] === 1 ? 'getblock-verbose' : 'getblock-transactions') });
+    const block = await client.getBlock(genesisHash);
+    expect(block).toMatchObject({ hash: genesisHash, height: 0, confirmations: 1, previousblockhash: '0'.repeat(64) });
+    expect(block.tx).toEqual([expected('getblock-verbose', 'txid')]);
+    expect(block.nextblockhash).toBeUndefined();
+
+    const full = await client.getBlockWithTransactions(genesisHash);
+    expect('tx' in full).toBe(false);
+    expect(full.rawtx).toHaveLength(1);
+    expect(full.rawtx[0]!.txid).toBe(block.tx[0]);
+    expect(full.rawtx[0]!.vout[0]!.value).toBe(BigInt(expected('getblock-transactions', 'value') as string));
+    expect(full.rawtx[0]!.vin[0]).toHaveProperty('coinbase');
+  });
+
+  it('reads the tip, chain tips and the mempool spender of an output', async () => {
+    const { client } = pearld({ getbestblock: 'getbestblock', getchaintips: 'getchaintips', gettxspendingprevout: 'gettxspendingprevout' });
+    expect(await client.getBestBlock()).toEqual({ hash: genesisHash, height: 0 });
+    expect(await client.getChainTips()).toEqual([{ height: 0, hash: genesisHash, branchlen: 0, status: 'active' }]);
+    const [spent, unspent] = await client.getTxSpendingPrevOut([
+      { txid: '22'.repeat(32), vout: 1 },
+      { txid, vout: 0 },
+    ]);
+    expect(spent!.spendingtxid).toBe(expected('gettxspendingprevout', 'spender'));
+    expect(unspent).not.toHaveProperty('spendingtxid');
+  });
+
+  it('decodes transactions, scripts and addresses as pearld does', async () => {
+    const { client } = pearld({
+      decoderawtransaction: 'decoderawtransaction',
+      decodescript: 'decodescript',
+      validateaddress: (r) => (r.body.params[0] === address ? 'validateaddress' : 'validateaddress-invalid'),
+    });
+    const tx = await client.decodeRawTransaction('00');
+    expect(tx.txid).toBe(expected('decoderawtransaction', 'txid'));
+    expect(tx.vout.map((out) => String(out.value))).toEqual(expected('decoderawtransaction', 'values'));
+    expect(await client.decodeScript('00')).toMatchObject({ type: 'witness_v1_taproot', address: expected('decodescript', 'address') });
+    expect(await client.validateAddress(address)).toEqual({
+      isvalid: true,
+      address,
+      iswitness: true,
+      witness_version: 1,
+      witness_program: expected('validateaddress', 'program'),
+    });
+    expect(await client.validateAddress('nope')).toEqual({ isvalid: false });
+  });
+
+  it('returns a decoded filter that matches the scripts of its block and checks its header', async () => {
+    const { client, sent } = pearld({ getcfilter: 'getcfilter', getcfilterheader: 'getcfilterheader' });
+    const prevHeader = expected('getcfilter', 'prevHeader') as string;
+    const { filter, key, header } = await client.getCFilter(genesisHash, prevHeader);
+    expect(filter.n).toBe(expected('getcfilter', 'n'));
+    expect(hex(key)).toBe(hex(filterKey(genesisHash)));
+    expect(matchFilter(filter, key, unhex(expected('getcfilter', 'paid') as string))).toBe(true);
+    expect(matchFilter(filter, key, unhex(expected('getcfilter', 'spent') as string))).toBe(true);
+    expect(matchFilter(filter, key, unhex('5120' + '99'.repeat(32)))).toBe(false);
+    expect(header).toBe(await client.getCFilterHeader(genesisHash));
+    expect(() => checkFilterHeaders('11'.repeat(32), [{ filter, header: header! }])).toThrow('does not match its header');
+    expect(sent[0]!.body.params).toEqual([genesisHash, 0]);
+
+    const none = pearld({ getcfilter: 'getcfilter-noindex' });
+    expect((await rejection(none.client.getCFilter(genesisHash))).message).toContain('CF index must be enabled');
+  });
+
+  it('returns headers as the block serialized without its transactions', async () => {
+    const { client } = pearld({ getheaders: 'getheaders' });
+    const [header] = await client.getHeaders([genesisHash]);
+    expect(header).toBe(expected('getheaders', 'header'));
+    expect(blockHashHex(parseBlock(unhex(`${header}00`)).header)).toBe(expected('getheaders', 'hash'));
+  });
+
+  it('reads node, network, peer and mining information with fee rates in grains', async () => {
+    const { client } = pearld({
+      getinfo: 'getinfo',
+      getnetworkinfo: 'getnetworkinfo',
+      getpeerinfo: 'getpeerinfo',
+      getconnectioncount: 'getconnectioncount',
+      getdifficulty: 'getdifficulty',
+      getnetworkhashps: 'getnetworkhashps',
+      getmininginfo: 'getmininginfo',
+    });
+    const relayFee = BigInt(expected('getinfo', 'relayFee') as string);
+    expect(await client.getInfo()).toMatchObject({ blocks: 0, connections: 3, relayfee: relayFee, testnet: false });
+    const network = await client.getNetworkInfo();
+    expect(network.relayfee).toBe(relayFee);
+    expect(network.incrementalfee).toBe(relayFee);
+    expect(network.networks.map((n) => n.name)).toEqual(['ipv4', 'ipv6', 'onion']);
+    const [peer] = await client.getPeerInfo();
+    expect(peer).toMatchObject({ id: 7, addr: '127.0.0.1:18444', syncnode: true, v2_connection: true, pingtime: 1500 });
+    expect(peer!.feefilter).toBe(BigInt(expected('getpeerinfo', 'feeFilter') as string));
+    expect(await client.getConnectionCount()).toBe(3);
+    expect(await client.getDifficulty()).toBe(1);
+    expect(await client.getNetworkHashPs()).toBe(0);
+    expect(await client.getMiningInfo()).toMatchObject({ blocks: 0, currentblocktx: 1, generate: false, pooledtx: 2 });
+  });
+
+  it('reads a block template with its required certificate version and the coinbase value in grains', async () => {
+    const { client } = pearld({ getblocktemplate: 'getblocktemplate' });
+    const template = await client.getBlockTemplate();
+    expect(template.requiredcertversion).toBe(3);
+    expect(template.height).toBe(1);
+    expect(template.previousblockhash).toBe(genesisHash);
+    expect(template.coinbasevalue).toBe(BigInt(expected('getblocktemplate', 'coinbaseValue') as string));
+    expect(template.transactions).toEqual([]);
+  });
+
+  it('throws for the "rejected" string submitblock returns as a result', async () => {
+    const accepted = pearld({ submitblock: 'submitblock-accepted' });
+    expect(await accepted.client.submitBlock('00')).toBeUndefined();
+
+    const rejected = pearld({ submitblock: 'submitblock-rejected' });
+    const err = await rejection(rejected.client.submitBlock('00'));
+    expect(err).toMatchObject({ kind: 'rpc', method: 'submitblock', code: -25 });
+    expect(err.message).toBe(`submitblock: rejected: already have block ${genesisHash}`);
+
+    const undecodable = pearld({ submitblock: 'submitblock-undecodable' });
+    expect(await rejection(undecodable.client.submitBlock('00'))).toMatchObject({ kind: 'rpc', code: -22 });
+  });
+
+  it('returns the hashes generate mined and its error without a mining address', async () => {
+    const { client } = pearld({ generate: (r) => (r.body.params[0] === 1 ? 'generate' : 'generate-no-address') });
+    expect(await client.generate(1)).toEqual([genesisHash]);
+    expect((await rejection(client.generate(2))).message).toContain('--miningaddr');
+  });
+
+  it('throws when the server answers estimatefee with -1 instead of returning a negative rate', async () => {
+    const { client } = pearld({ estimatefee: 'estimatefee-negative' });
+    expect(await rejection(client.estimateFee(6))).toMatchObject({ kind: 'rpc', code: -1, method: 'estimatefee' });
+  });
+});
+
+describe('more Oyster methods', () => {
+  it('sends the params its handlers expect', async () => {
+    const { client, sent } = oyster({
+      sendmany: 'sendmany',
+      listtransactions: 'listtransactions',
+      listalltransactions: 'listalltransactions',
+      listaddresstransactions: 'listaddresstransactions',
+      listsinceblock: 'listsinceblock',
+      gettransaction: 'gettransaction',
+      getreceivedbyaddress: 'getreceivedbyaddress',
+      listreceivedbyaddress: 'listreceivedbyaddress',
+      getrawchangeaddress: 'getrawchangeaddress',
+      lockunspent: 'lockunspent',
+      listlockunspent: 'listlockunspent',
+      createnewaccount: 'null',
+      listaccounts: 'listaccounts',
+      renameaccount: 'null',
+      getaccount: 'getaccount',
+      getaddressesbyaccount: 'getaddressesbyaccount',
+      signrawtransaction: 'signrawtransaction',
+      validateaddress: 'validateaddress-wallet',
+      walletpassphrasechange: 'null',
+      getinfo: 'getinfo-wallet',
+      getsyncprogress: 'getsyncprogress',
+      chainsynced: 'chainsynced',
+      removetransaction: 'removetransaction',
+      rebroadcasttransaction: 'rebroadcasttransaction',
+      getbestblock: 'getbestblock-wallet',
+    });
+    await client.sendMany({ [address]: 150000000n }, 1000n);
+    await client.sendMany({ [address]: 1n }, 2500n, { fromAccount: 'savings', minConf: 3 });
+    await client.listTransactions();
+    await client.listTransactions(50, 100);
+    await client.listAllTransactions();
+    await client.listAddressTransactions([address]);
+    await client.listSinceBlock();
+    await client.listSinceBlock(genesisHash, 6);
+    await client.getTransaction(txid);
+    await client.getReceivedByAddress(address);
+    await client.listReceivedByAddress(0);
+    await client.getRawChangeAddress();
+    await client.lockUnspent(false, [{ txid, vout: 1 }]);
+    await client.lockUnspent(true);
+    await client.listLockUnspent();
+    await client.createNewAccount('savings');
+    await client.listAccounts();
+    await client.renameAccount('savings', 'rainy day');
+    await client.getAccount(address);
+    await client.getAddressesByAccount('default');
+    await client.signRawTransaction('00', { inputs: [{ txid, vout: 1, scriptPubKey: '51' }], sighash: 'NONE' });
+    await client.validateAddress(address);
+    await client.walletPassphraseChange('old', 'new');
+    await client.getInfo();
+    await client.getSyncProgress();
+    await client.chainSynced();
+    await client.removeTransaction(txid);
+    await client.rebroadcastTransaction(txid);
+    await client.getBestBlock();
+    expect(sent.map((r) => [r.body.method, r.body.params])).toEqual([
+      ['sendmany', ['default', { [address]: 1.5 }, 0.00001, 1]],
+      ['sendmany', ['savings', { [address]: 1e-8 }, 0.000025, 3]],
+      ['listtransactions', ['*', 10, 0]],
+      ['listtransactions', ['*', 50, 100]],
+      ['listalltransactions', []],
+      ['listaddresstransactions', [[address]]],
+      ['listsinceblock', []],
+      ['listsinceblock', [genesisHash, 6]],
+      ['gettransaction', [txid]],
+      ['getreceivedbyaddress', [address, 1]],
+      ['listreceivedbyaddress', [0]],
+      ['getrawchangeaddress', []],
+      ['lockunspent', [false, [{ txid, vout: 1 }]]],
+      ['lockunspent', [true, []]],
+      ['listlockunspent', []],
+      ['createnewaccount', ['savings']],
+      ['listaccounts', [1]],
+      ['renameaccount', ['savings', 'rainy day']],
+      ['getaccount', [address]],
+      ['getaddressesbyaccount', ['default']],
+      ['signrawtransaction', ['00', [{ redeemScript: '', txid, vout: 1, scriptPubKey: '51' }], [], 'NONE']],
+      ['validateaddress', [address]],
+      ['walletpassphrasechange', ['old', 'new']],
+      ['getinfo', []],
+      ['getsyncprogress', []],
+      ['chainsynced', []],
+      ['removetransaction', [txid]],
+      ['rebroadcasttransaction', [txid]],
+      ['getbestblock', []],
+    ]);
+    // The exact digits, not a float's: one grain is 0.00000001.
+    expect(sent[1]!.text).toContain(':0.00000001}');
+  });
+
+  it('reads transaction lists with sends and their fees as negative grains', async () => {
+    const { client } = oyster({
+      listtransactions: 'listtransactions',
+      listalltransactions: 'listalltransactions',
+      listaddresstransactions: 'listaddresstransactions',
+      listsinceblock: 'listsinceblock',
+    });
+    const want = (key: string) => BigInt(expected('listtransactions', key) as string);
+    const [send, receive, immature] = await client.listTransactions();
+    expect(send).toMatchObject({ category: 'send', amount: want('sent'), fee: want('fee'), confirmations: 6, account: '' });
+    expect(send!.amount).toBeLessThan(0n);
+    expect(send!.fee).toBeLessThan(0n);
+    expect(receive).toMatchObject({ category: 'receive', amount: want('received'), confirmations: 0, account: 'default' });
+    expect(receive).not.toHaveProperty('fee');
+    expect(receive).not.toHaveProperty('blockhash');
+    expect(immature).toMatchObject({ category: 'immature', amount: want('immature'), generated: true });
+    expect(await client.listAllTransactions()).toEqual([send, receive, immature]);
+    expect(await client.listAddressTransactions([address])).toEqual([receive, immature]);
+    expect(await client.listSinceBlock()).toEqual({ transactions: [send, receive, immature], lastblock: genesisHash });
+  });
+
+  it('reads gettransaction, whose fee is positive and whose send detail is negative', async () => {
+    const { client } = oyster({ gettransaction: (r) => (r.body.params[0] === txid ? 'gettransaction' : 'gettransaction-missing') });
+    const want = (key: string) => BigInt(expected('gettransaction', key) as string);
+    const tx = await client.getTransaction(txid);
+    expect(tx.amount).toBe(want('amount'));
+    expect(tx.fee).toBe(want('fee'));
+    expect(tx.details[0]).toMatchObject({ category: 'send', amount: want('debit'), fee: want('fee') });
+    expect(tx.details[1]).toMatchObject({ category: 'receive', amount: want('amount'), vout: 1, address });
+    expect(await rejection(client.getTransaction('00'.repeat(32)))).toMatchObject({ kind: 'rpc', code: -5 });
+  });
+
+  it('reads balances by account, whatever the accounts are called', async () => {
+    const { client } = oyster({ listaccounts: 'listaccounts' });
+    const accounts = await client.listAccounts();
+    expect(Object.fromEntries(Object.entries(accounts).map(([name, grain]) => [name, String(grain)]))).toEqual(fixture('listaccounts').expect);
+    expect(accounts.id).toBe(1n);
+  });
+
+  it('reads the remaining wallet results', async () => {
+    const { client } = oyster({
+      getreceivedbyaddress: 'getreceivedbyaddress',
+      listreceivedbyaddress: 'listreceivedbyaddress',
+      lockunspent: 'lockunspent',
+      listlockunspent: 'listlockunspent',
+      signrawtransaction: 'signrawtransaction',
+      validateaddress: (r) => (r.body.params[0] === address ? 'validateaddress-wallet' : 'validateaddress-wallet-invalid'),
+      getinfo: 'getinfo-wallet',
+      getsyncprogress: 'getsyncprogress',
+      chainsynced: 'chainsynced',
+      removetransaction: 'removetransaction',
+      rebroadcasttransaction: 'rebroadcasttransaction',
+      createnewaccount: 'null',
+      sendmany: 'sendmany',
+    });
+    const received = BigInt(expected('getreceivedbyaddress', 'amount') as string);
+    expect(await client.getReceivedByAddress(address)).toBe(received);
+    expect(await client.listReceivedByAddress()).toEqual([{ account: '', address, amount: received, confirmations: 6, txids: ['ab'.repeat(32)] }]);
+    expect(await client.lockUnspent(false, [{ txid, vout: 0 }])).toBe(true);
+    expect(await client.listLockUnspent()).toEqual([{ txid: 'ab'.repeat(32), vout: 1 }]);
+    expect(await client.signRawTransaction('00')).toMatchObject({ complete: false, errors: [{ vout: 1, error: 'no key for input' }] });
+    expect(await client.validateAddress(address)).toMatchObject({ isvalid: true, ismine: true, account: 'default' });
+    expect(await client.validateAddress('nope')).toEqual({ isvalid: false });
+    const info = await client.getInfo();
+    expect(info.balance).toBe(BigInt(expected('getinfo-wallet', 'balance') as string));
+    expect(info.relayfee).toBe(BigInt(expected('getinfo-wallet', 'relayFee') as string));
+    // Oyster writes this one as a bare number of grains.
+    expect(info.paytxfee).toBe(expected('getinfo-wallet', 'payTxFee'));
+    expect(await client.getSyncProgress()).toMatchObject({ header_height: 321, block_height: 319, synced: false });
+    expect(await client.chainSynced()).toBe(true);
+    expect(await client.removeTransaction(txid)).toEqual(['ab'.repeat(32)]);
+    expect(await client.rebroadcastTransaction(txid)).toEqual(['ab'.repeat(32)]);
+    expect(await client.createNewAccount('x')).toBeUndefined();
+    expect(await client.sendMany({ [address]: 1n }, 1000n)).toBe('ab'.repeat(32));
+  });
+
+  it('offers the desktop wallet Oyster as a preset on loopback without TLS', async () => {
+    const fake = fakeFetch({ chainsynced: 'chainsynced' });
+    const client = desktopOysterClient({ username: 'u', password: 'p' }, { fetch: fake.fetch });
+    await client.chainSynced();
+    expect(DESKTOP_OYSTER_URL).toBe('http://127.0.0.1:8335');
+    expect(fake.sent[0]!.url).toBe('http://127.0.0.1:8335/');
+    expect(new Headers(fake.sent[0]!.init.headers).get('Authorization')).toBe(`Basic ${btoa('u:p')}`);
+  });
+});
+
+describe('typed methods over any transport', () => {
+  it('runs pearld and Oyster methods over anything with call, adding options to every call', async () => {
+    const calls: unknown[][] = [];
+    const rpc = {
+      async call<T>(method: string, params: readonly unknown[] = [], options = {}): Promise<T> {
+        calls.push([method, params, options]);
+        return (method === 'getblockcount' ? 321 : 1234567800n) as T;
+      },
+    };
+    const controller = new AbortController();
+    expect(await new PearldRpc(rpc, { signal: controller.signal, timeout: 5 }).getBlockCount()).toBe(321);
+    expect(await new OysterRpc(rpc).getBalance()).toBe(1234567800n);
+    expect(calls).toEqual([
+      ['getblockcount', [], { signal: controller.signal, timeout: 5 }],
+      ['getbalance', ['*', 1], { amounts: ['result'] }],
+    ]);
+  });
+
+  it('reaches pearld through Oyster with the node methods over an OysterClient', async () => {
+    const { client, sent } = oyster({ gettxout: 'gettxout' });
+    const out = await new PearldRpc(client).getTxOut(txid, 0);
+    expect(out!.value).toBe(BigInt(expected('gettxout', 'value') as string));
+    expect(sent[0]!.url).toBe('https://127.0.0.1:18332/');
+  });
+});
+
+describe('transport options', () => {
+  const never = (() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+
+  it('gives up after the client timeout, or the one given for a call', async () => {
+    const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: never, timeout: 20 });
+    const err = await rejection(client.getBlockCount());
+    expect(err).toMatchObject({ kind: 'network', method: 'getblockcount' });
+    expect(err.message).toBe('getblockcount: no reply from 127.0.0.1:18334 within 20 ms');
+
+    const slow = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: never });
+    expect((await rejection(slow.call('getblockcount', [], { timeout: 10 }))).message).toContain('within 10 ms');
+  });
+
+  it('applies a default timeout, except to calls that are slow by design', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: never });
+      const outcomes: string[] = [];
+      void client.getBlockCount().catch((e: Error) => outcomes.push(e.message));
+      void client.generate(1).catch((e: Error) => outcomes.push(e.message));
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(outcomes).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcomes).toEqual(['getblockcount: no reply from 127.0.0.1:18334 within 60000 ms']);
+      await vi.advanceTimersByTimeAsync(3_600_000);
+      expect(outcomes).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('abandons a call when its signal aborts, and passes a signal to fetch', async () => {
+    let seen: AbortSignal | undefined;
+    const hanging = ((_url: string, init: RequestInit) => {
+      seen = init.signal ?? undefined;
+      return new Promise<Response>(() => {});
+    }) as unknown as typeof fetch;
+    const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: hanging });
+    const controller = new AbortController();
+    const call = rejection(client.call('getblockcount', [], { signal: controller.signal }));
+    controller.abort();
+    expect((await call).message).toBe('getblockcount: request to 127.0.0.1:18334 was aborted');
+    expect(seen!.aborted).toBe(true);
+
+    const already = await rejection(new PearldRpc(client, { signal: AbortSignal.abort() }).getBlockCount());
+    expect(already.kind).toBe('network');
+  });
+
+  it('keeps the password out of the error for a malformed URL', () => {
+    let error: unknown;
+    try {
+      new PearldClient({ url: 'https://alice:hunter2@127.0.0.1:port' });
+    } catch (err) {
+      error = err;
+    }
+    expect(error).toBeInstanceOf(TypeError);
+    expect(JSON.stringify([String(error), (error as Error).cause ?? null, Object.values(error as object)])).not.toContain('hunter2');
+  });
+
+  it('refuses basic auth over plain http to another host unless told to', async () => {
+    const options = { username: 'alice', password: 'pw', fetch: never };
+    for (const url of ['http://node.example:44107', 'http://10.0.0.5:44107', 'http://alice:pw@192.168.1.9:44107']) {
+      expect(() => new PearldClient({ ...options, url })).toThrow('refusing to send the RPC password');
+    }
+    for (const url of ['http://127.0.0.1:44107', 'http://localhost:44107', 'http://[::1]:44107', 'http://127.8.9.1:1', 'https://node.example:44107']) {
+      expect(() => new PearldClient({ ...options, url })).not.toThrow();
+    }
+    expect(() => new PearldClient({ url: 'http://node.example:44107', fetch: never })).not.toThrow();
+    const fake = fakeFetch({ getblockcount: 'getblockcount' });
+    const client = new PearldClient({ ...options, fetch: fake.fetch, url: 'http://node.example:44107', allowInsecureAuth: true });
+    expect(await client.getBlockCount()).toBe(321);
+  });
+
+  it('sends calls made together as one batch and gives each its own result or error', async () => {
+    const bodies: string[] = [];
+    const batching = (async (_url: string, init: RequestInit) => {
+      bodies.push(init.body as string);
+      return new Response(fixture('batch').body, { status: 200 });
+    }) as unknown as typeof fetch;
+    const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: batching, batch: true });
+    const results = await Promise.allSettled([
+      client.getBlockCount(),
+      client.getBestBlockHash(),
+      client.getBlock('77'.repeat(32)),
+      client.getInfo(),
+      client.call('frobnicate'),
+    ]);
+    expect(bodies).toHaveLength(1);
+    expect((JSON.parse(bodies[0]!) as { method: string; id: number }[]).map((r) => [r.id, r.method])).toEqual([
+      [1, 'getblockcount'],
+      [2, 'getbestblockhash'],
+      [3, 'getblock'],
+      [4, 'getinfo'],
+      [5, 'frobnicate'],
+    ]);
+    expect(results[0]).toEqual({ status: 'fulfilled', value: 0 });
+    expect(results[1]).toEqual({ status: 'fulfilled', value: expected('batch', 'hash') });
+    expect((results[2] as PromiseRejectedResult).reason).toMatchObject({ kind: 'rpc', code: -5, method: 'getblock' });
+    // The amount conversion asked for by one call does not touch the others.
+    expect((results[3] as PromiseFulfilledResult<{ relayfee: bigint }>).value.relayfee).toBe(BigInt(expected('batch', 'relayFee') as string));
+    expect((results[4] as PromiseRejectedResult).reason).toMatchObject({ kind: 'rpc', code: -32601, method: 'frobnicate' });
+  });
+
+  it('sends a lone call, and a call with its own signal, outside a batch', async () => {
+    const fake = fakeFetch({ getblockcount: 'getblockcount', getbestblockhash: 'getbestblockhash' });
+    const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: fake.fetch, batch: { wait: 1 } });
+    expect(await client.getBlockCount()).toBe(321);
+    expect(fake.sent[0]!.text.startsWith('{')).toBe(true);
+    await Promise.all([client.getBlockCount(), client.call('getbestblockhash', [], { signal: new AbortController().signal })]);
+    expect(fake.sent).toHaveLength(3);
+  });
+
+  it('fails every call of a batch the server could not read or answered short', async () => {
+    const answer = (body: string) =>
+      new PearldClient({ url: 'https://127.0.0.1:18334', fetch: (async () => new Response(body)) as unknown as typeof fetch, batch: true });
+    const unreadable = answer(fixture('batch-unreadable').body);
+    const failures = await Promise.all([rejection(unreadable.getBlockCount()), rejection(unreadable.getBestBlockHash())]);
+    expect(failures.map((e) => [e.kind, e.code, e.method])).toEqual([
+      ['rpc', -32700, 'getblockcount'],
+      ['rpc', -32700, 'getbestblockhash'],
+    ]);
+
+    const short = answer('[{"jsonrpc":"1.0","result":7,"error":null,"id":1}]');
+    const [first, second] = await Promise.allSettled([short.getBlockCount(), short.getBestBlockHash()]);
+    expect(first).toEqual({ status: 'fulfilled', value: 7 });
+    expect((second as PromiseRejectedResult).reason.message).toContain('left this call out of its batch reply');
+
+    const single = answer(fixture('getblockcount').body);
+    const both = await Promise.all([rejection(single.getBlockCount()), rejection(single.getBestBlockHash())]);
+    expect(both.map((e) => e.kind)).toEqual(['response', 'response']);
+  });
+
+  it('refuses batching for Oyster, which reads one request per POST', () => {
+    expect(() => new OysterClient({ url: 'https://127.0.0.1:18332', batch: true } as never)).toThrow('does not accept JSON-RPC batches');
+  });
+
+  it('retries read-only calls after a transient failure, and never a send', async () => {
+    let attempts = 0;
+    const flaky = (async (_url: string, init: RequestInit) => {
+      attempts++;
+      const { id, method } = JSON.parse(init.body as string) as { id: number; method: string };
+      if (attempts < 3) {
+        if (attempts === 1) throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('reset'), { code: 'ECONNRESET' }) });
+        return new Response('busy', { status: 503 });
+      }
+      const name = method === 'getblockcount' ? 'getblockcount' : 'sendrawtransaction';
+      return new Response(fixture(name).body.replace(/"id":\d+}/, `"id":${id}}`));
+    }) as unknown as typeof fetch;
+    const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: flaky, retry: { attempts: 2, delay: 1 } });
+    expect(await client.getBlockCount()).toBe(321);
+    expect(attempts).toBe(3);
+
+    attempts = 0;
+    expect((await rejection(client.sendRawTransaction('00'))).kind).toBe('network');
+    expect(attempts).toBe(1);
+
+    attempts = 0;
+    const once = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: flaky, retry: { attempts: 1, delay: 1 } });
+    expect(await rejection(once.getBlockCount())).toMatchObject({ kind: 'http', status: 503 });
+    expect(attempts).toBe(2);
+
+    attempts = 0;
+    const plain = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: flaky });
+    await rejection(plain.getBlockCount());
+    expect(attempts).toBe(1);
+  });
+
+  it('does not retry an RPC error or a refused password', async () => {
+    let attempts = 0;
+    const refusing = (async () => {
+      attempts++;
+      return attempts === 1 ? new Response('', { status: 401 }) : new Response(fixture('method-not-found').body.replace(/"id":\d+}/, '"id":2}'));
+    }) as unknown as typeof fetch;
+    const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: refusing, retry: 5 });
+    expect((await rejection(client.getBlockCount())).status).toBe(401);
+    expect((await rejection(client.getBlockCount())).code).toBe(-32601);
+    expect(attempts).toBe(2);
+  });
+
+  it('falls back to the next server when one cannot be reached, and stays put on an RPC error', async () => {
+    const down = (async () => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }) });
+    }) as unknown as typeof fetch;
+    const up = fakeFetch({ getblockcount: 'getblockcount', getrawtransaction: 'getrawtransaction-missing' });
+    const transport = fallbackTransport([
+      httpTransport({ url: 'https://a.example:44107', username: 'a', password: 'x', fetch: down }),
+      httpTransport({ url: 'https://b.example:44107', username: 'b', password: 'y', fetch: up.fetch }),
+    ]);
+    const client = new PearldClient({ transport });
+    expect(await client.getBlockCount()).toBe(321);
+    expect(up.sent[0]!.url).toBe('https://b.example:44107/');
+    expect(new Headers(up.sent[0]!.init.headers).get('Authorization')).toBe(`Basic ${btoa('b:y')}`);
+    expect(await rejection(client.getRawTransaction(txid))).toMatchObject({ kind: 'rpc', code: -5 });
+
+    const answering = fakeFetch({ getrawtransaction: 'getrawtransaction-missing' });
+    const never2 = fakeFetch({});
+    const first = new PearldClient({
+      transport: fallbackTransport([
+        httpTransport({ url: 'https://a.example:44107', fetch: answering.fetch }),
+        httpTransport({ url: 'https://b.example:44107', fetch: never2.fetch }),
+      ]),
+    });
+    await rejection(first.getRawTransaction(txid));
+    expect(never2.sent).toHaveLength(0);
+
+    const allDown = new PearldClient({
+      transport: fallbackTransport([httpTransport({ url: 'https://a.example:1', fetch: down }), httpTransport({ url: 'https://b.example:2', fetch: down })]),
+    });
+    expect((await rejection(allDown.getBlockCount())).message).toContain('connection refused by b.example:2');
+    expect(() => fallbackTransport([])).toThrow('at least one transport');
+    expect(() => new PearldClient({ url: 'https://a.example', transport })).toThrow('either url or transport');
+  });
+});
+
+describe('address paging', () => {
+  it('stops with an error when the server ignores skip instead of looping forever', async () => {
+    let requests = 0;
+    const client = {
+      async searchRawTransactions() {
+        requests++;
+        const page = JSON.parse(fixture('searchrawtransactions').body) as { result: { txid: string; blockhash?: string }[] };
+        return [page.result[0]] as never;
+      },
+    };
+    const err = await rejection(searchAllTransactions(client, address, { pageSize: 1 }));
+    expect(err).toMatchObject({ kind: 'response', method: 'searchrawtransactions' });
+    expect(err.message).toContain('does not honor skip');
+    expect(requests).toBe(2);
+  });
+
+  it('gives up after maxPages requests', async () => {
+    let n = 0;
+    const client = {
+      async searchRawTransactions() {
+        return [{ txid: String(n++), blockhash: 'aa', vin: [], vout: [] }] as never;
+      },
+    };
+    const err = await rejection(searchAllTransactions(client, address, { pageSize: 1, maxPages: 5 }));
+    expect(err.message).toContain('more than 5 pages');
+    expect(n).toBe(5);
+  });
+
+  it('refuses a page size pearld would not honor', async () => {
+    const { client } = pearld({});
+    for (const pageSize of [0, -1, 1.5, 10001, Number.NaN]) {
+      await expect(searchAllTransactions(client, address, { pageSize })).rejects.toThrow('pageSize must be an integer from 1 to 10000');
+      await expect(pearldChainClient(client, pageSize).getAddressActivity(address)).rejects.toThrow(RangeError);
+    }
+  });
+
+  it('does not take a missing transaction index for an unknown transaction', async () => {
+    const { client } = pearld({ getrawtransaction: 'getrawtransaction-noindex' });
+    const err = await rejection(pearldChainClient(client).getTransaction(txid));
+    expect(err).toMatchObject({ kind: 'rpc', code: -5 });
+    expect(err.message).toContain('transaction index must be enabled');
+  });
+
+  it('refuses a tip height that is not a block height', async () => {
+    const bad = fixture('getblockchaininfo').body.replace('"blocks":321', '"blocks":3.5');
+    const { client } = pearld({ getblockchaininfo: (r) => new Response(bad.replace(/"id":\d+}/, `"id":${r.body.id}}`)) });
+    expect((await rejection(pearldChainClient(client).getTip())).message).toContain('expected a block height, got 3.5');
   });
 });
