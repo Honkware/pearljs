@@ -1,5 +1,6 @@
-// Run with a Pearl source checkout:
-// go -C /path/to/pearl/node run /path/to/pearljs/vectors/generate.go -out /path/to/pearljs/vectors/pearl-go.json
+// Run with a Pearl source checkout, after building its XMSS library with
+// `make -C /path/to/pearl/xmss`:
+// go -C /path/to/pearl/node run -tags xmss /path/to/pearljs/vectors/generate.go -out /path/to/pearljs/vectors/pearl-go.json
 package main
 
 import (
@@ -23,6 +24,7 @@ import (
 	"github.com/pearl-research-labs/pearl/node/chaincfg/chainhash"
 	"github.com/pearl-research-labs/pearl/node/txscript"
 	"github.com/pearl-research-labs/pearl/node/wire"
+	"github.com/pearl-research-labs/pearl/xmss"
 )
 
 type NetworkVector struct {
@@ -206,7 +208,48 @@ type Vectors struct {
 	ScriptTrees      []ScriptTreeVector      `json:"scriptTrees"`
 	ScriptPathSpends []ScriptPathSpendVector `json:"scriptPathSpends"`
 	Blocks           []BlockVector           `json:"blocks"`
+	XMSS             XMSSVectors             `json:"xmss"`
 	BadBlocks        []BadBlockVector        `json:"badBlocks"`
+}
+
+type XMSSKeyVector struct {
+	Name        string `json:"name"`
+	PrivateSeed string `json:"privateSeed"`
+	PublicSeed  string `json:"publicSeed"`
+	PublicKey   string `json:"publicKey"`
+	SecretKey   string `json:"secretKey"`
+}
+
+type XMSSSignatureVector struct {
+	Key       string `json:"key"`
+	MsgUID    uint32 `json:"msgUid"`
+	Message   string `json:"message"`
+	Signature string `json:"signature"`
+	// Valid is what xmss.Verify returns. Pearl's Sign reports success at
+	// index 31 but the signature does not verify.
+	Valid bool `json:"valid"`
+}
+
+type XMSSSpendVector struct {
+	Name          string          `json:"name"`
+	Key           string          `json:"key"`
+	MsgUID        uint32          `json:"msgUid"`
+	LeafScripts   []string        `json:"leafScripts"`
+	LeafIndex     int             `json:"leafIndex"`
+	InputIndex    int             `json:"inputIndex"`
+	Prevouts      []PrevoutVector `json:"prevouts"`
+	ControlBlock  string          `json:"controlBlock"`
+	UnsignedTxHex string          `json:"unsignedTxHex"`
+	Sighash       string          `json:"sighash"`
+	Signature     string          `json:"signature"`
+	FinalTxHex    string          `json:"finalTxHex"`
+	TxID          string          `json:"txid"`
+}
+
+type XMSSVectors struct {
+	Keys       []XMSSKeyVector       `json:"keys"`
+	Signatures []XMSSSignatureVector `json:"signatures"`
+	Spends     []XMSSSpendVector     `json:"spends"`
 }
 
 type BlockVector struct {
@@ -900,6 +943,141 @@ func main() {
 		}
 		sealBlock(block, item.cert)
 		vectors.Blocks = append(vectors.Blocks, makeBlockVector(item.name, block))
+	}
+
+	// XMSS: keys from fixed seeds (key "a" uses the seeds published in
+	// pearl-research-labs/pearl#111), signatures across the index range, and
+	// P2MR spends checked by the script engine with OP_CHECKXMSSSIG.
+	type xmssKey struct {
+		priv [xmss.PrivateSeedLen]byte
+		pub  [xmss.PublicSeedLen]byte
+		pk   [xmss.PKLen]byte
+		sk   [xmss.SKLen]byte
+	}
+	xmssKeys := map[string]*xmssKey{}
+	for _, item := range []struct {
+		name                string
+		privStart, pubStart byte
+	}{{"a", 0x00, 0x40}, {"b", 0x80, 0xc0}, {"c", 0x5a, 0xa5}} {
+		k := &xmssKey{}
+		for i := range k.priv {
+			k.priv[i] = item.privStart + byte(i)
+		}
+		for i := range k.pub {
+			k.pub[i] = item.pubStart + byte(i)
+		}
+		k.pk, k.sk, err = xmss.Keygen(k.priv, k.pub)
+		check(err)
+		xmssKeys[item.name] = k
+		vectors.XMSS.Keys = append(vectors.XMSS.Keys, XMSSKeyVector{
+			Name: item.name, PrivateSeed: hex.EncodeToString(k.priv[:]), PublicSeed: hex.EncodeToString(k.pub[:]),
+			PublicKey: hex.EncodeToString(k.pk[:]), SecretKey: hex.EncodeToString(k.sk[:]),
+		})
+	}
+	for _, item := range []struct {
+		key string
+		uid uint32
+	}{{"a", 0}, {"a", 1}, {"a", 7}, {"a", 30}, {"a", 31}, {"b", 0}, {"c", 16}} {
+		k := xmssKeys[item.key]
+		var msg [xmss.MsgLen]byte
+		copy(msg[:], chainhash.HashB([]byte(fmt.Sprintf("pearljs xmss %s %d", item.key, item.uid))))
+		sig, err := xmss.Sign(item.uid, k.sk, msg)
+		check(err)
+		vectors.XMSS.Signatures = append(vectors.XMSS.Signatures, XMSSSignatureVector{
+			Key: item.key, MsgUID: item.uid, Message: hex.EncodeToString(msg[:]),
+			Signature: hex.EncodeToString(sig[:]), Valid: xmss.Verify(k.pk, msg, sig),
+		})
+	}
+	for _, item := range []struct {
+		name     string
+		key      string
+		uid      uint32
+		withLeaf bool
+		withP2TR bool
+	}{
+		{"p2mr-xmss-single-leaf", "a", 0, false, false},
+		{"p2mr-xmss-with-schnorr-leaf", "b", 3, true, false},
+		{"p2mr-xmss-with-p2tr-input", "c", 30, false, true},
+	} {
+		k := xmssKeys[item.key]
+		xmssLeaf, err := txscript.NewScriptBuilder().AddData(k.pk[:]).AddOp(txscript.OP_CHECKXMSSSIG).Script()
+		check(err)
+		leaves := []txscript.TapLeaf{txscript.NewBaseTapLeaf(xmssLeaf)}
+		if item.withLeaf {
+			schnorrLeaves, _ := leafKeyScripts(account, 1)
+			leaves = append(leaves, schnorrLeaves[0])
+		}
+		tree := txscript.AssembleTaprootScriptTree(leaves...)
+		root := tree.RootNode.TapHash()
+		mrAddr, err := btcutil.NewAddressMerkleRoot(root[:], &chaincfg.MainNetParams)
+		check(err)
+		prevScript, err := txscript.PayToAddrScript(mrAddr)
+		check(err)
+		cb, err := (&txscript.MerkleRootControlBlock{
+			LeafVersion: txscript.BaseLeafVersion, InclusionProof: tree.LeafMerkleProofs[0].InclusionProof,
+		}).ToBytes()
+		check(err)
+
+		const amount int64 = 1_000_000_000
+		spendTx := wire.NewMsgTx(wire.TxVersion)
+		var prevOuts []*wire.TxOut
+		var keyPathPriv *btcec.PrivateKey
+		if item.withP2TR {
+			keyPathPriv, err = derive(account, 1, 2).ECPrivKey()
+			check(err)
+			keyPathScript, err := txscript.PayToTaprootScript(txscript.ComputeTaprootKeyNoScript(keyPathPriv.PubKey()))
+			check(err)
+			spendTx.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x0a}, 0), nil, nil))
+			prevOuts = append(prevOuts, wire.NewTxOut(20_000_000, keyPathScript))
+		}
+		inputIndex := len(spendTx.TxIn)
+		spendTx.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x0b}, 1), nil, nil))
+		prevOuts = append(prevOuts, wire.NewTxOut(amount, prevScript))
+		spendTx.AddTxOut(wire.NewTxOut(amount-50_000, prevScript))
+		unsignedHex := serializeTx(spendTx, false)
+
+		fetcher := txscript.NewMultiPrevOutFetcher(nil)
+		var prevoutVectors []PrevoutVector
+		for i, txIn := range spendTx.TxIn {
+			fetcher.AddPrevOut(txIn.PreviousOutPoint, prevOuts[i])
+			prevoutVectors = append(prevoutVectors, PrevoutVector{Script: hex.EncodeToString(prevOuts[i].PkScript), Value: prevOuts[i].Value})
+		}
+		sighash, err := txscript.CalcTapscriptSignaturehash(
+			txscript.NewTxSigHashes(spendTx, fetcher), txscript.SigHashDefault, spendTx, inputIndex, fetcher, leaves[0],
+		)
+		check(err)
+		var msg [xmss.MsgLen]byte
+		copy(msg[:], sighash)
+		sig, err := xmss.Sign(item.uid, k.sk, msg)
+		check(err)
+
+		finalTx := spendTx.Copy()
+		witness := wire.TxWitness{}
+		chunk := xmss.SignatureLen / 5
+		for i := 0; i < 5; i++ {
+			witness = append(witness, sig[i*chunk:(i+1)*chunk])
+		}
+		finalTx.TxIn[inputIndex].SetWitness(append(witness, xmssLeaf, cb))
+		if keyPathPriv != nil {
+			keySig, err := txscript.RawTxInTaprootSignature(
+				finalTx, txscript.NewTxSigHashes(finalTx, fetcher), 0, prevOuts[0].Value,
+				prevOuts[0].PkScript, nil, txscript.SigHashDefault, keyPathPriv,
+			)
+			check(err)
+			finalTx.TxIn[0].SetWitness(wire.TxWitness{keySig})
+		}
+		verifyInputs(finalTx, prevOuts)
+
+		var leafScripts []string
+		for _, leaf := range leaves {
+			leafScripts = append(leafScripts, hex.EncodeToString(leaf.Script))
+		}
+		vectors.XMSS.Spends = append(vectors.XMSS.Spends, XMSSSpendVector{
+			Name: item.name, Key: item.key, MsgUID: item.uid, LeafScripts: leafScripts, LeafIndex: 0,
+			InputIndex: inputIndex, Prevouts: prevoutVectors, ControlBlock: hex.EncodeToString(cb),
+			UnsignedTxHex: unsignedHex, Sighash: hex.EncodeToString(sighash), Signature: hex.EncodeToString(sig[:]),
+			FinalTxHex: serializeTx(finalTx, true), TxID: finalTx.TxID(),
+		})
 	}
 
 	// Encodings Pearl's decoder rejects, built by editing a valid block.
