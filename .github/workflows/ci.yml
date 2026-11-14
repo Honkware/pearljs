@@ -22,9 +22,8 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm run build
-      - run: npm test
+      # Lint, typecheck, build, tests, the examples and the code in the docs.
+      - run: npm run check
       # Packs the package, installs the tarball in a fresh project and checks it.
       - run: npm run verify:pack
+      - run: npm run docs

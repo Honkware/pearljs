@@ -48,7 +48,7 @@ check('p2mr tapscript sighash', () => {
   const s = v.scriptPathSpends.find((item) => item.name === 'p2mr-1-leaf-default');
   const tx = p.parseTransaction(s.unsignedTxHex);
   const prevouts = s.prevouts.map((o) => ({ script: unhex(o.script), value: BigInt(o.value) }));
-  return hex(p.tapscriptSighash(tx, 0, prevouts, unhex(s.leafHash), s.hashType)) === s.sighash;
+  return hex(p.tapscriptSighash(tx, 0, { prevouts, leafHash: unhex(s.leafHash), sighashType: s.hashType })) === s.sighash;
 });
 check('hash256', () => hex(p.hash256(new Uint8Array(0))) === '5df6e0e2761359d30a8275058e299fcc0381534545f55cf43e41983f5d4c9456');
 

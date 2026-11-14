@@ -1,5 +1,5 @@
 // Packs the package, installs the tarball into a fresh project and checks what a
-// consumer sees: file list, export map, Node ESM and require(), types under
+// consumer sees: file list, links between the packed documents, export map, Node ESM and require(), types under
 // nodenext and bundler resolution, tree shaking, publint and attw.
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -24,10 +24,20 @@ for (const m of modules) {
   if (!pkg.exports[`./${m}`]) fail(`src/index.ts re-exports ${m} but package.json has no ./${m} subpath`);
 }
 const { dir: packDir, tarball, files } = pack();
-const allowed = /^(dist\/.+|package\.json|README\.md|CHANGELOG\.md|LICENSE|NOTICE)$/;
+// The guides and examples ship, since the README links to them; the generated API reference does not.
+const allowed = /^(dist\/.+|docs\/[\w-]+\.md|examples\/.+\.ts|package\.json|README\.md|CHANGELOG\.md|CONTRIBUTING\.md|SECURITY\.md|LICENSE|NOTICE)$/;
 for (const f of files) if (!allowed.test(f)) fail(`unexpected file in package: ${f}`);
-for (const f of ['README.md', 'LICENSE', 'NOTICE', 'CHANGELOG.md', 'dist/index.js', 'dist/index.d.ts']) {
+for (const f of ['README.md', 'LICENSE', 'NOTICE', 'CHANGELOG.md', 'docs/README.md', 'dist/index.js', 'dist/index.d.ts']) {
   if (!files.includes(f)) fail(`missing from package: ${f}`);
+}
+// Every relative link in a packed Markdown file leads to a packed file or directory.
+for (const f of files.filter((name) => name.endsWith('.md'))) {
+  const text = readFileSync(join(root, f), 'utf8').replace(/```[\s\S]*?```/g, '');
+  for (const [, target] of text.matchAll(/\]\(([^)\s]+)\)/g)) {
+    if (/^(https?:|mailto:|#)/.test(target)) continue;
+    const path = join(f, '..', target.split('#')[0]).replace(/\\/g, '/');
+    if (!files.includes(path) && !files.some((name) => name.startsWith(`${path}/`))) fail(`${f} links to ${target}, which is not packed`);
+  }
 }
 const mapSources = files.filter((f) => f.endsWith('.map'));
 for (const f of mapSources) {
