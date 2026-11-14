@@ -22,3 +22,4 @@ export * from './scripttree.js';
 export * from './transaction.js';
 export * from './wif.js';
 export * from './xmss.js';
+export * from './coinselect.js';

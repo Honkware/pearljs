@@ -31,6 +31,10 @@ import (
 	"github.com/pearl-research-labs/pearl/node/txscript"
 	"github.com/pearl-research-labs/pearl/node/wire"
 	"github.com/pearl-research-labs/pearl/wallet/rpc/jsonrpc"
+	"github.com/pearl-research-labs/pearl/wallet/wallet"
+	"github.com/pearl-research-labs/pearl/wallet/wallet/txauthor"
+	"github.com/pearl-research-labs/pearl/wallet/wallet/txrules"
+	"github.com/pearl-research-labs/pearl/wallet/wallet/txsizes"
 	"github.com/pearl-research-labs/pearl/xmss"
 )
 
@@ -227,6 +231,55 @@ type Vectors struct {
 	Leaves           LeafBuilderVectors      `json:"leaves"`
 	Mempool          []MempoolScenarioVector `json:"mempool"`
 	Consensus        ConsensusVectors        `json:"consensus"`
+	CoinSelection    CoinSelectionVectors    `json:"coinSelection"`
+}
+
+// CoinVector is an unspent output offered to coin selection.
+type CoinVector struct {
+	TxID   string `json:"txid"`
+	Vout   uint32 `json:"vout"`
+	Value  int64  `json:"value,string"`
+	Script string `json:"script"`
+}
+
+// CoinSelectionVector is one run of txauthor.NewUnsignedTransaction. Strategy
+// names how the coins reached it: "largest" and "random" go through Oyster's
+// ArrangeCoins and its accumulating input source, "all" through the constant
+// source it uses for user-selected outputs. Arranged is the order the input
+// source saw; for "random" the shuffle is replaced by a sort on outpoint so
+// the file is reproducible. ChangeScriptSize is what txauthor was told the
+// change script measures, which sweepaccount gets wrong.
+type CoinSelectionVector struct {
+	Name             string          `json:"name"`
+	Strategy         string          `json:"strategy"`
+	FeeRate          int64           `json:"feeRate,string"`
+	Coins            []CoinVector    `json:"coins"`
+	Outputs          []PrevoutVector `json:"outputs"`
+	ChangeScript     string          `json:"changeScript"`
+	ChangeScriptSize int             `json:"changeScriptSize"`
+	Arranged         []string        `json:"arranged"`
+	Inputs           []string        `json:"inputs"`
+	TotalInput       int64           `json:"totalInput,string"`
+	Fee              int64           `json:"fee,string"`
+	Change           int64           `json:"change,string"`
+	ChangeIndex      int             `json:"changeIndex"`
+	UnsignedTxHex    string          `json:"unsignedTxHex"`
+	Error            string          `json:"error"`
+}
+
+// SizeEstimateVector is txsizes.EstimateVirtualSize for a count of key-path
+// inputs, the given output scripts and a P2TR change output.
+type SizeEstimateVector struct {
+	Inputs  int      `json:"inputs"`
+	Outputs []string `json:"outputs"`
+	Vsize   int      `json:"vsize"`
+}
+
+type CoinSelectionVectors struct {
+	CoinbaseMaturity uint16                `json:"coinbaseMaturity"`
+	MinInputVsize    int                   `json:"minInputVsize"`
+	SizeEstimates    []SizeEstimateVector  `json:"sizeEstimates"`
+	Cases            []CoinSelectionVector `json:"cases"`
 }
 
 // P2MRPSBTInputVector is one input of a P2MRPSBTVector. Kind is "p2mr" for
@@ -1917,6 +1970,7 @@ func main() {
 	vectors.Leaves = leafBuilderVectors(account, internalPub)
 	vectors.Mempool = mempoolVectors()
 	vectors.Consensus = consensusVectors(nets)
+	vectors.CoinSelection = coinSelectionVectors()
 
 	data, err := json.MarshalIndent(vectors, "", "  ")
 	check(err)
@@ -2600,6 +2654,169 @@ func consensusVectors(nets []*chaincfg.Params) ConsensusVectors {
 		new(big.Int).Lsh(one, 255), new(big.Int).Sub(new(big.Int).Lsh(one, 256), one),
 	} {
 		out.Targets = append(out.Targets, TargetVector{target.String(), blockchain.BigToCompact(target)})
+// accumulatingInputSource is makeInputSource from wallet/wallet/createtx.go,
+// which is unexported: it adds coins in order until the target is covered
+// and keeps them across calls.
+func accumulatingInputSource(eligible []wallet.Coin) txauthor.InputSource {
+	currentTotal := btcutil.Amount(0)
+	currentInputs := make([]*wire.TxIn, 0, len(eligible))
+	currentScripts := make([][]byte, 0, len(eligible))
+	currentInputValues := make([]btcutil.Amount, 0, len(eligible))
+	return func(target btcutil.Amount) (btcutil.Amount, []*wire.TxIn,
+		[]btcutil.Amount, [][]byte, error) {
+		for currentTotal < target && len(eligible) != 0 {
+			nextCredit := eligible[0]
+			prevOut := nextCredit.TxOut
+			outpoint := nextCredit.OutPoint
+			eligible = eligible[1:]
+			nextInput := wire.NewTxIn(&outpoint, nil, nil)
+			currentTotal += btcutil.Amount(prevOut.Value)
+			currentInputs = append(currentInputs, nextInput)
+			currentScripts = append(currentScripts, prevOut.PkScript)
+			currentInputValues = append(currentInputValues, btcutil.Amount(prevOut.Value))
+		return currentTotal, currentInputs, currentInputValues, currentScripts, nil
+// constantInputSource is the one in createtx.go, also unexported, over Coins:
+// every selected output is spent whatever the target.
+func constantInputSource(eligible []wallet.Coin) txauthor.InputSource {
+	currentTotal := btcutil.Amount(0)
+	currentInputs := make([]*wire.TxIn, 0, len(eligible))
+	currentScripts := make([][]byte, 0, len(eligible))
+	currentInputValues := make([]btcutil.Amount, 0, len(eligible))
+	for _, coin := range eligible {
+		outpoint := coin.OutPoint
+		currentTotal += btcutil.Amount(coin.Value)
+		currentInputs = append(currentInputs, wire.NewTxIn(&outpoint, nil, nil))
+		currentScripts = append(currentScripts, coin.PkScript)
+		currentInputValues = append(currentInputValues, btcutil.Amount(coin.Value))
+	return func(btcutil.Amount) (btcutil.Amount, []*wire.TxIn, []btcutil.Amount, [][]byte, error) {
+		return currentTotal, currentInputs, currentInputValues, currentScripts, nil
+func coinSelectionVectors() CoinSelectionVectors {
+	p2tr := func(b byte) []byte { return append([]byte{txscript.OP_1, 32}, bytes.Repeat([]byte{b}, 32)...) }
+	p2mr := func(b byte) []byte { return append([]byte{txscript.OP_2, 32}, bytes.Repeat([]byte{b}, 32)...) }
+	nullData, err := txscript.NullDataScript([]byte("pearljs"))
+	changeScript := p2tr(0xcc)
+	pay := func(script []byte, value int64) *wire.TxOut { return wire.NewTxOut(value, script) }
+	out := CoinSelectionVectors{
+		CoinbaseMaturity: chaincfg.MainNetParams.CoinbaseMaturity,
+		MinInputVsize:    txsizes.GetMinInputVirtualSize(p2tr(0x01)),
+	for _, net := range []*chaincfg.Params{
+		&chaincfg.TestNetParams, &chaincfg.TestNet2Params, &chaincfg.RegressionNetParams, &chaincfg.SimNetParams,
+		if net.CoinbaseMaturity != out.CoinbaseMaturity {
+			panic("coinbase maturity differs between networks")
+	for _, outputs := range [][]*wire.TxOut{
+		{pay(p2tr(0xa1), 1)},
+		{pay(p2tr(0xa1), 1), pay(p2mr(0xa2), 1), pay(nullData, 0)},
+		for _, inputs := range []int{0, 1, 2, 3, 4, 5, 6, 7, 252, 253, 254} {
+			scripts := make([]string, len(outputs))
+			for i, output := range outputs {
+				scripts[i] = hex.EncodeToString(output.PkScript)
+			out.SizeEstimates = append(out.SizeEstimates, SizeEstimateVector{
+				Inputs: inputs, Outputs: scripts,
+				Vsize: txsizes.EstimateVirtualSize(0, inputs, 0, 0, outputs, txsizes.P2TRPkScriptSize),
+	type selectionCase struct {
+		name       string
+		strategy   string
+		feeRate    int64
+		coins      []int64
+		coinScript func(i int) []byte
+		outputs    []*wire.TxOut
+		scriptSize int
+	keyPathCoin := func(i int) []byte { return p2tr(byte(i + 1)) }
+	cases := []selectionCase{
+		{name: "one input with change", strategy: "largest", feeRate: 1000,
+			coins: []int64{50_000, 2_000_000, 300_000}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 1_500_000)}},
+		{name: "three inputs", strategy: "largest", feeRate: 1000,
+			coins: []int64{400_000, 100_000, 700_000, 250_000, 600_000}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 1_500_000)}},
+		{name: "two inputs after the fee needs another coin", strategy: "largest", feeRate: 1000,
+			coins: []int64{5_000, 10_000}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 9_900)}},
+		{name: "six inputs", strategy: "largest", feeRate: 1000,
+			coins: []int64{10_100, 10_200, 10_300, 10_400, 10_500, 10_600, 10_700}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 61_000)}},
+		{name: "change of zero", strategy: "largest", feeRate: 1000,
+			coins: []int64{10_000}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 9_845)}},
+		{name: "change one grain under the dust limit", strategy: "largest", feeRate: 1000,
+			coins: []int64{10_000}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 9_845-332)}},
+		{name: "change at the dust limit", strategy: "largest", feeRate: 1000,
+			coins: []int64{10_000}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 9_845-333)}},
+		{name: "dust limit does not follow the fee rate", strategy: "largest", feeRate: 50_000,
+			coins: []int64{100_000}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 100_000-7_750-400)}},
+		{name: "fee rate that does not divide evenly", strategy: "largest", feeRate: 1234,
+			coins: []int64{900_000, 800_000}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 1_000_000)}},
+		{name: "fee rate under one grain per transaction", strategy: "largest", feeRate: 3,
+			coins: []int64{900_000}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 100_000)}},
+		{name: "several outputs with P2MR and OP_RETURN", strategy: "largest", feeRate: 2500,
+			coins:   []int64{900_000, 800_000, 700_000},
+			outputs: []*wire.TxOut{pay(p2tr(0xa1), 500_000), pay(p2mr(0xa2), 600_000), pay(nullData, 0)}},
+		{name: "not enough coins", strategy: "largest", feeRate: 1000,
+			coins: []int64{1_000, 2_000}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 5_000)}},
+		{name: "enough for the output but not the fee", strategy: "largest", feeRate: 1000,
+			coins: []int64{10_000}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 9_950)}},
+		{name: "random skips coins that cost more than they add", strategy: "random", feeRate: 100_000,
+			coins: []int64{5_800, 5_801, 3_000, 50_000, 80_000, 120_000}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 100_000)}},
+		{name: "every selected coin is spent", strategy: "all", feeRate: 1000,
+			coins: []int64{50_000, 60_000, 70_000}, outputs: []*wire.TxOut{pay(p2tr(0xa1), 20_000)}},
+		{name: "sweep to one output", strategy: "all", feeRate: 1000,
+			coins: []int64{50_000, 60_000, 70_000}},
+		{name: "sweep as sweepaccount sizes it", strategy: "all", feeRate: 1000,
+			coins: []int64{50_000, 60_000, 70_000}, scriptSize: txsizes.P2TROutputSize},
+		{name: "P2MR coins priced as key paths", strategy: "largest", feeRate: 1000,
+			coins: []int64{200_000, 300_000}, coinScript: func(i int) []byte { return p2mr(byte(i + 1)) },
+			outputs: []*wire.TxOut{pay(p2tr(0xa1), 400_000)}},
+	for _, item := range cases {
+		if item.coinScript == nil {
+			item.coinScript = keyPathCoin
+		if item.scriptSize == 0 {
+			item.scriptSize = txsizes.P2TRPkScriptSize
+		vector := CoinSelectionVector{
+			Name: item.name, Strategy: item.strategy, FeeRate: item.feeRate,
+			ChangeScript: hex.EncodeToString(changeScript), ChangeScriptSize: item.scriptSize,
+			Outputs: []PrevoutVector{}, Arranged: []string{}, Inputs: []string{}, ChangeIndex: -1,
+		for _, output := range item.outputs {
+			check(txrules.CheckOutput(output, txrules.DefaultRelayFeePerKb))
+			vector.Outputs = append(vector.Outputs, PrevoutVector{
+				Script: hex.EncodeToString(output.PkScript), Value: output.Value,
+		coins := make([]wallet.Coin, len(item.coins))
+		for i, value := range item.coins {
+			hash := chainhash.HashH([]byte(fmt.Sprintf("pearljs coin %s %d", item.name, i)))
+			coins[i] = wallet.Coin{
+				TxOut:    wire.TxOut{Value: value, PkScript: item.coinScript(i)},
+				OutPoint: wire.OutPoint{Hash: hash, Index: uint32(i)},
+			vector.Coins = append(vector.Coins, CoinVector{
+				TxID: hash.String(), Vout: uint32(i), Value: value, Script: hex.EncodeToString(coins[i].PkScript),
+		var source txauthor.InputSource
+		arranged := coins
+		switch item.strategy {
+		case "largest":
+			arranged, err = wallet.CoinSelectionLargest.ArrangeCoins(coins, btcutil.Amount(item.feeRate))
+			source = accumulatingInputSource(arranged)
+		case "random":
+			arranged, err = wallet.CoinSelectionRandom.ArrangeCoins(coins, btcutil.Amount(item.feeRate))
+			sort.Slice(arranged, func(i, j int) bool {
+				return arranged[i].OutPoint.String() < arranged[j].OutPoint.String()
+			source = accumulatingInputSource(arranged)
+		case "all":
+			source = constantInputSource(coins)
+		for _, coin := range arranged {
+			vector.Arranged = append(vector.Arranged, coin.OutPoint.String())
+		authored, err := txauthor.NewUnsignedTransaction(
+			item.outputs, btcutil.Amount(item.feeRate), source,
+			&txauthor.ChangeSource{
+				NewScript:  func() ([]byte, error) { return changeScript, nil },
+				ScriptSize: item.scriptSize,
+			vector.Error = err.Error()
+			out.Cases = append(out.Cases, vector)
+			continue
+		spent := int64(0)
+		for _, output := range authored.Tx.TxOut {
+			spent += output.Value
+		for _, input := range authored.Tx.TxIn {
+			vector.Inputs = append(vector.Inputs, input.PreviousOutPoint.String())
+		vector.TotalInput = int64(authored.TotalInput)
+		vector.Fee = int64(authored.TotalInput) - spent
+		vector.ChangeIndex = authored.ChangeIndex
+		if authored.ChangeIndex >= 0 {
+			vector.Change = authored.Tx.TxOut[authored.ChangeIndex].Value
+		vector.UnsignedTxHex = serializeTx(authored.Tx, false)
+		out.Cases = append(out.Cases, vector)
 	}
 	return out
 }
