@@ -52,7 +52,8 @@ export function sweepKey(privateKey: Uint8Array, options: SweepOptions): SignedP
   const values = payment.prevouts.map((prevout) => prevout.value);
   signed.ins.forEach((_, i) => {
     const hash = signed.hashForWitnessV1(i, scripts, values, Transaction.SIGHASH_DEFAULT);
-    const signature = ecc.signSchnorr(hash, tweaked);
+    // Fresh BIP340 auxiliary randomness, as the signing accounts use.
+    const signature = ecc.signSchnorr(hash, tweaked, crypto.getRandomValues(new Uint8Array(32)));
     if (!ecc.verifySchnorr(hash, script.subarray(2), signature)) {
       throw new Error(`invalid Taproot signature for input ${i}`);
     }
