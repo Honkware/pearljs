@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest';
 import {
   compileScript,
   decodeScriptNumber,
+  decodeScriptNumberBigInt,
   decompileScript,
+  encodeScriptNumber,
   isDisabledOpcode,
   isPushOnlyScript,
   OP_CODES,
@@ -14,10 +16,23 @@ import {
   scriptFromAsm,
   scriptToAsm,
 } from '../src/index.js';
+import type { ScriptChunk } from '../src/index.js';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
 import { bytesToHex, hexToBytes } from './vector-helpers.js';
 
 const toolkit = vectors.scriptToolkit;
+
+/** mulberry32, so the random scripts are the same on every run. */
+function prng(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 describe('script toolkit', () => {
   it('has exactly Pearl\'s opcode names and values', () => {
@@ -63,13 +78,104 @@ describe('script toolkit', () => {
   it('parses the one-line format back into the same script', () => {
     for (const name of canonical) {
       const expected = toolkit.disasm.find((item) => item.name === name)!;
-      expect(bytesToHex(scriptFromAsm(expected.disasm))).toBe(expected.script);
+      const script = hexToBytes(expected.script);
+      expect(bytesToHex(scriptFromAsm(scriptToAsm(script, { unambiguous: true })))).toBe(expected.script);
+      if (/(^| )1[0-6]( |$)/.test(expected.disasm)) {
+        expect(() => scriptFromAsm(expected.disasm)).toThrow('is ambiguous');
+      } else {
+        expect(bytesToHex(scriptFromAsm(expected.disasm))).toBe(expected.script);
+      }
     }
-    // A one-byte push of 0x10 prints as "10", which reads back as OP_10.
-    expect(scriptFromAsm('10 81')).toEqual(Uint8Array.of(OP_CODES.OP_10, 0x01, 0x81));
     expect(scriptFromAsm('OP_TRUE OP_NOP2')).toEqual(Uint8Array.of(OP_CODES.OP_1, OP_CODES.OP_CHECKLOCKTIMEVERIFY));
     expect(() => scriptFromAsm('OP_NOTREAL')).toThrow('unknown');
     expect(() => scriptFromAsm('abc')).toThrow('cannot parse');
+    expect(() => scriptFromAsm(undefined as unknown as string)).toThrow(TypeError);
+    // One word of 300,000 hex characters used to overflow the call stack.
+    expect(scriptFromAsm('ab'.repeat(150_000))).toHaveLength(150_005);
+  });
+
+  it('refuses words that DisasmString prints for two different scripts', () => {
+    // OP_10 and a one-byte push of 0x10 both print as "10".
+    const opcode = Uint8Array.of(OP_CODES.OP_10);
+    const push = Uint8Array.of(0x01, 0x10);
+    expect(scriptToAsm(opcode)).toBe('10');
+    expect(scriptToAsm(push)).toBe('10');
+    for (let n = 10; n <= 16; n += 1) {
+      expect(() => scriptFromAsm(`OP_DUP ${n}`)).toThrow(`write OP_${n} for the number or 0x${n} for a one-byte push`);
+    }
+    expect(scriptToAsm(opcode, { unambiguous: true })).toBe('OP_10');
+    expect(scriptToAsm(push, { unambiguous: true })).toBe('0x10');
+    expect(scriptFromAsm('OP_10')).toEqual(opcode);
+    expect(scriptFromAsm('0x10')).toEqual(push);
+    // Outside 0x10 to 0x16 a two-digit word is only ever data.
+    expect(scriptFromAsm('09 17 81')).toEqual(Uint8Array.of(1, 0x09, 1, 0x17, 1, 0x81));
+    expect(scriptFromAsm('9')).toEqual(Uint8Array.of(OP_CODES.OP_9));
+  });
+
+  it('refuses an empty word instead of dropping a zero-length push', () => {
+    // OP_PUSHDATA1 with length 0 pushes an empty item and prints as nothing.
+    const script = Uint8Array.of(OP_CODES.OP_DUP, OP_CODES.OP_PUSHDATA1, 0, OP_CODES.OP_EQUAL);
+    expect(scriptToAsm(script)).toBe('OP_DUP  OP_EQUAL');
+    expect(() => scriptFromAsm('OP_DUP  OP_EQUAL')).toThrow('empty word');
+    expect(() => scriptFromAsm(' OP_DUP')).toThrow('empty word');
+    expect(() => scriptFromAsm('OP_DUP ')).toThrow('empty word');
+    expect(() => scriptFromAsm('OP_DUP\nOP_EQUAL')).toThrow('unknown or push opcode');
+    expect(scriptToAsm(script, { unambiguous: true })).toBe('OP_DUP 0x OP_EQUAL');
+    // The empty string is read as the empty script, although a script that is
+    // only a zero-length PUSHDATA prints that way too.
+    expect(scriptToAsm(Uint8Array.of(OP_CODES.OP_PUSHDATA1, 0))).toBe('');
+    expect(scriptToAsm(Uint8Array.of(OP_CODES.OP_PUSHDATA1, 0), { unambiguous: true })).toBe('0x');
+    expect(scriptFromAsm('')).toEqual(new Uint8Array(0));
+    // An empty push comes back as OP_0, which pushes the same empty item.
+    expect(scriptFromAsm('OP_DUP 0x OP_EQUAL')).toEqual(Uint8Array.of(OP_CODES.OP_DUP, OP_CODES.OP_0, OP_CODES.OP_EQUAL));
+  });
+
+  it('round-trips random scripts to the same pushed values', () => {
+    const random = prng(0x5eed);
+    const int = (n: number): number => Math.floor(random() * n);
+    const bytes = (n: number): number[] => Array.from({ length: n }, () => int(256));
+    const pieces: (() => number[])[] = [
+      () => [int(256)],
+      () => { const n = int(76); return [n, ...bytes(n)]; },
+      () => { const n = int(90); return [OP_CODES.OP_PUSHDATA1, n, ...bytes(n)]; },
+      () => { const n = int(300); return [OP_CODES.OP_PUSHDATA2, n & 0xff, n >> 8, ...bytes(n)]; },
+      () => { const n = int(20); return [OP_CODES.OP_PUSHDATA4, n, 0, 0, 0, ...bytes(n)]; },
+      () => [1, int(0x18)],
+      () => [OP_CODES.OP_1 + int(16)],
+      () => [OP_CODES.OP_0],
+      () => [OP_CODES.OP_1NEGATE],
+    ];
+    // What each chunk leaves on the stack, or the opcode itself when it is not a push.
+    const value = (chunk: ScriptChunk): string => {
+      if (chunk instanceof Uint8Array) return bytesToHex(chunk);
+      if (chunk === OP_CODES.OP_0) return '';
+      if (chunk === OP_CODES.OP_1NEGATE) return '81';
+      if (chunk >= OP_CODES.OP_1 && chunk <= OP_CODES.OP_16) return bytesToHex(Uint8Array.of(chunk - OP_CODES.OP_1 + 1));
+      return `op${chunk}`;
+    };
+    let ambiguous = 0;
+    for (let i = 0; i < 3000; i += 1) {
+      const script = Uint8Array.from(Array.from({ length: 1 + int(8) }, () => pieces[int(pieces.length)]!()).flat());
+      let chunks: ScriptChunk[];
+      try {
+        chunks = decompileScript(script);
+      } catch {
+        continue; // a random opcode byte started a push that runs past the end
+      }
+      const values = chunks.map(value);
+      const back = scriptFromAsm(scriptToAsm(script, { unambiguous: true }));
+      expect(decompileScript(back).map(value)).toEqual(values);
+      // The exact DisasmString text is either refused or reads back to the same values.
+      // The empty string is the one exception; see the test above.
+      if (scriptToAsm(script) === '') continue;
+      try {
+        expect(decompileScript(scriptFromAsm(scriptToAsm(script))).map(value)).toEqual(values);
+      } catch (error) {
+        expect((error as Error).message).toMatch(/is ambiguous|empty word/);
+        ambiguous += 1;
+      }
+    }
+    expect(ambiguous).toBeGreaterThan(100);
   });
 
   it('compiles data with the canonical push and rejects push opcodes as numbers', () => {
@@ -88,6 +194,23 @@ describe('script toolkit', () => {
         expect(decode).toThrow(expected.error);
       }
     }
+  });
+
+  it('decodes long script numbers exactly or not at all', () => {
+    const big = 2n ** 60n + 1n;
+    const encoded = encodeScriptNumber(big);
+    expect(decodeScriptNumberBigInt(encoded, { maxLength: 8 })).toBe(big);
+    expect(decodeScriptNumberBigInt(encodeScriptNumber(-big), { maxLength: 8 })).toBe(-big);
+    expect(() => decodeScriptNumber(encoded, { maxLength: 8 })).toThrow('does not fit a JS number exactly');
+    expect(decodeScriptNumber(encodeScriptNumber(2n ** 53n - 1n), { maxLength: 8 })).toBe(Number.MAX_SAFE_INTEGER);
+    expect(() => decodeScriptNumber(encodeScriptNumber(2n ** 53n), { maxLength: 8 })).toThrow(RangeError);
+    for (const expected of toolkit.numbers.filter((item) => item.error === '')) {
+      const options = { requireMinimal: expected.minimal, maxLength: expected.maxLength };
+      expect(decodeScriptNumberBigInt(hexToBytes(expected.data), options)).toBe(BigInt(expected.value));
+    }
+    // Negative zero is zero, as in Go.
+    expect(Object.is(decodeScriptNumber(Uint8Array.of(0x80), { requireMinimal: false }), 0)).toBe(true);
+    expect(() => decodeScriptNumberBigInt('00' as unknown as Uint8Array)).toThrow(TypeError);
   });
 
   it('marks as disabled exactly the opcodes Pearl\'s engine rejects as disabled', () => {

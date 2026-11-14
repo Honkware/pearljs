@@ -67,13 +67,20 @@ function tokenize(script: Uint8Array): TokenizeResult {
       };
     }
     const start = offset + 1 + lengthBytes;
-    tokens.push({ opcode, data: isPushOpcode(opcode) ? script.slice(start, start + dataLength) : null });
+    // Copied: slice on a Node Buffer returns a view of the caller's memory.
+    tokens.push({
+      opcode,
+      data: isPushOpcode(opcode) ? Uint8Array.from(script.subarray(start, start + dataLength)) : null,
+    });
     offset = start + dataLength;
   }
   return { tokens, error: null };
 }
 
-/** Splits a script into opcodes and pushed data; throws on a truncated push. */
+/**
+ * Splits a script into opcodes and pushed data; throws on a truncated push.
+ * The data chunks are copies.
+ */
 export function decompileScript(script: Uint8Array): ScriptChunk[] {
   const { tokens, error } = tokenize(script);
   if (error !== null) throw new Error(error);
@@ -103,45 +110,100 @@ for (let n = 1; n <= 16; n += 1) SMALL_INT_NAMES[OP_CODES.OP_1 + n - 1] = String
 
 const toHex = (bytes: Uint8Array): string => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 
+// "10" to "16" are both OP_10 to OP_16 and a one-byte push of 0x10 to 0x16.
+const AMBIGUOUS_WORD = /^1[0-6]$/;
+
+export interface ScriptToAsmOptions {
+  /**
+   * Print the words DisasmString leaves ambiguous in a form scriptFromAsm
+   * reads back to the same values: OP_10 to OP_16 by name, a one-byte push
+   * of 0x10 to 0x16 as 0x10 to 0x16, and a zero-length PUSHDATA as 0x. The
+   * output then differs from DisasmString in exactly those words.
+   */
+  unambiguous?: boolean;
+}
+
 /**
  * One-line disassembly, identical to DisasmString: pushed data as hex,
  * OP_0 to OP_16 and OP_1NEGATE as numbers, other opcodes by name. A
  * truncated push ends the output with "[error]", as decodescript shows it.
+ *
+ * The format is lossy. "10" to "16" stand for both a number opcode and a
+ * one-byte push, and a zero-length PUSHDATA prints as an empty word. Pass
+ * unambiguous to get text that scriptFromAsm can read back.
  */
-export function scriptToAsm(script: Uint8Array): string {
+export function scriptToAsm(script: Uint8Array, options: ScriptToAsmOptions = {}): string {
   const { tokens, error } = tokenize(script);
-  const words = tokens.map((token) =>
-    token.data !== null ? toHex(token.data) : (SMALL_INT_NAMES[token.opcode] ?? OPCODE_NAMES[token.opcode]!),
-  );
+  const words = tokens.map((token) => {
+    if (token.data !== null) {
+      const hex = toHex(token.data);
+      return options.unambiguous === true && (hex === '' || AMBIGUOUS_WORD.test(hex)) ? `0x${hex}` : hex;
+    }
+    const number = SMALL_INT_NAMES[token.opcode];
+    if (number === undefined || (options.unambiguous === true && AMBIGUOUS_WORD.test(number))) {
+      return OPCODE_NAMES[token.opcode]!;
+    }
+    return number;
+  });
   if (error !== null) words.push('[error]');
   return words.join(' ');
 }
 
 /**
- * Parses the one-line format back into a script. Numbers from -1 to 16
- * become their opcodes, OP_ names (and the aliases OP_TRUE, OP_FALSE,
- * OP_NOP2, OP_NOP3) their bytes, and hex is pushed with the shortest push
- * opcode for its length. The format cannot tell a one-byte push of 0x00 to
- * 0x10 from a number, so those always come back as OP_0 to OP_16.
+ * Parses the one-line format back into a script: words separated by single
+ * spaces. Numbers from -1 to 9 become their opcodes, OP_ names (and the
+ * aliases OP_TRUE, OP_FALSE, OP_NOP2, OP_NOP3) their bytes, and hex is pushed
+ * with the shortest push opcode for its length; a 0x prefix marks a word as
+ * data whatever it looks like, and 0x alone is an empty push.
+ *
+ * Text that could mean two scripts is refused instead of guessed at: the
+ * words 10 to 16 (write OP_10 or 0x10), and an empty word, which is how
+ * DisasmString prints a zero-length PUSHDATA. scriptToAsm with unambiguous
+ * never produces either. The one exception is the empty string, read as the
+ * empty script although a script that is only a zero-length PUSHDATA prints
+ * that way too. The result pushes the same values as the script
+ * that was printed, though not always with the same push opcodes: data comes
+ * back with the shortest push for its length.
  */
 export function scriptFromAsm(asm: string): Uint8Array {
-  const out: number[] = [];
-  for (const word of asm.trim().split(/\s+/).filter((item) => item !== '')) {
-    if (/^(-1|[0-9]|1[0-6])$/.test(word)) {
+  if (typeof asm !== 'string') {
+    throw new TypeError('script asm must be a string');
+  }
+  const parts: number[][] = [];
+  for (const word of asm === '' ? [] : asm.split(' ')) {
+    if (word === '') {
+      throw new Error(
+        'script asm has an empty word, which may be a zero-length push or stray whitespace; write 0x for an empty push',
+      );
+    }
+    if (AMBIGUOUS_WORD.test(word)) {
+      throw new Error(
+        `script word "${word}" is ambiguous: write OP_${word} for the number or 0x${word} for a one-byte push`,
+      );
+    }
+    if (/^(-1|[0-9])$/.test(word)) {
       const value = Number(word);
-      out.push(value === -1 ? OP_CODES.OP_1NEGATE : value === 0 ? OP_CODES.OP_0 : OP_CODES.OP_1 + value - 1);
+      parts.push([value === -1 ? OP_CODES.OP_1NEGATE : value === 0 ? OP_CODES.OP_0 : OP_CODES.OP_1 + value - 1]);
     } else if (word.startsWith('OP_')) {
       const opcode = (OP_CODES as Record<string, number>)[word];
       if (opcode === undefined || isPushOpcode(opcode)) throw new Error(`unknown or push opcode ${word}`);
-      out.push(opcode);
-    } else if (/^([0-9a-fA-F]{2})+$/.test(word)) {
-      const data = Uint8Array.from(word.match(/../g)!, (byte) => parseInt(byte, 16));
-      out.push(...pushWithLength(data));
+      parts.push([opcode]);
+    } else if (/^(0x([0-9a-fA-F]{2})*|([0-9a-fA-F]{2})+)$/.test(word)) {
+      const hex = word.startsWith('0x') ? word.slice(2) : word;
+      const data = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < data.length; i += 1) data[i] = parseInt(hex.slice(2 * i, 2 * i + 2), 16);
+      parts.push(pushWithLength(data));
     } else {
-      throw new Error(`cannot parse script word "${word}"`);
+      throw new Error(`cannot parse script word "${word.length > 80 ? `${word.slice(0, 80)}...` : word}"`);
     }
   }
-  return Uint8Array.from(out);
+  const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
 }
 
 function pushWithLength(data: Uint8Array): number[] {
@@ -158,22 +220,28 @@ export function isPushOnlyScript(script: Uint8Array): boolean {
   return error === null && tokens.every((token) => token.opcode <= OP_CODES.OP_16);
 }
 
+export interface DecodeScriptNumberOptions {
+  requireMinimal?: boolean;
+  maxLength?: number;
+}
+
 /**
  * Decodes a script number like MakeScriptNum: little-endian sign-magnitude,
  * at most maxLength bytes (4, or 5 for lock times), minimally encoded unless
- * requireMinimal is false.
+ * requireMinimal is false. Returns a bigint, the type encodeScriptNumber
+ * takes, so every length decodes exactly.
  */
-export function decodeScriptNumber(
-  data: Uint8Array,
-  options: { requireMinimal?: boolean; maxLength?: number } = {},
-): number {
+export function decodeScriptNumberBigInt(data: Uint8Array, options: DecodeScriptNumberOptions = {}): bigint {
+  if (!(data instanceof Uint8Array)) {
+    throw new TypeError('script number must be a Uint8Array');
+  }
   const maxLength = options.maxLength ?? 4;
   if (data.length > maxLength) {
     throw new Error(
       `numeric value encoded as ${toHex(data)} is ${data.length} bytes which exceeds the max allowed of ${maxLength}`,
     );
   }
-  if (data.length === 0) return 0;
+  if (data.length === 0) return 0n;
   const last = data[data.length - 1]!;
   if (
     (options.requireMinimal ?? true) &&
@@ -182,11 +250,26 @@ export function decodeScriptNumber(
   ) {
     throw new Error(`numeric value encoded as ${toHex(data)} is not minimally encoded`);
   }
-  let value = 0;
+  let value = 0n;
   for (let i = data.length - 1; i >= 0; i -= 1) {
-    value = value * 256 + (i === data.length - 1 ? last & 0x7f : data[i]!);
+    value = value * 256n + BigInt(i === data.length - 1 ? last & 0x7f : data[i]!);
   }
   return last & 0x80 ? -value : value;
+}
+
+/**
+ * decodeScriptNumberBigInt as a JS number, for the 4- and 5-byte numbers
+ * scripts use. A value a number cannot hold exactly, which takes a maxLength
+ * of 7 or more, throws instead of being rounded.
+ */
+export function decodeScriptNumber(data: Uint8Array, options: DecodeScriptNumberOptions = {}): number {
+  const value = decodeScriptNumberBigInt(data, options);
+  if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < -BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RangeError(
+      `script number ${value} does not fit a JS number exactly; use decodeScriptNumberBigInt`,
+    );
+  }
+  return Number(value);
 }
 
 // The 14 opcodes txscript's isOpcodeDisabled lists, plus OP_CHECKMULTISIG and
