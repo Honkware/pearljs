@@ -28,18 +28,66 @@ export function parsePearl(text: string): bigint {
   return grain;
 }
 
-/** Formats grains as a decimal pearl string without trailing zeros. */
+/**
+ * Formats grains as a decimal pearl string without trailing zeros. Negative
+ * amounts get a leading minus, as Oyster's listtransactions reports sends.
+ */
 export function formatPearl(grain: bigint): string {
   if (typeof grain !== 'bigint') {
     throw new TypeError('amount must be a bigint of grains');
   }
-  if (grain < 0n || grain > MAX_GRAIN) {
+  if (grain < -MAX_GRAIN || grain > MAX_GRAIN) {
     throw new Error(`grain amount out of range: ${grain}`);
   }
-  const whole = grain / GRAIN_PER_PEARL;
-  const frac = (grain % GRAIN_PER_PEARL)
+  const magnitude = grain < 0n ? -grain : grain;
+  const whole = magnitude / GRAIN_PER_PEARL;
+  const frac = (magnitude % GRAIN_PER_PEARL)
     .toString()
     .padStart(DECIMALS, '0')
     .replace(/0+$/, '');
-  return frac === '' ? whole.toString() : `${whole}.${frac}`;
+  return `${grain < 0n ? '-' : ''}${frac === '' ? whole.toString() : `${whole}.${frac}`}`;
+}
+
+// Fee rates are bigint grain per 1000 vbytes throughout pearljs, the unit of
+// pearld's relay fee and Oyster's fee arguments. Wallets show grain per
+// vbyte, and the RPC and Pearl's desktop wallet show PRL per 1000 vbytes.
+
+const VBYTE_RATE_RE = /^\d+(\.\d{1,3})?$/;
+
+/** A fee rate from grain per vbyte, as a bigint or a decimal string with up to three decimals like "1.5". */
+export function feeRateFromGrainPerVbyte(rate: bigint | string): bigint {
+  if (typeof rate === 'bigint') {
+    if (rate < 0n) throw new Error(`invalid fee rate: ${rate}`);
+    return rate * 1000n;
+  }
+  if (typeof rate !== 'string') {
+    throw new TypeError('fee rate must be a bigint or a decimal string');
+  }
+  if (!VBYTE_RATE_RE.test(rate)) {
+    throw new Error(`invalid fee rate: ${JSON.stringify(rate)}`);
+  }
+  const [whole, frac = ''] = rate.split('.');
+  return BigInt(whole!) * 1000n + BigInt(frac.padEnd(3, '0'));
+}
+
+/** A fee rate in grain per vbyte, as a decimal string without trailing zeros. */
+export function feeRateToGrainPerVbyte(feeRate: bigint): string {
+  if (typeof feeRate !== 'bigint' || feeRate < 0n) {
+    throw new Error('fee rate must be a non-negative bigint of grain per 1000 vbytes');
+  }
+  const frac = (feeRate % 1000n).toString().padStart(3, '0').replace(/0+$/, '');
+  return frac === '' ? (feeRate / 1000n).toString() : `${feeRate / 1000n}.${frac}`;
+}
+
+/** A fee rate from PRL per 1000 vbytes, such as "0.00001". */
+export function feeRateFromPearlPerKvB(rate: string): bigint {
+  return parsePearl(rate);
+}
+
+/** A fee rate in PRL per 1000 vbytes. */
+export function feeRateToPearlPerKvB(feeRate: bigint): string {
+  if (typeof feeRate !== 'bigint' || feeRate < 0n) {
+    throw new Error('fee rate must be a non-negative bigint of grain per 1000 vbytes');
+  }
+  return formatPearl(feeRate);
 }

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  feeRateFromGrainPerVbyte,
+  feeRateFromPearlPerKvB,
+  feeRateToGrainPerVbyte,
+  feeRateToPearlPerKvB,
   formatPearl,
   GRAIN_PER_PEARL,
   MAX_GRAIN,
@@ -84,8 +88,16 @@ describe('formatPearl', () => {
     expect(formatPearl(12345678901n)).toBe('123.45678901');
   });
 
+  it('formats negative amounts with a leading minus, as wallet history shows sends', () => {
+    expect(formatPearl(-1n)).toBe('-0.00000001');
+    expect(formatPearl(-150000000n)).toBe('-1.5');
+    expect(formatPearl(-100000000n)).toBe('-1');
+    expect(formatPearl(-MAX_GRAIN)).toBe('-21000000000');
+    expect(formatPearl(-0n)).toBe('0');
+  });
+
   it('rejects out-of-range amounts', () => {
-    expect(() => formatPearl(-1n)).toThrow(/out of range/);
+    expect(() => formatPearl(-MAX_GRAIN - 1n)).toThrow(/out of range/);
     expect(() => formatPearl(MAX_GRAIN + 1n)).toThrow(/out of range/);
   });
 
@@ -108,5 +120,49 @@ describe('formatPearl', () => {
     for (const grain of samples) {
       expect(parsePearl(formatPearl(grain))).toBe(grain);
     }
+  });
+});
+
+describe('fee rate units', () => {
+  it('converts grain per vbyte to grain per 1000 vbytes', () => {
+    expect(feeRateFromGrainPerVbyte(1n)).toBe(1000n);
+    expect(feeRateFromGrainPerVbyte('1')).toBe(1000n);
+    expect(feeRateFromGrainPerVbyte('1.5')).toBe(1500n);
+    expect(feeRateFromGrainPerVbyte('0.001')).toBe(1n);
+    expect(feeRateFromGrainPerVbyte('12.34')).toBe(12340n);
+    expect(feeRateFromGrainPerVbyte(0n)).toBe(0n);
+  });
+
+  it('converts back without trailing zeros', () => {
+    expect(feeRateToGrainPerVbyte(1000n)).toBe('1');
+    expect(feeRateToGrainPerVbyte(1500n)).toBe('1.5');
+    expect(feeRateToGrainPerVbyte(1n)).toBe('0.001');
+    expect(feeRateToGrainPerVbyte(12340n)).toBe('12.34');
+    expect(feeRateToGrainPerVbyte(0n)).toBe('0');
+  });
+
+  it('reads and writes PRL per 1000 vbytes, the unit of the RPC', () => {
+    // pearld's default relay fee of 1000 grain per 1000 vbytes.
+    expect(feeRateFromPearlPerKvB('0.00001')).toBe(1000n);
+    expect(feeRateToPearlPerKvB(1000n)).toBe('0.00001');
+    expect(feeRateToPearlPerKvB(feeRateFromGrainPerVbyte('2.5'))).toBe('0.000025');
+    expect(feeRateToGrainPerVbyte(feeRateFromPearlPerKvB('0.0001'))).toBe('10');
+  });
+
+  it('round-trips every rate it can express', () => {
+    for (const rate of [0n, 1n, 999n, 1000n, 1001n, 123456789n]) {
+      expect(feeRateFromGrainPerVbyte(feeRateToGrainPerVbyte(rate))).toBe(rate);
+      expect(feeRateFromPearlPerKvB(feeRateToPearlPerKvB(rate))).toBe(rate);
+    }
+  });
+
+  it('rejects numbers, negative rates and finer than a thousandth of a grain', () => {
+    expect(() => feeRateFromGrainPerVbyte(1.5 as unknown as string)).toThrow(TypeError);
+    for (const bad of ['', '-1', '1.2345', '1e3', ' 1', '.5']) {
+      expect(() => feeRateFromGrainPerVbyte(bad)).toThrow(/invalid fee rate/);
+    }
+    expect(() => feeRateFromGrainPerVbyte(-1n)).toThrow(/invalid fee rate/);
+    expect(() => feeRateToGrainPerVbyte(-1n)).toThrow(/non-negative/);
+    expect(() => feeRateToPearlPerKvB(-1n)).toThrow(/non-negative/);
   });
 });
