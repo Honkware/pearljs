@@ -7,6 +7,13 @@
 // Signatures are therefore not interchangeable with standard BIP-322 tools.
 // Messages are limited to 80 bytes (the OP_RETURN data limit) and only P2TR
 // addresses sign, through a BIP86 key-path spend.
+//
+// A message is signed as its UTF-8 bytes. A JS string with a lone surrogate
+// has no UTF-8 form: TextEncoder writes U+FFFD in its place, and so does the
+// JSON decoder in front of Oyster, so "a\ud800", "a\udfff" and "a\ufffd"
+// would all carry one signature. Such strings are refused here instead, for
+// signing and for verifying; a caller that wants Oyster's reading passes
+// message.toWellFormed().
 
 import { Transaction } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
@@ -24,6 +31,13 @@ const MAX_WITNESS_ITEM_SIZE = 10000;
 const TAPROOT_ANNEX_TAG = 0x50;
 
 function messageBytes(message: string): Uint8Array {
+  if (typeof message !== 'string') {
+    throw new TypeError('message must be a string');
+  }
+  // With the u flag a surrogate only matches when it is not half of a pair.
+  if (/\p{Surrogate}/u.test(message)) {
+    throw new Error('message has a lone surrogate, which has no UTF-8 encoding');
+  }
   const bytes = new TextEncoder().encode(message);
   if (bytes.length > MAX_MESSAGE_LENGTH) {
     throw new Error(`message is ${bytes.length} bytes, more than the ${MAX_MESSAGE_LENGTH} Oyster can sign`);
@@ -45,9 +59,10 @@ function toSignTransaction(scriptPubKey: Uint8Array, message: Uint8Array): Trans
 }
 
 /**
- * Parses a witness stack the way Oyster's ParseWitnessStack does, which
- * ignores any bytes after the last item; rejecting them here would refuse
- * signatures Oyster accepts.
+ * Parses a witness stack the way Oyster's ParseWitnessStack does. It ignores
+ * any bytes after the last item, so rejecting them here would refuse
+ * signatures Oyster accepts; and it reads lengths with wire.ReadVarInt, which
+ * refuses a length written in more bytes than it needs.
  */
 function parseWitness(bytes: Uint8Array): Uint8Array[] {
   let offset = 0;
@@ -61,6 +76,10 @@ function parseWitness(bytes: Uint8Array): Uint8Array[] {
     let value = 0;
     for (let i = width - 1; i >= 0; i -= 1) value = value * 256 + bytes[offset + i]!;
     offset += width;
+    // An 8-byte value loses its low bits as a number, never enough to cross 2^32.
+    if (value < (width === 2 ? 0xfd : width === 4 ? 0x10000 : 0x100000000)) {
+      throw new Error('signature has a non-canonical varint');
+    }
     return value;
   };
   const count = readVarInt();
@@ -73,13 +92,16 @@ function parseWitness(bytes: Uint8Array): Uint8Array[] {
     if (length > MAX_WITNESS_ITEM_SIZE || offset + length > bytes.length) {
       throw new Error(`witness item ${i} is too large or ends early`);
     }
-    items.push(bytes.slice(offset, offset + length));
+    items.push(Uint8Array.from(bytes.subarray(offset, offset + length)));
     offset += length;
   }
   return items;
 }
 
 function decodeBase64(text: string): Uint8Array {
+  if (typeof text !== 'string') {
+    throw new TypeError('signature must be a base64 string');
+  }
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text)) {
     throw new Error('signature is not valid base64');
   }
@@ -92,6 +114,9 @@ function decodeBase64(text: string): Uint8Array {
  */
 export function signMessage(privateKey: Uint8Array, message: string): string {
   const bytes = messageBytes(message);
+  if (!(privateKey instanceof Uint8Array)) {
+    throw new Error('invalid private key');
+  }
   const publicKey = ecc.isPrivate(privateKey) ? ecc.pointFromScalar(privateKey, true) : null;
   if (publicKey === null) {
     throw new Error('invalid private key');
@@ -119,7 +144,8 @@ export function signMessage(privateKey: Uint8Array, message: string): string {
  * Verifies a message signature against a P2TR address, as Oyster's
  * verifymessage does for key-path signatures. Script-path signatures, which
  * Oyster's full script engine could accept, are reported as unsupported
- * instead of invalid.
+ * instead of invalid. An address whose program is not a point on the curve
+ * can have no valid signature, so the answer for it is false, as Oyster's is.
  */
 export function verifyMessage(
   address: string,
@@ -159,5 +185,6 @@ export function verifyMessage(
   }
   const scriptPubKey = Uint8Array.from([OP_CODES.OP_1, 32, ...program]);
   const hash = toSignTransaction(scriptPubKey, bytes).hashForWitnessV1(0, [scriptPubKey], [0n], hashType, undefined, annex);
-  return ecc.verifySchnorr(hash, program, sig.slice(0, 64));
+  if (!ecc.isXOnlyPoint(program)) return false;
+  return ecc.verifySchnorr(hash, program, sig.subarray(0, 64));
 }

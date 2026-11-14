@@ -7,6 +7,7 @@ import * as ecc from 'tiny-secp256k1';
 import { describe, expect, it } from 'vitest';
 import {
   deriveSigningAccountFromSeed,
+  encodeAddress,
   MAX_MESSAGE_LENGTH,
   networks,
   signMessage,
@@ -100,5 +101,62 @@ describe('message signing', () => {
     expect(verifyMessage(account.deriveAddress(1), signature, 'raw key', networks.mainnet)).toBe(true);
     expect(verifyMessage(account.deriveAddress(0), signature, 'raw key', networks.mainnet)).toBe(false);
     expect(() => signMessage(new Uint8Array(32), 'x')).toThrow('invalid private key');
+  });
+
+  it('answers false for an address whose program is not a point on the curve', () => {
+    // Oyster's script engine fails to parse the key and reports the signature invalid.
+    const offCurve = Uint8Array.from({ length: 32 }, (_, i) => (i === 31 ? 5 : 0));
+    expect(ecc.isXOnlyPoint(offCurve)).toBe(false);
+    const signature = account.signMessage('Hello, Pearl', { index: 0 });
+    expect(verifyMessage(encodeAddress({ version: 1, program: offCurve }, networks.mainnet), signature, 'Hello, Pearl', networks.mainnet)).toBe(
+      false,
+    );
+  });
+
+  it('rejects lengths written in more bytes than they need, as wire.ReadVarInt does', () => {
+    const signature = Uint8Array.from(atob(account.signMessage('hello', { index: 0 })), (char) => char.charCodeAt(0));
+    expect(verifyMessage(address, base64([...signature]), 'hello', networks.mainnet)).toBe(true);
+    const variants = [
+      [0xfd, 1, 0, ...signature.slice(1)],
+      [0xfe, 1, 0, 0, 0, ...signature.slice(1)],
+      [0xff, 1, 0, 0, 0, 0, 0, 0, 0, ...signature.slice(1)],
+      [1, 0xfd, 0x40, 0, ...signature.slice(2)],
+      [1, 0xfe, 0x40, 0, 0, 0, ...signature.slice(2)],
+      [1, 0xff, 0x40, 0, 0, 0, 0, 0, 0, 0, ...signature.slice(2)],
+    ];
+    for (const bytes of variants) {
+      expect(() => verifyMessage(address, base64(bytes), 'hello', networks.mainnet)).toThrow('non-canonical varint');
+    }
+    // 0xfd is the first length that needs the three-byte form.
+    expect(verifyMessage(address, base64([1, 0xfd, 0xfd, 0, ...new Array<number>(253).fill(0)]), 'hello', networks.mainnet)).toBe(
+      false,
+    );
+    expect(() => verifyMessage(address, base64([1, 0xfd, 0xfc, 0, ...new Array<number>(252).fill(0)]), 'hello', networks.mainnet)).toThrow(
+      'non-canonical varint',
+    );
+  });
+
+  it('refuses a message with a lone surrogate instead of signing U+FFFD for it', () => {
+    for (const message of ['a\ud800', 'a\udfff', '\udc00\ud800']) {
+      expect(() => account.signMessage(message, { index: 0 })).toThrow('lone surrogate');
+      const signature = account.signMessage('a\ufffd', { index: 0 });
+      expect(() => verifyMessage(address, signature, message, networks.mainnet)).toThrow('lone surrogate');
+    }
+    // A surrogate pair is an ordinary character.
+    const signature = account.signMessage('a\ud83d\ude00', { index: 0 });
+    expect(verifyMessage(address, signature, 'a😀', networks.mainnet)).toBe(true);
+  });
+
+  it('rejects arguments of the wrong type with clear errors', () => {
+    const key = new Uint8Array(32).fill(1);
+    expect(() => signMessage(key, undefined as unknown as string)).toThrow('message must be a string');
+    expect(() => signMessage('01'.repeat(32) as unknown as Uint8Array, 'x')).toThrow('invalid private key');
+    expect(() => signMessage(undefined as unknown as Uint8Array, 'x')).toThrow('invalid private key');
+    expect(() => verifyMessage(address, undefined as unknown as string, 'x', networks.mainnet)).toThrow(
+      'signature must be a base64 string',
+    );
+    expect(() => verifyMessage(address, 'AA==', 5 as unknown as string, networks.mainnet)).toThrow(
+      'message must be a string',
+    );
   });
 });
