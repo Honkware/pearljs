@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -220,6 +221,46 @@ type Vectors struct {
 	BadWIF           []BadWIFVector          `json:"badWif"`
 	BadBlocks        []BadBlockVector        `json:"badBlocks"`
 	Policy           PolicyVectors           `json:"policy"`
+	P2MRPSBTs        []P2MRPSBTVector        `json:"p2mrPsbts"`
+}
+
+// P2MRPSBTInputVector is one input of a P2MRPSBTVector. Kind is "p2mr" for
+// a script-path input or "p2tr-key" for a BIP86 key-path input at
+// account/1/1. Signers are child indices under account/0, and Signatures and
+// Sighashes follow them in order.
+type P2MRPSBTInputVector struct {
+	Kind          string   `json:"kind"`
+	LeafScripts   []string `json:"leafScripts"`
+	LeafIndex     int      `json:"leafIndex"`
+	ControlBlock  string   `json:"controlBlock"`
+	HashType      uint32   `json:"hashType"`
+	PreviousTxHex string   `json:"previousTxHex"`
+	Signers       []uint32 `json:"signers"`
+	Sighash       string   `json:"sighash"`
+	Signatures    []string `json:"signatures"`
+}
+
+// P2MRPSBTVector is a P2MR script-path spend in a PSBT built with Pearl's
+// psbt package. Pearl has no P2MR-specific PSBT code, so the input carries
+// the fields that package already has: the witness UTXO, the previous
+// transaction when the signature does not cover input values, the sighash
+// type, a tap leaf script keyed by the P2MR control block, and tap script
+// signatures, with no internal key or Merkle root. ParseError fields hold
+// the error psbt.NewFromRawBytes gives for the encoding, empty when it
+// loads, and FinalizeError the error psbt.Finalize gives for a P2MR input.
+type P2MRPSBTVector struct {
+	Name               string                `json:"name"`
+	UnsignedTxHex      string                `json:"unsignedTxHex"`
+	Prevouts           []PrevoutVector       `json:"prevouts"`
+	Inputs             []P2MRPSBTInputVector `json:"inputs"`
+	PreparedPSBT       string                `json:"preparedPsbt"`
+	PreparedParseError string                `json:"preparedParseError"`
+	SignedPSBT         string                `json:"signedPsbt"`
+	SignedParseError   string                `json:"signedParseError"`
+	FinalizeError      string                `json:"finalizeError"`
+	FinalTxHex         string                `json:"finalTxHex"`
+	TxID               string                `json:"txid"`
+	WTxID              string                `json:"wtxid"`
 }
 
 // DustVector is mempool.GetDustThreshold of a script and mempool.IsDust of
@@ -536,6 +577,38 @@ func verifyInputs(tx *wire.MsgTx, prevOuts []*wire.TxOut) {
 		check(err)
 		check(engine.Execute())
 	}
+}
+
+// pearlScriptSpendStack returns the signature items Pearl's psbt.Finalize
+// puts before the leaf script and control block. Finalize only accepts P2TR
+// inputs, so it runs over a P2TR stand-in carrying the same leaf and
+// signatures; the stack does not depend on the output type.
+func pearlScriptSpendStack(leaf []byte, sigs []*psbt.TaprootScriptSpendSig) wire.TxWitness {
+	key := bytes.Repeat([]byte{0}, 31)
+	key = append(key, 1)
+	tx := wire.NewMsgTx(2)
+	tx.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0xff}, 0), nil, nil))
+	tx.AddTxOut(wire.NewTxOut(1, []byte{txscript.OP_TRUE}))
+	packet, err := psbt.NewFromUnsignedTx(tx)
+	check(err)
+	packet.Inputs[0].WitnessUtxo = wire.NewTxOut(1, append([]byte{txscript.OP_1, txscript.OP_DATA_32}, key...))
+	packet.Inputs[0].TaprootLeafScript = []*psbt.TaprootTapLeafScript{{
+		ControlBlock: append([]byte{byte(txscript.BaseLeafVersion)}, key...), Script: leaf,
+		LeafVersion: txscript.BaseLeafVersion,
+	}}
+	packet.Inputs[0].TaprootScriptSpendSig = sigs
+	check(psbt.Finalize(packet, 0))
+	final, err := psbt.Extract(packet)
+	check(err)
+	witness := final.TxIn[0].DecodeWitness()
+	return witness[:len(witness)-2]
+}
+
+func parseError(encoded string) string {
+	if _, err := psbt.NewFromRawBytes(strings.NewReader(encoded), true); err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 func check(err error) {
@@ -1142,6 +1215,231 @@ func main() {
 			Prevouts:      []PrevoutVector{{Script: hex.EncodeToString(prevScript), Value: amount}},
 			FinalTxHex:    serializeTx(finalTx, true), WitnessLengths: lengths,
 		})
+	}
+
+	// P2MR script-path inputs in PSBTs. Leaves are leafKeyScripts, or a
+	// 2-of-3 multi_a leaf over account/0/20..22 followed by them.
+	multiALeaf := func() []byte {
+		builder := txscript.NewScriptBuilder()
+		for i := uint32(0); i < 3; i++ {
+			priv, err := derive(account, 0, 20+i).ECPrivKey()
+			check(err)
+			builder.AddData(schnorr.SerializePubKey(priv.PubKey()))
+			if i == 0 {
+				builder.AddOp(txscript.OP_CHECKSIG)
+			} else {
+				builder.AddOp(txscript.OP_CHECKSIGADD)
+			}
+		}
+		leafScript, err := builder.AddInt64(2).AddOp(txscript.OP_NUMEQUAL).Script()
+		check(err)
+		return leafScript
+	}()
+	type p2mrPSBTInput struct {
+		kind       string
+		leafCount  int
+		multiA     bool
+		leafIndex  int
+		hashType   txscript.SigHashType
+		previousTx bool
+		signers    []uint32
+	}
+	for vectorIndex, item := range []struct {
+		name   string
+		inputs []p2mrPSBTInput
+	}{
+		{"p2mr-1-leaf-default", []p2mrPSBTInput{{"p2mr", 1, false, 0, txscript.SigHashDefault, true, []uint32{0}}}},
+		{"p2mr-2-leaves-first-default", []p2mrPSBTInput{{"p2mr", 2, false, 0, txscript.SigHashDefault, true, []uint32{0}}}},
+		{"p2mr-4-leaves-third-all", []p2mrPSBTInput{{"p2mr", 4, false, 2, txscript.SigHashAll, true, []uint32{2}}}},
+		{"p2mr-3-leaves-first-none", []p2mrPSBTInput{{"p2mr", 3, false, 0, txscript.SigHashNone, true, []uint32{0}}}},
+		{"p2mr-2-leaves-second-single-anyonecanpay", []p2mrPSBTInput{
+			{"p2mr", 2, false, 1, txscript.SigHashSingle | txscript.SigHashAnyOneCanPay, false, []uint32{1}},
+		}},
+		{"p2mr-with-p2tr-key-input", []p2mrPSBTInput{
+			{"p2tr-key", 0, false, 0, txscript.SigHashDefault, false, nil},
+			{"p2mr", 3, false, 1, txscript.SigHashDefault, false, []uint32{1}},
+		}},
+		{"p2mr-two-inputs-default", []p2mrPSBTInput{
+			{"p2mr", 2, false, 1, txscript.SigHashDefault, true, []uint32{1}},
+			{"p2mr", 5, false, 4, txscript.SigHashDefault, true, []uint32{4}},
+		}},
+		{"p2mr-multi-a-2-of-3-default", []p2mrPSBTInput{{"p2mr", 3, true, 0, txscript.SigHashDefault, true, []uint32{20, 22}}}},
+	} {
+		const amount int64 = 120_000_000
+		spendTx := wire.NewMsgTx(2)
+		spendTx.LockTime = 800
+		var prevOuts []*wire.TxOut
+		var previousTxs []*wire.MsgTx
+		var leafSets [][]txscript.TapLeaf
+		var keyPathPriv *btcec.PrivateKey
+		for i, input := range item.inputs {
+			var prevScript []byte
+			var leaves []txscript.TapLeaf
+			if input.kind == "p2tr-key" {
+				keyPathPriv, err = derive(account, 1, 1).ECPrivKey()
+				check(err)
+				prevScript, err = txscript.PayToTaprootScript(txscript.ComputeTaprootKeyNoScript(keyPathPriv.PubKey()))
+				check(err)
+			} else {
+				leaves, _ = leafKeyScripts(account, input.leafCount)
+				if input.multiA {
+					leaves = append([]txscript.TapLeaf{txscript.NewBaseTapLeaf(multiALeaf)}, leaves[:input.leafCount-1]...)
+				}
+				root := txscript.AssembleTaprootScriptTree(leaves...).RootNode.TapHash()
+				mrAddr, err := btcutil.NewAddressMerkleRoot(root[:], &chaincfg.MainNetParams)
+				check(err)
+				prevScript, err = txscript.PayToAddrScript(mrAddr)
+				check(err)
+			}
+			prevOut := wire.NewTxOut(amount+int64(i)*1_000_000, prevScript)
+			outPoint := wire.NewOutPoint(&chainhash.Hash{0x40 + byte(vectorIndex), byte(i)}, uint32(i))
+			var previous *wire.MsgTx
+			if input.previousTx {
+				// The spent output sits at index 1 so a lookup by index is exercised.
+				previous = wire.NewMsgTx(2)
+				previous.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x50 + byte(vectorIndex), byte(i)}, 0), nil, nil))
+				previous.AddTxOut(wire.NewTxOut(5_000, script))
+				previous.AddTxOut(prevOut)
+				hash := previous.TxHash()
+				outPoint = wire.NewOutPoint(&hash, 1)
+			}
+			txIn := wire.NewTxIn(outPoint, nil, nil)
+			txIn.Sequence = 0xfffffffd
+			spendTx.AddTxIn(txIn)
+			prevOuts = append(prevOuts, prevOut)
+			previousTxs = append(previousTxs, previous)
+			leafSets = append(leafSets, leaves)
+		}
+		for i := range item.inputs {
+			spendTx.AddTxOut(wire.NewTxOut(amount-9_000+int64(i)*1_000_000, script))
+		}
+
+		packet, err := psbt.NewFromUnsignedTx(spendTx)
+		check(err)
+		updater, err := psbt.NewUpdater(packet)
+		check(err)
+		fetcher := txscript.NewMultiPrevOutFetcher(nil)
+		vector := P2MRPSBTVector{Name: item.name, UnsignedTxHex: serializeTx(spendTx, false)}
+		for i, input := range item.inputs {
+			fetcher.AddPrevOut(spendTx.TxIn[i].PreviousOutPoint, prevOuts[i])
+			vector.Prevouts = append(vector.Prevouts, PrevoutVector{
+				Script: hex.EncodeToString(prevOuts[i].PkScript), Value: prevOuts[i].Value,
+			})
+			if previousTxs[i] != nil {
+				check(updater.AddInNonWitnessUtxo(previousTxs[i], i))
+			}
+			check(updater.AddInWitnessUtxo(prevOuts[i], i))
+			pInput := &packet.Inputs[i]
+			pInput.SighashType = input.hashType
+			inputVector := P2MRPSBTInputVector{
+				Kind: input.kind, LeafIndex: input.leafIndex, HashType: uint32(input.hashType), Signers: []uint32{},
+				LeafScripts: []string{},
+			}
+			if previousTxs[i] != nil {
+				var buf bytes.Buffer
+				check(previousTxs[i].Serialize(&buf))
+				inputVector.PreviousTxHex = hex.EncodeToString(buf.Bytes())
+			}
+			if input.kind == "p2tr-key" {
+				internalKey := schnorr.SerializePubKey(keyPathPriv.PubKey())
+				pInput.TaprootInternalKey = internalKey
+				pInput.TaprootBip32Derivation = []*psbt.TaprootBip32Derivation{{
+					XOnlyPubKey: internalKey, MasterKeyFingerprint: masterFingerprint,
+					Bip32Path: []uint32{86 + h, chaincfg.MainNetParams.HDCoinType + h, h, 1, 1},
+				}}
+			} else {
+				leaves := leafSets[i]
+				tree := txscript.AssembleTaprootScriptTree(leaves...)
+				block := txscript.MerkleRootControlBlock{
+					LeafVersion: txscript.BaseLeafVersion, InclusionProof: tree.LeafMerkleProofs[input.leafIndex].InclusionProof,
+				}
+				controlBlock, err := block.ToBytes()
+				check(err)
+				leaf := leaves[input.leafIndex]
+				pInput.TaprootLeafScript = []*psbt.TaprootTapLeafScript{{
+					ControlBlock: controlBlock, Script: leaf.Script, LeafVersion: leaf.LeafVersion,
+				}}
+				for _, l := range leaves {
+					inputVector.LeafScripts = append(inputVector.LeafScripts, hex.EncodeToString(l.Script))
+				}
+				inputVector.ControlBlock = hex.EncodeToString(controlBlock)
+			}
+			vector.Inputs = append(vector.Inputs, inputVector)
+		}
+		vector.PreparedPSBT = encodePSBT(packet)
+		vector.PreparedParseError = parseError(vector.PreparedPSBT)
+
+		sigHashes := txscript.NewTxSigHashes(spendTx, fetcher)
+		for i, input := range item.inputs {
+			inputVector := &vector.Inputs[i]
+			if input.kind == "p2tr-key" {
+				sighash, err := txscript.CalcTaprootSignatureHash(sigHashes, input.hashType, spendTx, i, fetcher)
+				check(err)
+				signature, err := txscript.RawTxInTaprootSignature(
+					spendTx, sigHashes, i, prevOuts[i].Value, prevOuts[i].PkScript, nil, input.hashType, keyPathPriv,
+				)
+				check(err)
+				packet.Inputs[i].TaprootKeySpendSig = signature
+				inputVector.Sighash = hex.EncodeToString(sighash)
+				inputVector.Signatures = []string{hex.EncodeToString(signature)}
+				continue
+			}
+			leaf := leafSets[i][input.leafIndex]
+			leafHash := leaf.TapHash()
+			sighash, err := txscript.CalcTapscriptSignaturehash(sigHashes, input.hashType, spendTx, i, fetcher, leaf)
+			check(err)
+			inputVector.Sighash = hex.EncodeToString(sighash)
+			inputVector.Signers = input.signers
+			// Pearl serializes signatures for one leaf in the order they were
+			// added, and BIP174 orders keys bytewise, so add them sorted.
+			var sigs []*psbt.TaprootScriptSpendSig
+			for _, signer := range input.signers {
+				priv, err := derive(account, 0, signer).ECPrivKey()
+				check(err)
+				signature, err := txscript.RawTxInTapscriptSignature(
+					spendTx, sigHashes, i, prevOuts[i].Value, prevOuts[i].PkScript, leaf, input.hashType, priv,
+				)
+				check(err)
+				inputVector.Signatures = append(inputVector.Signatures, hex.EncodeToString(signature))
+				sigs = append(sigs, &psbt.TaprootScriptSpendSig{
+					XOnlyPubKey: schnorr.SerializePubKey(priv.PubKey()), LeafHash: leafHash[:],
+					Signature: signature[:schnorr.SignatureSize], SigHash: input.hashType,
+				})
+			}
+			sort.Slice(sigs, func(a, b int) bool { return bytes.Compare(sigs[a].XOnlyPubKey, sigs[b].XOnlyPubKey) < 0 })
+			packet.Inputs[i].TaprootScriptSpendSig = sigs
+		}
+		vector.SignedPSBT = encodePSBT(packet)
+		vector.SignedParseError = parseError(vector.SignedPSBT)
+
+		for i, input := range item.inputs {
+			if input.kind == "p2tr-key" {
+				check(psbt.Finalize(packet, i))
+				continue
+			}
+			if err := psbt.Finalize(packet, i); err != nil {
+				vector.FinalizeError = err.Error()
+			} else {
+				panic("psbt.Finalize accepted a P2MR input")
+			}
+			// Finish the input the way finalizeTaprootInput does for P2TR.
+			pInput := packet.Inputs[i]
+			leaf := pInput.TaprootLeafScript[0]
+			witness := pearlScriptSpendStack(leaf.Script, pInput.TaprootScriptSpendSig)
+			witness = append(witness, leaf.Script, leaf.ControlBlock)
+			var witnessBytes bytes.Buffer
+			check(psbt.WriteTxWitness(&witnessBytes, witness))
+			finished := psbt.NewPsbtInput(nil, pInput.WitnessUtxo)
+			finished.FinalScriptWitness = witnessBytes.Bytes()
+			packet.Inputs[i] = *finished
+		}
+		finalTx, err := psbt.Extract(packet)
+		check(err)
+		verifyInputs(finalTx, prevOuts)
+		vector.FinalTxHex = serializeTx(finalTx, true)
+		vector.TxID = finalTx.TxID()
+		vector.WTxID = finalTx.WitnessHash().String()
+		vectors.P2MRPSBTs = append(vectors.P2MRPSBTs, vector)
 	}
 
 	// Script toolkit: opcode names, one-line disassembly, push-only checks,
