@@ -58,6 +58,9 @@ function prepareInput(
   });
 }
 
+// The mixed vector's made-up amounts leave half a pearl as the fee.
+const VECTOR_FEE_RATE = 1_000_000_000n;
+
 function vectorPrevouts(expected: { prevouts: { script: string; value: number }[] }) {
   return expected.prevouts.map((prevout) => ({
     script: hexToBytes(prevout.script),
@@ -275,6 +278,7 @@ describe('P2MR spends', () => {
 
       account.signP2mrInput(tx, input, {
         trustPrevouts: true, // vector prevouts point at synthetic transactions
+        maxFeeRate: VECTOR_FEE_RATE,
         index: expected.leafIndex,
         prevouts,
         tree,

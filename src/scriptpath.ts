@@ -326,7 +326,76 @@ export function scriptPathWitness(
   return [...stack, script, controlBlock];
 }
 
-export interface P2mrSignOptions {
+/**
+ * Default for maxFeeRate, in grain per 1000 vbytes: the 5000 per vbyte of
+ * bitcoinjs's PSBT guard, half of the 0.1 PRL per 1000 vbytes above which
+ * pearld's testmempoolaccept reports a transaction as not allowed. Oyster's
+ * txrules set no upper bound, and pearld's sendrawtransaction ignores its
+ * fee limit, so nothing downstream stops an overpaying transaction.
+ */
+export const DEFAULT_MAX_FEE_RATE = 5_000_000n;
+
+export interface FeeGuardOptions {
+  /**
+   * Highest fee rate to sign for, in grain per 1000 vbytes. A transaction
+   * that pays more is refused before anything is signed, which catches a
+   * forgotten change output. Defaults to DEFAULT_MAX_FEE_RATE; pass a higher
+   * rate to sign a transaction that is meant to pay more.
+   */
+  maxFeeRate?: bigint;
+}
+
+/**
+ * Refuses a transaction whose outputs exceed its inputs or whose fee is above
+ * maxFeeRate. witness is the one the input will get, so the size is that of
+ * the transaction once this input is signed; inputs still unsigned make the
+ * size smaller than the final one, which only makes the check stricter.
+ */
+function checkFee(
+  tx: Transaction,
+  inputIndex: number,
+  prevouts: readonly Prevout[],
+  witness: Uint8Array[],
+  sighashType: number,
+  options: FeeGuardOptions,
+): void {
+  const maxFeeRate = options.maxFeeRate ?? DEFAULT_MAX_FEE_RATE;
+  if (typeof maxFeeRate !== 'bigint' || maxFeeRate < 0n) {
+    throw new TypeError('maxFeeRate must be a non-negative bigint of grain per 1000 vbytes');
+  }
+  if (prevouts.length !== tx.ins.length) {
+    throw new Error(`expected ${tx.ins.length} prevouts, got ${prevouts.length}`);
+  }
+  let inputValue = 0n;
+  prevouts.forEach((prevout, index) => {
+    assertValue(prevout.value, `prevout ${index} value`);
+    inputValue += prevout.value;
+  });
+  let outputValue = 0n;
+  tx.outs.forEach((output, index) => {
+    assertValue(output.value, `output ${index} value`);
+    outputValue += output.value;
+  });
+  if (outputValue > inputValue) {
+    // With ANYONECANPAY the inputs that cover the outputs may come later.
+    if ((sighashType & SIGHASH_ANYONECANPAY) !== 0) return;
+    throw new Error(`transaction outputs (${outputValue} grain) exceed its inputs (${inputValue} grain)`);
+  }
+  const sized = tx.clone();
+  sized.setWitness(inputIndex, witness);
+  const vsize = BigInt(sized.virtualSize());
+  const fee = inputValue - outputValue;
+  const limit = (vsize * maxFeeRate + 999n) / 1000n;
+  if (fee > limit) {
+    throw new Error(
+      `transaction pays a fee of ${fee} grain, above the ${limit} grain that maxFeeRate ` +
+        `(${maxFeeRate} grain per 1000 vbytes) allows for ${vsize} vbytes; ` +
+        'check for a missing change output, or raise maxFeeRate to sign it',
+    );
+  }
+}
+
+export interface P2mrSignOptions extends FeeGuardOptions {
   prevouts: readonly Prevout[];
   tree: ScriptTree;
   leafIndex: number;
@@ -378,6 +447,9 @@ function checkPrevouts(
  * previousTransactions first, and signing is refused without them unless
  * trustPrevouts is set.
  *
+ * A transaction whose outputs exceed its inputs, or whose fee is above
+ * maxFeeRate, is refused; see FeeGuardOptions.
+ *
  * For other leaf scripts, sign with signTapscript and set the witness from
  * scriptPathWitness and p2mrControlBlock.
  */
@@ -416,6 +488,8 @@ function checkP2mrSchnorrSpend(
     throw new Error('the leaf script does not contain the signer key');
   }
   checkInputValues(tx, options, sighashType);
+  const signature = new Uint8Array(sighashType === Transaction.SIGHASH_DEFAULT ? 64 : 65);
+  checkFee(tx, inputIndex, options.prevouts, scriptPathWitness([signature], leaf.script, controlBlock), sighashType, options);
   return { leaf, controlBlock, sighashType };
 }
 
@@ -497,8 +571,9 @@ export type XmssP2mrSignOptions = Omit<P2mrSignOptions, 'sighashType'>;
 /**
  * Spends a P2MR input through an XMSS leaf (xmssLeafScript of the signer's
  * key). OP_CHECKXMSSSIG only accepts SIGHASH_DEFAULT, so the
- * previous-transaction check applies to every all-P2MR spend. The signer
- * reserves a fresh index before it signs.
+ * previous-transaction check applies to every all-P2MR spend. The fee is
+ * checked against maxFeeRate like signP2mrInput does, before the signer
+ * reserves a fresh index and signs.
  */
 export async function signXmssP2mrInput(
   tx: Transaction,
@@ -512,6 +587,8 @@ export async function signXmssP2mrInput(
     throw new Error('the leaf script is not the XMSS leaf of the signer key');
   }
   checkInputValues(tx, options, sighashType);
+  const placeholder = xmssScriptPathWitness(new Uint8Array(XMSS_SIGNATURE_LENGTH), leaf.script, controlBlock);
+  checkFee(tx, inputIndex, options.prevouts, placeholder, sighashType, options);
   const hash = tapscriptSighash(tx, inputIndex, options.prevouts, leaf.leafHash, sighashType);
   const signature = await signer.sign(hash);
   tx.setWitness(inputIndex, xmssScriptPathWitness(signature, leaf.script, controlBlock));

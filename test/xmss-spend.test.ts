@@ -58,6 +58,7 @@ describe('P2MR spends through XMSS leaves', () => {
         tree,
         leafIndex: expected.leafIndex,
         trustPrevouts: true, // vector prevouts point at synthetic transactions
+        maxFeeRate: 100_000_000n, // and the mixed vector's made-up amounts leave a large fee
       });
       expect(store.calls).toBe(1);
       const witness = tx.ins[expected.inputIndex]!.witness;
