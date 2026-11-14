@@ -21,7 +21,7 @@ import {
   Transaction,
   xmssLeafScript,
 } from '../src/index.js';
-import type { Prevout } from '../src/index.js';
+import type { TxOutput } from '../src/index.js';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
 import { hexToBytes } from './vector-helpers.js';
 
@@ -31,14 +31,14 @@ const p2mrScript = p2mr({ merkleRoot: tree.root }).output;
 
 interface Spend {
   tx: Transaction;
-  prevouts: Prevout[];
+  prevouts: TxOutput[];
   previousTransactions: Transaction[];
 }
 
 const FEE = 1_000n;
 
 /** A previous transaction paying `values` to the tree, and a tx spending all of it less `fee`. */
-function spendOf(values: bigint[], extra?: Prevout, fee = FEE): Spend {
+function spendOf(values: bigint[], extra?: TxOutput, fee = FEE): Spend {
   const previous = createTransaction(2);
   for (const value of values) previous.addOutput(p2mrScript, value);
   if (extra !== undefined) previous.addOutput(extra.script, extra.value);
@@ -70,7 +70,7 @@ describe('P2MR signing safeguards', () => {
     const spend = spendOf([100_000_000n, 50_000n]);
     sign(spend, { previousTransactions: spend.previousTransactions });
     const signature = spend.tx.ins[0]!.witness[0]!;
-    const hash = tapscriptSighash(spend.tx, 0, spend.prevouts, tree.leaves[1]!.leafHash);
+    const hash = tapscriptSighash(spend.tx, 0, { prevouts: spend.prevouts, leafHash: tree.leaves[1]!.leafHash });
     expect(ecc.verifySchnorr(hash, account.derivePublicKey(1), signature)).toBe(true);
   });
 

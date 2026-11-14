@@ -20,7 +20,7 @@ import { classifyOutputScript, extractWitnessProgram } from './script.js';
 import { decompileScript, isPushOnlyScript } from './scripttools.js';
 import { parseMultiA } from './multia.js';
 import { XMSS_SIGNATURE_LENGTH } from './xmss.js';
-import type { Prevout } from './scriptpath.js';
+import type { TxOutput } from './transaction.js';
 import type { ScriptTree } from './scripttree.js';
 import { varIntSize } from './internal/bytes.js';
 import { PolicyError } from './errors.js';
@@ -88,7 +88,7 @@ export function feeForVsize(vsize: number, feeRate: FeeRate): bigint {
 /** Context for checkStandard. Each field that is left out skips the checks that need it. */
 export interface StandardOptions {
   /** The input values and scripts, in input order. Enables the input and relay fee checks. */
-  prevouts?: readonly Prevout[];
+  prevouts?: readonly TxOutput[];
   /** Height of the next block. With medianTimePast, enables the finality check. */
   height?: number;
   /** Median time past of the chain tip, in Unix seconds. */
@@ -222,7 +222,7 @@ export function checkSanity(tx: Transaction): void {
  * (existence, coinbase maturity, input value ranges) need the chain or cannot
  * fail for outputs that are in it.
  */
-function checkInputValues(tx: Transaction, prevouts: readonly Prevout[]): void {
+function checkInputValues(tx: Transaction, prevouts: readonly TxOutput[]): void {
   const inputValue = prevouts.reduce((sum, prevout) => sum + prevout.value, 0n);
   const outputValue = tx.outs.reduce((sum, output) => sum + output.value, 0n);
   if (inputValue < outputValue) {

@@ -42,6 +42,7 @@ import type { XmssSigner } from './xmss.js';
 import { concat, equalBytes, toHex, uint32le, varInt } from './internal/bytes.js';
 import { PearlError, SigningError } from './errors.js';
 import type { FeeRate } from './amount.js';
+import type { TxOutput } from './transaction.js';
 
 /**
  * Anything that can make a BIP340 Schnorr signature for a tapscript key,
@@ -59,12 +60,6 @@ export interface TapscriptSignerAsync {
   publicKey: Uint8Array;
   /** Resolves to a 64-byte BIP340 signature over a 32-byte hash, made with the untweaked key. */
   signSchnorr(hash: Uint8Array): Promise<Uint8Array>;
-}
-
-/** A spent output: its script and value in grains. */
-export interface Prevout {
-  script: Uint8Array;
-  value: bigint;
 }
 
 const SIGHASH_TYPES = new Set([
@@ -169,7 +164,7 @@ function serializeOutput(value: bigint, script: Uint8Array): Uint8Array {
 
 /** Whether NewTxSigHashes computes the amount and script hashes for this spend. */
 function coversInputValues(
-  prevouts: readonly Prevout[],
+  prevouts: readonly TxOutput[],
   sighashType: number,
 ): boolean {
   if ((sighashType & SIGHASH_ANYONECANPAY) !== 0) return true;
@@ -185,7 +180,7 @@ function coversInputValues(
 function pearlTapscriptSighash(
   tx: Transaction,
   inputIndex: number,
-  prevouts: readonly Prevout[],
+  prevouts: readonly TxOutput[],
   leafHash: Uint8Array,
   sighashType: number,
 ): Uint8Array {
@@ -231,21 +226,26 @@ function pearlTapscriptSighash(
   return taggedHash('TapSighash', concat(parts));
 }
 
+/** What tapscriptSighash needs besides the transaction and the input. */
+export interface TapscriptSighashInput {
+  /** Script and value (in grain) of every input's spent output, in input order. */
+  prevouts: readonly TxOutput[];
+  /** Hash of the leaf being spent, from tapLeafHash or a ScriptTreeLeaf. */
+  leafHash: Uint8Array;
+  /** A Taproot sighash type. SIGHASH_DEFAULT unless given. */
+  sighashType?: number;
+}
+
 /**
- * Tapscript sighash for one input, as Pearl computes it. prevouts must list
- * every input's spent output in order.
+ * Tapscript sighash for one input, as Pearl computes it.
  *
  * Returns the 32-byte hash to sign. Throws when prevouts does not have one entry
  * per input, for an input index out of range, and for a sighash type that is not
  * a Taproot one.
  */
-export function tapscriptSighash(
-  tx: Transaction,
-  inputIndex: number,
-  prevouts: readonly Prevout[],
-  leafHash: Uint8Array,
-  sighashType: number = Transaction.SIGHASH_DEFAULT,
-): Uint8Array {
+export function tapscriptSighash(tx: Transaction, inputIndex: number, options: TapscriptSighashInput): Uint8Array {
+  const { prevouts, leafHash } = options;
+  const sighashType = options.sighashType ?? Transaction.SIGHASH_DEFAULT;
   if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= tx.ins.length) {
     throw new RangeError(`input index ${inputIndex} is out of range`);
   }
@@ -263,37 +263,57 @@ export function tapscriptSighash(
   return pearlTapscriptSighash(tx, inputIndex, prevouts, leafHash, sighashType);
 }
 
+/** What signTapscriptUnchecked needs besides the transaction and the signer. */
+export interface TapscriptSignOptions {
+  /** Script and value (in grain) of every input's spent output, in input order. */
+  prevouts: readonly TxOutput[];
+  /** The leaf script being spent. */
+  script: Uint8Array;
+  /** A Taproot sighash type. SIGHASH_DEFAULT unless given. */
+  sighashType?: number;
+}
+
 /**
  * Signs one input for a tapscript leaf and returns the witness signature:
  * 64 bytes for SIGHASH_DEFAULT, otherwise 65 with the sighash byte appended.
- * The signature is checked against the signer's key before it is returned.
  *
- * This is the bare primitive: it does not check previous transactions or the
- * fee, and it cannot tell whether the script will succeed.
+ * Unchecked means it signs whatever it is handed: it does not compare the
+ * prevouts with the previous transactions, has no fee limit, does not look
+ * at whether the leaf pushes the signer's key or opens the spent output, and
+ * cannot tell whether the script will succeed. signP2mrInput and the PSBT
+ * signers make those checks; use this for leaves they do not cover, with
+ * prevouts you have verified yourself. The signature is checked against the
+ * signer's key before it is returned.
  */
-export function signTapscript(
+export function signTapscriptUnchecked(
   tx: Transaction,
   inputIndex: number,
-  prevouts: readonly Prevout[],
-  script: Uint8Array,
   signer: TapscriptSigner,
-  sighashType: number = Transaction.SIGHASH_DEFAULT,
+  options: TapscriptSignOptions,
 ): Uint8Array {
-  const hash = tapscriptSighash(tx, inputIndex, prevouts, tapLeafHash(script), sighashType);
+  const { hash, sighashType } = tapscriptSignHash(tx, inputIndex, options);
   return finishTapscriptSignature(hash, signer.publicKey, signer.signSchnorr(hash), sighashType, inputIndex);
 }
 
-/** signTapscript for a signer that answers asynchronously. */
-export async function signTapscriptAsync(
+/** signTapscriptUnchecked for a signer that answers asynchronously. */
+export async function signTapscriptUncheckedAsync(
   tx: Transaction,
   inputIndex: number,
-  prevouts: readonly Prevout[],
-  script: Uint8Array,
   signer: TapscriptSignerAsync,
-  sighashType: number = Transaction.SIGHASH_DEFAULT,
+  options: TapscriptSignOptions,
 ): Promise<Uint8Array> {
-  const hash = tapscriptSighash(tx, inputIndex, prevouts, tapLeafHash(script), sighashType);
+  const { hash, sighashType } = tapscriptSignHash(tx, inputIndex, options);
   return finishTapscriptSignature(hash, signer.publicKey, await signer.signSchnorr(hash), sighashType, inputIndex);
+}
+
+function tapscriptSignHash(
+  tx: Transaction,
+  inputIndex: number,
+  options: TapscriptSignOptions,
+): { hash: Uint8Array; sighashType: number } {
+  const sighashType = options.sighashType ?? Transaction.SIGHASH_DEFAULT;
+  const { script, ...rest } = options;
+  return { hash: tapscriptSighash(tx, inputIndex, { ...rest, leafHash: tapLeafHash(script), sighashType }), sighashType };
 }
 
 function finishTapscriptSignature(
@@ -353,7 +373,7 @@ export interface FeeGuardOptions {
 function checkFee(
   tx: Transaction,
   inputIndex: number,
-  prevouts: readonly Prevout[],
+  prevouts: readonly TxOutput[],
   witness: Uint8Array[],
   sighashType: number,
   options: FeeGuardOptions,
@@ -397,7 +417,7 @@ function checkFee(
 /** What signP2mrInput needs besides the transaction and the signer. */
 export interface P2mrSignOptions extends FeeGuardOptions {
   /** Script and value (in grain) of every input's spent output, in input order. */
-  prevouts: readonly Prevout[];
+  prevouts: readonly TxOutput[];
   /** The script tree the spent output commits to. */
   tree: ScriptTree;
   /** Index in tree.leaves of the leaf to spend through. */
@@ -419,7 +439,7 @@ export interface P2mrSignOptions extends FeeGuardOptions {
  */
 function checkPrevouts(
   tx: Transaction,
-  prevouts: readonly Prevout[],
+  prevouts: readonly TxOutput[],
   previousTransactions: readonly Transaction[],
 ): void {
   const byHash = new Map(previousTransactions.map((prev) => [toHex(prev.getHash()), prev]));
@@ -454,7 +474,7 @@ function checkPrevouts(
  * A transaction whose outputs exceed its inputs, or whose fee is above
  * maxFeeRate, is refused; see FeeGuardOptions.
  *
- * For other leaf scripts, sign with signTapscript and set the witness from
+ * For other leaf scripts, sign with signTapscriptUnchecked and set the witness from
  * scriptPathWitness and p2mrControlBlock.
  */
 export function signP2mrInput(
@@ -464,7 +484,11 @@ export function signP2mrInput(
   options: P2mrSignOptions,
 ): void {
   const { leaf, controlBlock, sighashType } = checkP2mrSchnorrSpend(tx, inputIndex, signer.publicKey, options);
-  const signature = signTapscript(tx, inputIndex, options.prevouts, leaf.script, signer, sighashType);
+  const signature = signTapscriptUnchecked(tx, inputIndex, signer, {
+    prevouts: options.prevouts,
+    script: leaf.script,
+    sighashType,
+  });
   tx.setWitness(inputIndex, scriptPathWitness([signature], leaf.script, controlBlock));
 }
 
@@ -476,7 +500,11 @@ export async function signP2mrInputAsync(
   options: P2mrSignOptions,
 ): Promise<void> {
   const { leaf, controlBlock, sighashType } = checkP2mrSchnorrSpend(tx, inputIndex, signer.publicKey, options);
-  const signature = await signTapscriptAsync(tx, inputIndex, options.prevouts, leaf.script, signer, sighashType);
+  const signature = await signTapscriptUncheckedAsync(tx, inputIndex, signer, {
+    prevouts: options.prevouts,
+    script: leaf.script,
+    sighashType,
+  });
   tx.setWitness(inputIndex, scriptPathWitness([signature], leaf.script, controlBlock));
 }
 
@@ -597,7 +625,11 @@ export async function signXmssP2mrInput(
   checkInputValues(tx, options, sighashType);
   const placeholder = xmssScriptPathWitness(new Uint8Array(XMSS_SIGNATURE_LENGTH), leaf.script, controlBlock);
   checkFee(tx, inputIndex, options.prevouts, placeholder, sighashType, options);
-  const hash = tapscriptSighash(tx, inputIndex, options.prevouts, leaf.leafHash, sighashType);
+  const hash = tapscriptSighash(tx, inputIndex, {
+    prevouts: options.prevouts,
+    leafHash: leaf.leafHash,
+    sighashType,
+  });
   const signature = await signer.sign(hash);
   tx.setWitness(inputIndex, xmssScriptPathWitness(signature, leaf.script, controlBlock));
 }
@@ -654,6 +686,12 @@ export function prepareTaprootScriptPathInput(
   }
 }
 
+/** Options for signTaprootScriptPathInput. */
+export interface TaprootScriptPathSignOptions extends PsbtSighashOptions {
+  /** Hash of the tap leaf to sign, from assembleScriptTree. */
+  leafHash: Uint8Array;
+}
+
 /**
  * Signs a prepared P2TR script-path PSBT input for one leaf. The leaf must
  * be in the input's tapLeafScript, open the witness UTXO, and push the
@@ -666,9 +704,9 @@ export function signTaprootScriptPathInput(
   psbt: Psbt,
   inputIndex: number,
   signer: TapscriptSigner,
-  leafHash: Uint8Array,
-  options: PsbtSighashOptions = {},
+  options: TaprootScriptPathSignOptions,
 ): void {
+  const { leafHash } = options;
   const sighashType = checkTaprootScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash, options);
   psbt.signTaprootInput(inputIndex, schnorrOnlySigner(signer), leafHash, [sighashType]);
   checkSignedInput(psbt, inputIndex);
@@ -679,9 +717,9 @@ export async function signTaprootScriptPathInputAsync(
   psbt: Psbt,
   inputIndex: number,
   signer: TapscriptSignerAsync,
-  leafHash: Uint8Array,
-  options: PsbtSighashOptions = {},
+  options: TaprootScriptPathSignOptions,
 ): Promise<void> {
+  const { leafHash } = options;
   const sighashType = checkTaprootScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash, options);
   await psbt.signTaprootInputAsync(inputIndex, schnorrOnlySigner(signer), leafHash, [sighashType]);
   checkSignedInput(psbt, inputIndex);
@@ -809,10 +847,16 @@ export function prepareP2mrScriptPathInput(
   }
 }
 
-/** Options for the P2MR PSBT signers. */
+/** What the P2MR PSBT signers accept besides the leaf: the sighash types and the prevout check. */
 export interface P2mrPsbtSignOptions extends PsbtSighashOptions {
-  /** Sign without checking input values against each input's nonWitnessUtxo. */
+  /** Sign without checking input values against each input's previous transaction. */
   trustPrevouts?: boolean;
+}
+
+/** Options for signP2mrScriptPathInput. */
+export interface P2mrScriptPathSignOptions extends P2mrPsbtSignOptions {
+  /** Hash of the tap leaf to sign, from assembleScriptTree. */
+  leafHash: Uint8Array;
 }
 
 /**
@@ -830,9 +874,9 @@ export function signP2mrScriptPathInput(
   psbt: Psbt,
   inputIndex: number,
   signer: TapscriptSigner,
-  leafHash: Uint8Array,
-  options: P2mrPsbtSignOptions = {},
+  options: P2mrScriptPathSignOptions,
 ): void {
+  const { leafHash } = options;
   const { hash, sighashType } = checkP2mrScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash, options);
   const signature = finishTapscriptSignature(
     hash, signer.publicKey, signer.signSchnorr(hash), sighashType, inputIndex,
@@ -845,9 +889,9 @@ export async function signP2mrScriptPathInputAsync(
   psbt: Psbt,
   inputIndex: number,
   signer: TapscriptSignerAsync,
-  leafHash: Uint8Array,
-  options: P2mrPsbtSignOptions = {},
+  options: P2mrScriptPathSignOptions,
 ): Promise<void> {
+  const { leafHash } = options;
   const { hash, sighashType } = checkP2mrScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash, options);
   const signature = finishTapscriptSignature(
     hash, signer.publicKey, await signer.signSchnorr(hash), sighashType, inputIndex,
@@ -903,7 +947,7 @@ function checkP2mrScriptPathInput(
   const previous = psbt.data.inputs.map((item) =>
     item.nonWitnessUtxo === undefined ? undefined : Transaction.fromBuffer(item.nonWitnessUtxo),
   );
-  const prevouts = tx.ins.map((txInput, index): Prevout => {
+  const prevouts = tx.ins.map((txInput, index): TxOutput => {
     const utxo = psbt.data.inputs[index]!.witnessUtxo ?? previous[index]?.outs[txInput.index];
     if (utxo === undefined) {
       throw new SigningError('INPUT_UNPREPARED', `PSBT input ${index} has no UTXO to sign against`);
@@ -920,6 +964,10 @@ function checkP2mrScriptPathInput(
     );
   }
   checkInputValues(tx, values, sighashType);
-  const hash = tapscriptSighash(tx, inputIndex, prevouts, leafHash, sighashType);
+  const hash = tapscriptSighash(tx, inputIndex, {
+    prevouts,
+    leafHash,
+    sighashType,
+  });
   return { hash, sighashType };
 }

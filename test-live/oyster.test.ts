@@ -24,7 +24,7 @@ import {
   transactionId,
   verifyMessage,
 } from '../src/index.js';
-import type { Prevout } from '../src/index.js';
+import type { TxOutput } from '../src/index.js';
 import { OYSTER_MNEMONIC, OYSTER_PASSPHRASE } from './context.js';
 import { describeOyster, fund, mine, miner, network, oyster, pearld } from './chain.js';
 
@@ -153,7 +153,7 @@ describeOyster('Oyster', () => {
     expect(paid.map((out) => out.value)).toEqual([amount]);
 
     // Every input is a BIP86 key-path spend of an output the wallet listed.
-    const prevouts: Prevout[] = tx.ins.map((input) => {
+    const prevouts: TxOutput[] = tx.ins.map((input) => {
       const spent = before.find(
         (utxo) => utxo.txid === Buffer.from(input.hash).reverse().toString('hex') && utxo.vout === input.index,
       );

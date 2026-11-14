@@ -16,7 +16,7 @@ import { parseMultiA } from './multia.js';
 import type { PearlNetwork } from './networks.js';
 import { classifyOutputScript, tapLeafHash } from './script.js';
 import type { ScriptClass } from './script.js';
-import type { Prevout } from './scriptpath.js';
+import type { TxOutput } from './transaction.js';
 import {
   parseP2mrControlBlock,
   parseTaprootControlBlock,
@@ -109,7 +109,7 @@ export interface InspectedTransaction {
 /** Describes a transaction given the outputs it spends, in input order, and the network its addresses are on. */
 export function inspectTransaction(
   tx: Transaction,
-  prevouts: readonly Prevout[],
+  prevouts: readonly TxOutput[],
   network: PearlNetwork,
 ): InspectedTransaction {
   if (prevouts.length !== tx.ins.length) throw new Error('prevouts must match the transaction inputs');

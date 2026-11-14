@@ -15,7 +15,6 @@ import { toOutputScript } from './address.js';
 import { multiAStack, parseMultiA } from './multia.js';
 import { classifyOutputScript, tapLeafHash } from './script.js';
 import { tapscriptSighash } from './scriptpath.js';
-import type { Prevout } from './scriptpath.js';
 import { decompileScript } from './scripttools.js';
 import { verifyP2mrLeafCommitment, verifyTaprootLeafCommitment } from './scripttree.js';
 import type { PearlNetwork } from './networks.js';
@@ -23,6 +22,16 @@ import { fromBase64, toHex, varInt } from './internal/bytes.js';
 import { PearlError, SigningError } from './errors.js';
 
 export { Psbt, Transaction };
+
+/**
+ * An output: its script and its value in grain. The same shape serves for an
+ * output to create and for a spent one; `prevouts` everywhere is a list of
+ * these, one per input. A Utxo is one with its outpoint added.
+ */
+export interface TxOutput {
+  script: Uint8Array;
+  value: bigint;
+}
 
 function checkHex(hex: string, what: string): void {
   if (typeof hex !== 'string') {
@@ -242,7 +251,7 @@ function pearlScriptPathWitness(psbt: Psbt, inputIndex: number): Uint8Array[] | 
       .map(toHex),
   );
   const tx = Transaction.fromBuffer(psbt.data.globalMap.unsignedTx.toBuffer());
-  const prevouts = tx.ins.map((txInput, index): Prevout => {
+  const prevouts = tx.ins.map((txInput, index): TxOutput => {
     const other = psbt.data.inputs[index]!;
     const utxo =
       other.witnessUtxo ??
@@ -264,7 +273,7 @@ function pearlScriptPathWitness(psbt: Psbt, inputIndex: number): Uint8Array[] | 
       (signature.length === 65 && sighashType === Transaction.SIGHASH_DEFAULT) ||
       !ecc.isXOnlyPoint(sig.pubkey) ||
       !ecc.verifySchnorr(
-        tapscriptSighash(tx, inputIndex, prevouts, sig.leafHash, sighashType),
+        tapscriptSighash(tx, inputIndex, { prevouts, leafHash: sig.leafHash, sighashType }),
         sig.pubkey,
         signature.subarray(0, 64),
       )

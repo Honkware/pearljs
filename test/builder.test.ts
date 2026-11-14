@@ -277,7 +277,7 @@ describe('payFromAccount with P2MR outputs', () => {
     const witness = payment.transaction.ins[inputIndex]!.witness;
     expect(witness.length).toBe(3);
     expect(bytesToHex(witness[1]!)).toBe(bytesToHex(tree.leaves[1]!.script));
-    const hash = tapscriptSighash(payment.transaction, inputIndex, payment.prevouts, tree.leaves[1]!.leafHash);
+    const hash = tapscriptSighash(payment.transaction, inputIndex, { prevouts: payment.prevouts, leafHash: tree.leaves[1]!.leafHash });
     expect(ecc.verifySchnorr(hash, account.derivePublicKey(6), witness[0]!)).toBe(true);
   }
 

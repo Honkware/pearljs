@@ -191,7 +191,7 @@ describe('P2MR script paths through PSBT', () => {
     const psbt = preparedPsbt(vector);
     const child = root.derivePath(`${vectors.bip86.accountPath}/0/0`);
     const leafHash = treeOf(vector.inputs[0]!).leaves[0]!.leafHash;
-    expect(() => signTaprootScriptPathInput(psbt, 0, child, leafHash)).toThrow('signP2mrScriptPathInput');
+    expect(() => signTaprootScriptPathInput(psbt, 0, child, { leafHash })).toThrow('signP2mrScriptPathInput');
   });
 
   it('finalizes only verified signatures of keys the leaf pushes', () => {
@@ -254,11 +254,11 @@ describe('P2MR script paths through PSBT', () => {
     expect(() => account.signScriptPathInput(psbt, 0, { index: 0, leafHash })).toThrow(
       'asks for sighash type 0x02, which is not in allowedSighashTypes',
     );
-    expect(() => signP2mrScriptPathInput(psbt, 0, child, leafHash)).toThrow('not in allowedSighashTypes');
+    expect(() => signP2mrScriptPathInput(psbt, 0, child, { leafHash })).toThrow('not in allowedSighashTypes');
     expect(psbt.data.inputs[0]!.tapScriptSig).toBeUndefined();
 
     const allowed = returned();
-    signP2mrScriptPathInput(allowed, 0, child, leafHash, { allowedSighashTypes: [Transaction.SIGHASH_NONE] });
+    signP2mrScriptPathInput(allowed, 0, child, { leafHash, allowedSighashTypes: [Transaction.SIGHASH_NONE] });
     expect(allowed.data.inputs[0]!.tapScriptSig![0]!.signature[64]).toBe(Transaction.SIGHASH_NONE);
   });
 
@@ -277,16 +277,16 @@ describe('P2MR script paths through PSBT', () => {
 
     const refused = preparedPsbt(vector, () => false);
     await expect(
-      signP2mrScriptPathInputAsync(refused, 0, signer, leafHash, { allowedSighashTypes: [Transaction.SIGHASH_NONE] }),
+      signP2mrScriptPathInputAsync(refused, 0, signer, { leafHash, allowedSighashTypes: [Transaction.SIGHASH_NONE] }),
     ).rejects.toThrow('nonWitnessUtxo');
     expect(calls).toBe(0);
 
     const psbt = preparedPsbt(vector);
-    await expect(signP2mrScriptPathInputAsync(psbt, 0, signer, leafHash)).rejects.toThrow(
+    await expect(signP2mrScriptPathInputAsync(psbt, 0, signer, { leafHash })).rejects.toThrow(
       'not in allowedSighashTypes',
     );
     expect(calls).toBe(0);
-    await signP2mrScriptPathInputAsync(psbt, 0, signer, leafHash, { allowedSighashTypes: [Transaction.SIGHASH_NONE] });
+    await signP2mrScriptPathInputAsync(psbt, 0, signer, { leafHash, allowedSighashTypes: [Transaction.SIGHASH_NONE] });
     expect(calls).toBe(1);
     const signature = psbt.data.inputs[0]!.tapScriptSig![0]!.signature;
     expect(signature).toHaveLength(65);

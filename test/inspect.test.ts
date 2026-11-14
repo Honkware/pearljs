@@ -13,13 +13,13 @@ import {
   toOutputScript,
   witnessTransactionId,
 } from '../src/index.js';
-import type { InputSpend, Prevout } from '../src/index.js';
+import type { InputSpend, TxOutput } from '../src/index.js';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
 import mainnetSpend from './fixtures/pr111-mainnet-xmss-spend.json' with { type: 'json' };
 import { bytesToHex, hexToBytes } from './vector-helpers.js';
 
 const network = networks.mainnet;
-const prevoutsOf = (items: { script: string; value: number }[]): Prevout[] =>
+const prevoutsOf = (items: { script: string; value: number }[]): TxOutput[] =>
   items.map((item) => ({ script: hexToBytes(item.script), value: BigInt(item.value) }));
 
 function scriptPath(spend: InputSpend): Extract<InputSpend, { type: 'scriptPath' }> {

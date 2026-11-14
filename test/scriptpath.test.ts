@@ -176,7 +176,7 @@ describe('P2TR script-path spends', () => {
 
       const unsigned = parseTransaction(expected.unsignedTxHex);
       const prevouts = [{ script: hexToBytes(expected.prevScript), value: BigInt(expected.value) }];
-      const sighash = tapscriptSighash(unsigned, 0, prevouts, leaf.leafHash, expected.hashType);
+      const sighash = tapscriptSighash(unsigned, 0, { prevouts, leafHash: leaf.leafHash, sighashType: expected.hashType });
       expect(bytesToHex(sighash)).toBe(expected.sighash);
 
       account.signScriptPathInput(psbt, 0, {
@@ -229,7 +229,7 @@ describe('P2TR script-path spends', () => {
     expect(() => account.signScriptPathInput(psbt, 0, { index: 2, leafHash })).toThrow(
       'asks for sighash type 0x02, which is not in allowedSighashTypes',
     );
-    expect(() => signTaprootScriptPathInput(psbt, 0, child, leafHash)).toThrow('not in allowedSighashTypes');
+    expect(() => signTaprootScriptPathInput(psbt, 0, child, { leafHash })).toThrow('not in allowedSighashTypes');
     let asked = false;
     const device = {
       publicKey: child.publicKey,
@@ -238,7 +238,7 @@ describe('P2TR script-path spends', () => {
         return child.signSchnorr(hash);
       },
     };
-    await expect(signTaprootScriptPathInputAsync(psbt, 0, device, leafHash)).rejects.toThrow(
+    await expect(signTaprootScriptPathInputAsync(psbt, 0, device, { leafHash })).rejects.toThrow(
       'not in allowedSighashTypes',
     );
     expect(asked).toBe(false);
@@ -267,13 +267,7 @@ describe('P2MR spends', () => {
       const tx = parseTransaction(expected.unsignedTxHex);
       const prevouts = vectorPrevouts(expected);
       const input = expected.inputIndex;
-      const sighash = tapscriptSighash(
-        tx,
-        input,
-        prevouts,
-        tree.leaves[expected.leafIndex]!.leafHash,
-        expected.hashType,
-      );
+      const sighash = tapscriptSighash(tx, input, { prevouts, leafHash: tree.leaves[expected.leafIndex]!.leafHash, sighashType: expected.hashType });
       expect(bytesToHex(sighash)).toBe(expected.sighash);
 
       account.signP2mrInput(tx, input, {
@@ -315,7 +309,7 @@ describe('P2MR spends', () => {
         expected.hashType,
         leafHash,
       );
-      const pearl = tapscriptSighash(tx, expected.inputIndex, prevouts, leafHash, expected.hashType);
+      const pearl = tapscriptSighash(tx, expected.inputIndex, { prevouts, leafHash, sighashType: expected.hashType });
       const hasP2tr = prevouts.some((prevout) => prevout.script[0] === 0x51);
       const anyoneCanPay = (expected.hashType & 0x80) !== 0;
       expect(bytesToHex(pearl) === bytesToHex(bip341), expected.name).toBe(hasP2tr || anyoneCanPay);
@@ -342,7 +336,7 @@ describe('P2MR spends', () => {
     expect(() =>
       account.signP2mrInput(tx, 0, { index: 0, prevouts, tree: keyTree(1), leafIndex: 0 }),
     ).toThrow('does not spend a P2MR output');
-    expect(() => tapscriptSighash(tx, 0, [], keyTree(1).root)).toThrow('expected 1 prevouts');
+    expect(() => tapscriptSighash(tx, 0, { prevouts: [], leafHash: keyTree(1).root })).toThrow('expected 1 prevouts');
   });
 });
 
@@ -362,7 +356,7 @@ describe('generic signers', () => {
     };
     const psbt = createPsbt(parseTransaction(expected.unsignedTxHex));
     prepareInput(psbt, tree, expected);
-    signTaprootScriptPathInput(psbt, 0, signer, tree.leaves[2]!.leafHash);
+    signTaprootScriptPathInput(psbt, 0, signer, { leafHash: tree.leaves[2]!.leafHash });
     expect(transactionId(finalizePsbt(psbt))).toBe(expected.txid);
   });
 });

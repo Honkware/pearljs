@@ -25,7 +25,7 @@ import {
   toOutputScript,
   transactionId,
 } from '../src/index.js';
-import type { Prevout, Transaction } from '../src/index.js';
+import type { TxOutput, Transaction } from '../src/index.js';
 import {
   addChange,
   broadcast,
@@ -47,7 +47,7 @@ const recipient = toOutputScript(account.deriveAddress(61), network);
 let funding: Transaction;
 
 /** A key-path spend of the funded output, paying exactly outputs. edit changes the transaction before it is signed. */
-function spend(outputs: readonly Prevout[], edit: (tx: Transaction) => void = () => {}): Transaction {
+function spend(outputs: readonly TxOutput[], edit: (tx: Transaction) => void = () => {}): Transaction {
   const tx = createTransaction(2);
   tx.addInput(funding.getHash(), 0);
   for (const output of outputs) tx.addOutput(output.script, output.value);
@@ -59,7 +59,7 @@ function spend(outputs: readonly Prevout[], edit: (tx: Transaction) => void = ()
 }
 
 /** A spend paying outputs with the rest, less a normal fee, as change. */
-function spendWithChange(outputs: readonly Prevout[], edit?: (tx: Transaction) => void): Transaction {
+function spendWithChange(outputs: readonly TxOutput[], edit?: (tx: Transaction) => void): Transaction {
   const tx = createTransaction(2);
   tx.addInput(funding.getHash(), 0);
   for (const output of outputs) tx.addOutput(output.script, output.value);

@@ -32,7 +32,7 @@ import {
   XMSS_PRIVATE_SEED_LENGTH,
   XMSS_PUBLIC_SEED_LENGTH,
 } from '../src/index.js';
-import type { InspectedTransaction, Prevout, ScriptTree, SpendEstimate, Transaction } from '../src/index.js';
+import type { InspectedTransaction, TxOutput, ScriptTree, SpendEstimate, Transaction } from '../src/index.js';
 import { addChange, broadcastAllAndConfirm, describeLive, fund, miner, network, prevoutsOf, testMempoolAccept } from './chain.js';
 
 const account = deriveSigningAccountFromSeed(
@@ -48,7 +48,7 @@ const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
  * Checks what inspectTransaction says against pearld before and after the
  * transaction is mined, and returns it for the checks particular to its kind.
  */
-async function inspectLive(tx: Transaction, prevouts: Prevout[]): Promise<InspectedTransaction> {
+async function inspectLive(tx: Transaction, prevouts: TxOutput[]): Promise<InspectedTransaction> {
   const inspected = inspectTransaction(tx, prevouts, network);
   expect(await testMempoolAccept(tx)).toMatchObject({
     allowed: true,

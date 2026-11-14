@@ -51,7 +51,7 @@ describe('multi_a finalization', () => {
 
       // Item i of the stack belongs to key n-1-i of the script.
       const prevouts = expected.prevouts.map((p) => ({ script: hexToBytes(p.script), value: BigInt(p.value) }));
-      const hash = tapscriptSighash(tx, 0, prevouts, tree.leaves[0]!.leafHash);
+      const hash = tapscriptSighash(tx, 0, { prevouts, leafHash: tree.leaves[0]!.leafHash });
       const keys = expected.keyIndices.map((index) => account.derivePublicKey(KEY_OFFSET + index));
       witness.slice(0, keys.length).forEach((signature, i) => {
         if (signature.length === 0) return;

@@ -66,7 +66,7 @@ describe('async signing', () => {
       value: BigInt(expected.value),
     });
     const device = deviceSigner(2);
-    await signTaprootScriptPathInputAsync(psbt, 0, device, tree.leaves[2]!.leafHash);
+    await signTaprootScriptPathInputAsync(psbt, 0, device, { leafHash: tree.leaves[2]!.leafHash });
     expect(device.calls).toBe(1);
     expect(transactionId(finalizePsbt(psbt))).toBe(expected.txid);
   });

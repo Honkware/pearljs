@@ -1,7 +1,7 @@
 // The async signers, as a hardware wallet would be driven, producing spends a
 // regtest pearld mines: a P2TR script path and a P2MR script path through
 // PSBT, a P2MR checksig leaf signed on the transaction, and a hand-built
-// 2-of-2 leaf signed with signTapscriptAsync.
+// 2-of-2 leaf signed with signTapscriptUncheckedAsync.
 
 import { randomBytes } from 'node:crypto';
 import { expect, it } from 'vitest';
@@ -24,7 +24,7 @@ import {
   signP2mrInputAsync,
   signP2mrScriptPathInputAsync,
   signTaprootScriptPathInputAsync,
-  signTapscriptAsync,
+  signTapscriptUncheckedAsync,
 } from '../src/index.js';
 import type { SpendEstimate, TapscriptSignerAsync, Transaction } from '../src/index.js';
 import { addChange, broadcastAllAndConfirm, describeLive, fund, prevoutsOf, testMempoolAccept } from './chain.js';
@@ -76,14 +76,14 @@ describeLive('async signers', () => {
     const first = start(0, { type: 'scriptPath', tree: trTree, leafIndex: 1, p2mr: false });
     let psbt = createPsbt(first.tx);
     prepareTaprootScriptPathInput(psbt, 0, { internalPubkey: a.publicKey, tree: trTree, leafIndex: 1, value: VALUE });
-    await signTaprootScriptPathInputAsync(psbt, 0, b, trTree.leaves[1]!.leafHash);
+    await signTaprootScriptPathInputAsync(psbt, 0, b, { leafHash: trTree.leaves[1]!.leafHash });
     done.push({ tx: finalizePsbt(psbt), estimate: first.estimate });
 
     // P2MR script path through PSBT.
     const second = start(1, { type: 'scriptPath', tree: mrTree, leafIndex: 0, p2mr: true });
     psbt = createPsbt(second.tx);
     prepareP2mrScriptPathInput(psbt, 0, { tree: mrTree, leafIndex: 0, value: VALUE, previousTransaction: funding });
-    await signP2mrScriptPathInputAsync(psbt, 0, b, mrTree.leaves[0]!.leafHash);
+    await signP2mrScriptPathInputAsync(psbt, 0, b, { leafHash: mrTree.leaves[0]!.leafHash });
     done.push({ tx: finalizePsbt(psbt), estimate: second.estimate });
 
     // P2MR checksig leaf on the transaction.
@@ -100,8 +100,8 @@ describeLive('async signers', () => {
     const fourth = start(3, { type: 'scriptPath', tree: bothTree, leafIndex: 0, p2mr: true, stack: [64, 64] });
     const prevouts = prevoutsOf(fourth.tx, [funding]);
     const signatures = [
-      await signTapscriptAsync(fourth.tx, 0, prevouts, both, e),
-      await signTapscriptAsync(fourth.tx, 0, prevouts, both, d),
+      await signTapscriptUncheckedAsync(fourth.tx, 0, e, { prevouts, script: both }),
+      await signTapscriptUncheckedAsync(fourth.tx, 0, d, { prevouts, script: both }),
     ];
     fourth.tx.setWitness(0, scriptPathWitness(signatures, both, p2mrControlBlock(bothTree, 0)));
     done.push(fourth);

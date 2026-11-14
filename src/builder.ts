@@ -15,15 +15,15 @@ import type { Psbt } from 'bitcoinjs-lib';
 import { formatPearl } from './amount.js';
 import { toOutputScript } from './address.js';
 import { InsufficientFundsError, selectCoins, spendableUtxos } from './coinselect.js';
-import type { CoinSelectionStrategy, SpendableOptions, TxOutput, Utxo } from './coinselect.js';
+import type { CoinSelectionStrategy, SpendableOptions, Utxo } from './coinselect.js';
 import type { PearlSigningAccount } from './keys.js';
 import type { PearlNetwork } from './networks.js';
 import { checkStandard, estimateVsize, MAX_STANDARD_TX_VSIZE, minRelayFee } from './policy.js';
 import { classifyOutputScript } from './script.js';
 import { prepareP2mrScriptPathInput } from './scriptpath.js';
-import type { P2mrPsbtSignOptions, Prevout } from './scriptpath.js';
 import type { ScriptTree } from './scripttree.js';
 import { createPsbt, createTransaction, finalizePsbt } from './transaction.js';
+import type { TxOutput } from './transaction.js';
 import { p2mr } from './payments.js';
 import { equalBytes } from './internal/bytes.js';
 import { PearlError, PolicyError, SigningError } from './errors.js';
@@ -90,7 +90,7 @@ export interface Payment<T extends Utxo = Utxo> {
   psbt: Psbt;
   /** The outputs being spent, in input order. */
   inputs: T[];
-  prevouts: Prevout[];
+  prevouts: TxOutput[];
   /** Inputs minus outputs, in grain. */
   fee: bigint;
   /** The size the transaction will have once signed. */
@@ -216,7 +216,7 @@ export interface SignedPayment<T extends Utxo = Utxo> {
   /** The outputs spent, in input order. */
   inputs: T[];
   /** Script and value of each spent output, in input order. */
-  prevouts: Prevout[];
+  prevouts: TxOutput[];
   /** Inputs minus outputs, in grain. */
   fee: bigint;
   /** Size of the signed transaction in vbytes. */
@@ -275,16 +275,15 @@ export interface AccountUtxo extends Utxo {
   p2mr?: { tree: ScriptTree; leafIndex: number };
 }
 
-/**
- * Options for payFromAccount. allowedSighashTypes is not used: payFromAccount
- * prepares its own inputs and signs them with SIGHASH_DEFAULT.
- */
-export interface AccountPaymentOptions extends PaymentOptions<AccountUtxo>, P2mrPsbtSignOptions {
+/** Options for payFromAccount. Every input is signed with SIGHASH_DEFAULT. */
+export interface AccountPaymentOptions extends PaymentOptions<AccountUtxo> {
   /**
    * Transactions that created the P2MR outputs being spent, attached to
    * their inputs so the signer can check input values.
    */
   previousTransactions?: readonly Transaction[];
+  /** Sign P2MR inputs without checking input values against previousTransactions. */
+  trustPrevouts?: boolean;
 }
 
 /**

@@ -51,7 +51,7 @@ describe('P2MR spends through XMSS leaves', () => {
       const tx = parseTransaction(expected.unsignedTxHex);
       const prevouts = prevoutsOf(expected);
       const leafHash = tree.leaves[expected.leafIndex]!.leafHash;
-      expect(bytesToHex(tapscriptSighash(tx, expected.inputIndex, prevouts, leafHash))).toBe(expected.sighash);
+      expect(bytesToHex(tapscriptSighash(tx, expected.inputIndex, { prevouts, leafHash }))).toBe(expected.sighash);
 
       await signXmssP2mrInput(tx, expected.inputIndex, signer, {
         prevouts,

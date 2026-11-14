@@ -16,7 +16,7 @@ import {
   toOutputScript,
   transactionId,
 } from '../src/index.js';
-import type { Prevout, Transaction } from '../src/index.js';
+import type { TxOutput, Transaction } from '../src/index.js';
 import { addChange, broadcast, describeLive, fund, mine, network, pearld } from './chain.js';
 
 const account = deriveSigningAccountFromSeed(mnemonicToSeed('zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong'), network);
@@ -37,7 +37,7 @@ describeLive('invoices over pearld', () => {
   });
 
   /** Broadcasts a payment of outputs from the next unspent payer output. */
-  async function pay(outputs: readonly Prevout[]): Promise<Transaction> {
+  async function pay(outputs: readonly TxOutput[]): Promise<Transaction> {
     const vout = nextPayer++;
     const tx = createTransaction(2);
     tx.addInput(funding.getHash(), vout);

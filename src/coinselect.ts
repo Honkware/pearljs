@@ -21,6 +21,7 @@ import { classifyOutputScript } from './script.js';
 import { varIntSize } from './internal/bytes.js';
 import { PearlError } from './errors.js';
 import type { FeeRate } from './amount.js';
+import type { TxOutput } from './transaction.js';
 
 /** An unspent output as coin selection takes it. */
 export interface Utxo {
@@ -121,12 +122,6 @@ function yieldsPositively(utxo: Utxo, feeRate: FeeRate): boolean {
     size = estimateVsize(tx, [utxo.spend]) - BARE_INPUT_TX_SIZE + 41;
   }
   return (feeRate * BigInt(size)) / 1000n < utxo.value;
-}
-
-/** An output to create: its script and value in grain. */
-export interface TxOutput {
-  script: Uint8Array;
-  value: bigint;
 }
 
 /** What selectCoins needs. */

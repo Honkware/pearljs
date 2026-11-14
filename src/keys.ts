@@ -462,9 +462,9 @@ export function deriveSigningAccountFromSeed(
       withChild(options.index, options.change ?? false, (child) => {
         const signer = schnorrSigner(child.privateKey!, child.publicKey, options.auxRand);
         if (prevScript !== undefined && classifyOutputScript(prevScript) === 'p2mr') {
-          signP2mrScriptPathInput(psbt, inputIndex, signer, options.leafHash, options);
+          signP2mrScriptPathInput(psbt, inputIndex, signer, options);
         } else {
-          signTaprootScriptPathInput(psbt, inputIndex, signer, options.leafHash, options);
+          signTaprootScriptPathInput(psbt, inputIndex, signer, options);
         }
       });
     },

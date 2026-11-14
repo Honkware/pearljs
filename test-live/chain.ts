@@ -18,7 +18,7 @@ import {
   transactionId,
   witnessTransactionId,
 } from '../src/index.js';
-import type { Prevout, SpendEstimate, TestMempoolAcceptResult, Transaction, TxRawResult } from '../src/index.js';
+import type { TxOutput, SpendEstimate, TestMempoolAcceptResult, Transaction, TxRawResult } from '../src/index.js';
 import { MINER_MNEMONIC, mineBlocks, oysterClient, pearldClient, type LiveEndpoint } from './context.js';
 
 export const live = inject('live');
@@ -115,7 +115,7 @@ async function matureCoinbase(): Promise<{ tx: Transaction; vout: number }> {
  * Pays outputs from a mature coinbase with a BIP86 key-path spend, mines it,
  * and returns the funding transaction.
  */
-export async function fund(outputs: readonly Prevout[]): Promise<Transaction> {
+export async function fund(outputs: readonly TxOutput[]): Promise<Transaction> {
   const coinbase = await matureCoinbase();
   const value = coinbase.tx.outs[coinbase.vout]!.value;
   const tx = createTransaction(2);
@@ -132,7 +132,7 @@ export async function fund(outputs: readonly Prevout[]): Promise<Transaction> {
 }
 
 /** The prevouts a transaction's inputs spend, looked up in the given transactions. */
-export function prevoutsOf(tx: Transaction, previous: readonly Transaction[]): Prevout[] {
+export function prevoutsOf(tx: Transaction, previous: readonly Transaction[]): TxOutput[] {
   return tx.ins.map((input) => {
     const source = previous.find((prev) => Buffer.from(prev.getHash()).equals(input.hash));
     const output = source?.outs[input.index];
@@ -166,8 +166,8 @@ export async function eventually<T>(read: () => Promise<T>, done: (value: T) => 
 const fetched = new Map<string, Transaction>();
 
 /** The outputs a mined or mempool transaction spends, looked up by txid in pearld's transaction index. */
-export async function spentOutputs(tx: Transaction): Promise<Prevout[]> {
-  const prevouts: Prevout[] = [];
+export async function spentOutputs(tx: Transaction): Promise<TxOutput[]> {
+  const prevouts: TxOutput[] = [];
   for (const input of tx.ins) {
     const txid = Buffer.from(input.hash).reverse().toString('hex');
     let source = fetched.get(txid);
