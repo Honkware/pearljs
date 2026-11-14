@@ -14,6 +14,7 @@ import { decodeAddress } from './address.js';
 import type { PearlNetwork } from './networks.js';
 import { OP_CODES, scriptPush, taggedHash } from './script.js';
 import { assertTaprootSighashType } from './scriptpath.js';
+import { serializeWitness } from './transaction.js';
 
 /** txscript.MaxDataCarrierSize: the most message bytes Oyster can sign. */
 export const MAX_MESSAGE_LENGTH = 80;
@@ -41,19 +42,6 @@ function toSignTransaction(scriptPubKey: Uint8Array, message: Uint8Array): Trans
   toSign.addInput(toSpend.getHash(), 0, 0xffffffff);
   toSign.addOutput(Uint8Array.from([OP_CODES.OP_RETURN, ...scriptPush(message)]), 0n);
   return toSign;
-}
-
-function varInt(value: number): number[] {
-  if (value < 0xfd) return [value];
-  if (value <= 0xffff) return [0xfd, value & 0xff, value >> 8];
-  return [0xfe, value & 0xff, (value >> 8) & 0xff, (value >> 16) & 0xff, value >>> 24];
-}
-
-function serializeWitness(witness: readonly Uint8Array[]): Uint8Array {
-  return Uint8Array.from([
-    ...varInt(witness.length),
-    ...witness.flatMap((item) => [...varInt(item.length), ...item]),
-  ]);
 }
 
 /**

@@ -5,6 +5,8 @@
 import { Psbt, Transaction } from 'bitcoinjs-lib';
 import { MAX_GRAIN } from './amount.js';
 import { toOutputScript } from './address.js';
+import { multiAStack, parseMultiA } from './multia.js';
+import { tapLeafHash } from './script.js';
 import type { PearlNetwork } from './networks.js';
 
 export { Psbt, Transaction };
@@ -81,13 +83,65 @@ export function createPsbt(tx: Transaction): Psbt {
   return psbt;
 }
 
+/**
+ * Finalizes every input and extracts the transaction. Script-path inputs
+ * spending a multi_a leaf are finalized like Pearl's psbt.Finalize, since
+ * bitcoinjs leaves no empty item for keys that did not sign and Pearl
+ * rejects that witness; other inputs use bitcoinjs's finalizers.
+ */
 export function finalizePsbt(psbt: Psbt): Transaction {
   psbt.data.inputs.forEach((input, index) => {
-    if (input.finalScriptSig === undefined && input.finalScriptWitness === undefined) {
+    if (input.finalScriptSig !== undefined || input.finalScriptWitness !== undefined) return;
+    const witness = multiAWitness(input);
+    if (witness === null) {
       psbt.finalizeInput(index);
+    } else {
+      psbt.finalizeTaprootInput(index, undefined, () => ({ finalScriptWitness: serializeWitness(witness) }));
     }
   });
   return psbt.extractTransaction();
+}
+
+/**
+ * The full witness for a script-path input whose signatures are for a
+ * multi_a leaf, or null when the input is anything else. As in Pearl, all
+ * signatures must be for the same leaf.
+ */
+function multiAWitness(input: PsbtInput): Uint8Array[] | null {
+  const signatures = input.tapScriptSig ?? [];
+  if (input.tapKeySig !== undefined || signatures.length === 0) return null;
+  const target = toHex(signatures[0]!.leafHash);
+  if (signatures.some((sig) => toHex(sig.leafHash) !== target)) {
+    throw new Error('script-path signatures reference different leaves; only one script path is supported');
+  }
+  const leaf = (input.tapLeafScript ?? []).find((item) => toHex(tapLeafHash(item.script, item.leafVersion)) === target);
+  if (leaf === undefined) {
+    throw new Error('no tap leaf script matches the script-path signatures');
+  }
+  const multiA = parseMultiA(leaf.script);
+  if (multiA === null) return null;
+  const byKey = new Map(signatures.map((sig) => [toHex(sig.pubkey), sig.signature]));
+  return [...multiAStack(multiA, byKey), leaf.script, leaf.controlBlock];
+}
+
+type PsbtInput = Psbt['data']['inputs'][number];
+
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function varInt(value: number): number[] {
+  if (value < 0xfd) return [value];
+  if (value <= 0xffff) return [0xfd, value & 0xff, value >> 8];
+  return [0xfe, value & 0xff, (value >> 8) & 0xff, (value >> 16) & 0xff, value >>> 24];
+}
+
+/** A witness stack as it is serialized: item count, then each item with its length. */
+export function serializeWitness(witness: readonly Uint8Array[]): Uint8Array {
+  return Uint8Array.from([
+    ...varInt(witness.length),
+    ...witness.flatMap((item) => [...varInt(item.length), ...item]),
+  ]);
 }
 
 export function addPearlOutput(

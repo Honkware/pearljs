@@ -212,7 +212,25 @@ type Vectors struct {
 	Blocks           []BlockVector           `json:"blocks"`
 	XMSS             XMSSVectors             `json:"xmss"`
 	Messages         []MessageVector         `json:"messages"`
+	MultiASpends     []MultiASpendVector     `json:"multiASpends"`
 	BadBlocks        []BadBlockVector        `json:"badBlocks"`
+}
+
+// MultiASpendVector is a k-of-n OP_CHECKSIGADD leaf spent through a PSBT and
+// finalized by Pearl's psbt.Finalize, which leaves an empty witness item for
+// each key without a signature and drops signatures beyond the threshold.
+type MultiASpendVector struct {
+	Name           string          `json:"name"`
+	KeyIndices     []uint32        `json:"keyIndices"`
+	SignerIndices  []uint32        `json:"signerIndices"`
+	Threshold      int             `json:"threshold"`
+	LeafScript     string          `json:"leafScript"`
+	InternalPubKey string          `json:"internalPubKey"`
+	UnsignedTxHex  string          `json:"unsignedTxHex"`
+	Prevouts       []PrevoutVector `json:"prevouts"`
+	FinalTxHex     string          `json:"finalTxHex"`
+	// WitnessLengths are the item lengths of the finalized witness.
+	WitnessLengths []int `json:"witnessLengths"`
 }
 
 // MessageVector is a signmessage case from Oyster's BIP322SignMessageSimple
@@ -959,6 +977,87 @@ func main() {
 		}
 		sealBlock(block, item.cert)
 		vectors.Blocks = append(vectors.Blocks, makeBlockVector(item.name, block))
+	}
+
+	// k-of-n multi_a leaves finalized by Pearl's PSBT code.
+	for _, item := range []struct {
+		name      string
+		keys      []uint32
+		signers   []uint32
+		threshold int64
+	}{
+		{"2-of-3-signed-by-0-and-2", []uint32{0, 1, 2}, []uint32{0, 2}, 2},
+		{"2-of-3-signed-by-all", []uint32{0, 1, 2}, []uint32{0, 1, 2}, 2},
+		{"3-of-5-signed-by-1-3-4", []uint32{0, 1, 2, 3, 4}, []uint32{1, 3, 4}, 3},
+	} {
+		privs := map[uint32]*btcec.PrivateKey{}
+		builder := txscript.NewScriptBuilder()
+		for i, index := range item.keys {
+			priv, err := derive(account, 0, 20+index).ECPrivKey()
+			check(err)
+			privs[index] = priv
+			builder.AddData(schnorr.SerializePubKey(priv.PubKey()))
+			if i == 0 {
+				builder.AddOp(txscript.OP_CHECKSIG)
+			} else {
+				builder.AddOp(txscript.OP_CHECKSIGADD)
+			}
+		}
+		leafScript, err := builder.AddInt64(item.threshold).AddOp(txscript.OP_NUMEQUAL).Script()
+		check(err)
+		leaf := txscript.NewBaseTapLeaf(leafScript)
+		tree := txscript.AssembleTaprootScriptTree(leaf)
+		root := tree.RootNode.TapHash()
+		prevScript, err := txscript.PayToTaprootScript(txscript.ComputeTaprootOutputKey(internalPub, root[:]))
+		check(err)
+		block := tree.LeafMerkleProofs[0].ToControlBlock(internalPub)
+		controlBlock, err := block.ToBytes()
+		check(err)
+
+		const amount int64 = 200_000_000
+		spendTx := wire.NewMsgTx(2)
+		spendTx.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x0c}, 0), nil, nil))
+		spendTx.AddTxOut(wire.NewTxOut(amount-10_000, prevScript))
+		unsignedHex := serializeTx(spendTx, false)
+		packet, err := psbt.NewFromUnsignedTx(spendTx)
+		check(err)
+		updater, err := psbt.NewUpdater(packet)
+		check(err)
+		check(updater.AddInWitnessUtxo(wire.NewTxOut(amount, prevScript), 0))
+		packet.Inputs[0].TaprootInternalKey = internalKey
+		packet.Inputs[0].TaprootMerkleRoot = root[:]
+		packet.Inputs[0].TaprootLeafScript = []*psbt.TaprootTapLeafScript{{
+			ControlBlock: controlBlock, Script: leafScript, LeafVersion: leaf.LeafVersion,
+		}}
+		fetcher := txscript.NewCannedPrevOutputFetcher(prevScript, amount)
+		sigHashes := txscript.NewTxSigHashes(spendTx, fetcher)
+		leafHash := leaf.TapHash()
+		for _, index := range item.signers {
+			sig, err := txscript.RawTxInTapscriptSignature(
+				spendTx, sigHashes, 0, amount, prevScript, leaf, txscript.SigHashDefault, privs[index],
+			)
+			check(err)
+			packet.Inputs[0].TaprootScriptSpendSig = append(packet.Inputs[0].TaprootScriptSpendSig,
+				&psbt.TaprootScriptSpendSig{
+					XOnlyPubKey: schnorr.SerializePubKey(privs[index].PubKey()), LeafHash: leafHash[:],
+					Signature: sig, SigHash: txscript.SigHashDefault,
+				})
+		}
+		check(psbt.Finalize(packet, 0))
+		finalTx, err := psbt.Extract(packet)
+		check(err)
+		verifyInputs(finalTx, []*wire.TxOut{wire.NewTxOut(amount, prevScript)})
+		var lengths []int
+		for _, item := range finalTx.TxIn[0].DecodeWitness() {
+			lengths = append(lengths, len(item))
+		}
+		vectors.MultiASpends = append(vectors.MultiASpends, MultiASpendVector{
+			Name: item.name, KeyIndices: item.keys, SignerIndices: item.signers, Threshold: int(item.threshold),
+			LeafScript: hex.EncodeToString(leafScript), InternalPubKey: hex.EncodeToString(internalKey),
+			UnsignedTxHex: unsignedHex,
+			Prevouts:      []PrevoutVector{{Script: hex.EncodeToString(prevScript), Value: amount}},
+			FinalTxHex:    serializeTx(finalTx, true), WitnessLengths: lengths,
+		})
 	}
 
 	// Message signing as Oyster does it, with BIP86 mainnet keys.
