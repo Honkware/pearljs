@@ -3,6 +3,7 @@ export * from './amount.js';
 export * from './block.js';
 export * from './blockheader.js';
 export * from './client.js';
+export * from './crypto.js';
 export * from './invoice.js';
 export * from './keys.js';
 export * from './message.js';
