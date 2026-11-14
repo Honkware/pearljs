@@ -157,14 +157,17 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "demo": "tsc -p tsconfig.examples.json && node dist-examples/examples/invoice-demo.js",
+    "examples": "node scripts/run-examples.mjs",
+    "demo": "npm run build && tsc -p tsconfig.examples.json && node dist-examples/examples/invoice-demo.js",
     "test": "vitest run",
     "test:live": "vitest run --config vitest.live.config.ts",
     "test:browser": "node scripts/browser-smoke.mjs",
     "lint": "eslint src test test-live examples scripts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "verify:pack": "node scripts/verify-pack.mjs",
-    "check": "npm run lint && npm run typecheck && npm run build && npm test",
+    "check:docs": "node scripts/check-docs.mjs",
+    "docs": "typedoc",
+    "check": "npm run lint && npm run typecheck && npm run build && npm test && npm run examples && npm run check:docs",
     "prepack": "npm run build"
   },
   "keywords": [
@@ -190,6 +193,7 @@
     "@types/node": "20.19.25",
     "esbuild": "0.28.2",
     "eslint": "9.39.5",
+    "typedoc": "0.28.20",
     "typescript": "5.9.3",
     "typescript-eslint": "8.72.2",
     "undici": "6.21.3",

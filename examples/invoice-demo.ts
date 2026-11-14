@@ -7,11 +7,8 @@
  * RPC endpoint.
  */
 
-import type { AddressPayment, BlockRef, ChainClient, ChainTransaction } from '../src/client.js';
-import type { Invoice } from '../src/invoice.js';
-import { encodeAddress } from '../src/address.js';
-import { InvoiceMonitor } from '../src/invoice.js';
-import { networks } from '../src/networks.js';
+import { encodeAddress, InvoiceMonitor, networks } from 'pearljs';
+import type { AddressPayment, BlockRef, ChainClient, ChainTransaction, Invoice } from 'pearljs';
 
 /** In-memory fake chain for simulation only; not a node integration. */
 class SimulatedInMemoryChain implements ChainClient {

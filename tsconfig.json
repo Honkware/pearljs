@@ -10,7 +10,8 @@
     "noFallthroughCasesInSwitch": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["node", "vitest/globals"]
+    "types": ["node", "vitest/globals"],
+    "paths": { "pearljs": ["./src/index.ts"], "pearljs/*": ["./src/*.ts"] }
   },
   "include": ["src", "test", "test-live", "examples"]
 }
