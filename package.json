@@ -1,6 +1,7 @@
 {
   "name": "pearljs",
   "version": "0.1.0",
+  "private": true,
   "description": "Pearl transaction, Taproot, PSBT, block header, script, and payment primitives",
   "type": "module",
   "main": "./dist/index.js",
