@@ -37,14 +37,20 @@ export interface SweepOptions extends SpendableOptions {
   rbf?: boolean;
   /** pearld's --minrelaytxfee if it is not the default, in grain per 1000 vbytes. */
   relayFeeRate?: FeeRate;
+  /**
+   * The 32 bytes of auxiliary randomness BIP340 mixes into each nonce. Fresh
+   * random bytes unless given; fix it only for reproducible signatures in tests.
+   */
+  auxRand?: Uint8Array;
 }
 
 /**
  * Spends every output of a private key's key-path P2TR address (keyPathAddress) to one destination.
  *
  * Throws when an unspent output does not pay the key's address, and what
- * buildPayment throws otherwise. feeRate is in grain per 1000 vbytes. The key
- * is used as given and not wiped.
+ * buildPayment throws otherwise. feeRate is in grain per 1000 vbytes. The
+ * keys derived for signing are overwritten before returning; privateKey is
+ * the caller's and is left as it is.
  */
 export function sweepKey(privateKey: Uint8Array, options: SweepOptions): SignedPayment {
   const { network } = options;
@@ -55,7 +61,10 @@ export function sweepKey(privateKey: Uint8Array, options: SweepOptions): SignedP
       throw new PearlError('UTXO_INVALID', `unspent output ${utxo.txid}:${utxo.vout} does not pay ${address}`);
     }
   }
-  const { destination, ...rest } = options;
+  const { destination, auxRand, ...rest } = options;
+  if (auxRand !== undefined && (!(auxRand instanceof Uint8Array) || auxRand.length !== 32)) {
+    throw new Error('auxRand must be 32 bytes');
+  }
   const payment = buildPayment({ ...rest, recipients: [{ address: destination, amount: 'max' }] });
 
   // The key-path signer is the BIP86 tweak of the key, negated first when
@@ -67,19 +76,31 @@ export function sweepKey(privateKey: Uint8Array, options: SweepOptions): SignedP
   const signed = payment.transaction.clone();
   const scripts = payment.prevouts.map((prevout) => prevout.script);
   const values = payment.prevouts.map((prevout) => prevout.value);
-  signed.ins.forEach((_, i) => {
-    const hash = signed.hashForWitnessV1(i, scripts, values, Transaction.SIGHASH_DEFAULT);
-    // Fresh BIP340 auxiliary randomness, as the signing accounts use.
-    const signature = ecc.signSchnorr(hash, tweaked, crypto.getRandomValues(new Uint8Array(32)));
-    if (!ecc.verifySchnorr(hash, script.subarray(2), signature)) {
-      throw new SigningError('SIGNATURE_INVALID', `invalid Taproot signature for input ${i}`);
-    }
-    signed.setWitness(i, [signature]);
-  });
+  try {
+    signed.ins.forEach((_, i) => {
+      const hash = signed.hashForWitnessV1(i, scripts, values, Transaction.SIGHASH_DEFAULT);
+      const signature = ecc.signSchnorr(hash, tweaked, auxRand ?? crypto.getRandomValues(new Uint8Array(32)));
+      if (!ecc.verifySchnorr(hash, script.subarray(2), signature)) {
+        throw new SigningError('SIGNATURE_INVALID', `invalid Taproot signature for input ${i}`);
+      }
+      signed.setWitness(i, [signature]);
+    });
+  } finally {
+    tweaked.fill(0);
+    if (even !== privateKey) even.fill(0);
+  }
   return finalizePayment(payment, { signed, ...(options.relayFeeRate === undefined ? {} : { relayFeeRate: options.relayFeeRate }) });
 }
 
-/** sweepKey for a key in wallet import format, as dumpprivkey writes it. */
+/**
+ * sweepKey for a key in wallet import format, as dumpprivkey writes it. The
+ * decoded key is overwritten before returning; the WIF string cannot be.
+ */
 export function sweepWif(wif: string, options: SweepOptions): SignedPayment {
-  return sweepKey(decodeWif(wif, options.network).privateKey, options);
+  const { privateKey } = decodeWif(wif, options.network);
+  try {
+    return sweepKey(privateKey, options);
+  } finally {
+    privateKey.fill(0);
+  }
 }

@@ -89,4 +89,16 @@ describe('sweepWif', () => {
     expect(() => sweepWif(key.wif, { network: networks.regtest, utxos: [], destination, feeRate: 1000n })).toThrow(/not intended for regtest/);
     expect(() => sweepWif(key.wif, { network: networks.mainnet, utxos: [], destination, feeRate: 1000n })).toThrow(/insufficient funds/);
   });
+
+  it('signs the same bytes for the same auxRand, fresh ones otherwise, and leaves the caller\'s key alone', () => {
+    for (const key of keys.filter((item) => item.network === 'mainnet')) {
+      const privateKey = hexToBytes(key.privateKey);
+      const options = { network: networks.mainnet, utxos: coinsAt(key.address), destination, feeRate: 1000n };
+      const auxRand = new Uint8Array(32).fill(5);
+      expect(sweepKey(privateKey, { ...options, auxRand }).hex).toBe(sweepKey(privateKey, { ...options, auxRand }).hex);
+      expect(sweepKey(privateKey, options).hex).not.toBe(sweepKey(privateKey, options).hex);
+      expect(privateKey).toEqual(hexToBytes(key.privateKey));
+      expect(() => sweepKey(privateKey, { ...options, auxRand: new Uint8Array(31) })).toThrow('auxRand must be 32 bytes');
+    }
+  });
 });
