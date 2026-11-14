@@ -75,6 +75,10 @@
       "types": "./dist/keys.d.ts",
       "default": "./dist/keys.js"
     },
+    "./keystore": {
+      "types": "./dist/keystore.d.ts",
+      "default": "./dist/keystore.js"
+    },
     "./message": {
       "types": "./dist/message.d.ts",
       "default": "./dist/message.js"
@@ -123,6 +127,18 @@
       "types": "./dist/scripttree.d.ts",
       "default": "./dist/scripttree.js"
     },
+    "./store": {
+      "types": "./dist/store.d.ts",
+      "default": "./dist/store.js"
+    },
+    "./store-file": {
+      "types": "./dist/store-file.d.ts",
+      "default": "./dist/store-file.js"
+    },
+    "./store-indexeddb": {
+      "types": "./dist/store-indexeddb.d.ts",
+      "default": "./dist/store-indexeddb.js"
+    },
     "./sweep": {
       "types": "./dist/sweep.d.ts",
       "default": "./dist/sweep.js"
@@ -130,6 +146,10 @@
     "./transaction": {
       "types": "./dist/transaction.d.ts",
       "default": "./dist/transaction.js"
+    },
+    "./wallet": {
+      "types": "./dist/wallet.d.ts",
+      "default": "./dist/wallet.js"
     },
     "./wif": {
       "types": "./dist/wif.d.ts",
