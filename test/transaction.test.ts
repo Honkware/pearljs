@@ -108,6 +108,7 @@ describe('PSBT helpers', () => {
     // bip174 reads a count from this tap BIP32 derivation and builds an array of that length.
     const prepared = Buffer.from(vectors.signing[0]!.preparedPsbt, 'base64');
     let rangeErrors = 0;
+    let malformed = 0;
     for (let at = 0; at < prepared.length; at += 1) {
       for (const byte of [0xfd, 0xfe, 0xff]) {
         const mutated = Buffer.from(prepared);
@@ -117,13 +118,26 @@ describe('PSBT helpers', () => {
         } catch (error) {
           expect(error).toBeInstanceOf(Error);
           if (error instanceof RangeError) rangeErrors += 1;
-          if ((error as Error).message.includes('Invalid array length')) {
-            expect((error as Error).message).toBe('invalid PSBT: Invalid array length');
-          }
+          expect((error as Error).message).not.toContain('Invalid array length');
+          if ((error as Error).message === 'invalid PSBT: a field is malformed') malformed += 1;
         }
       }
     }
     expect(rangeErrors).toBe(0);
+    expect(malformed).toBeGreaterThan(0);
+  });
+
+  it('rejects an input sighash type that is not 4 bytes, as Pearl does', () => {
+    const tx = unsignedTransaction();
+    const psbt = createPsbt(tx);
+    psbt.updateInput(0, { sighashType: 1 });
+    const bytes = [...psbt.toBuffer()];
+    // The field is 01 03 04 01000000: key length, key type, value length, value.
+    const at = bytes.findIndex((_, i) => [1, 3, 4, 1, 0, 0, 0].every((byte, j) => bytes[i + j] === byte));
+    expect(at).toBeGreaterThan(0);
+    const longer = Buffer.from([...bytes.slice(0, at + 2), 5, 1, 0, 0, 0, 0x82, ...bytes.slice(at + 7)]);
+    expect(() => parsePsbt(longer.toString('base64'))).toThrow('input 0 has a sighash type of 5 bytes, not 4');
+    expect(parsePsbt(Buffer.from(bytes).toString('base64')).data.inputs[0]!.sighashType).toBe(1);
   });
 
   it('rejects input that is not a string with a clear error', () => {

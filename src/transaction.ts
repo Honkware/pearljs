@@ -62,9 +62,10 @@ export function witnessTransactionId(tx: Transaction): string {
 
 /**
  * Parses a base64 PSBT. Like Pearl's psbt.NewFromRawBytes, and unlike
- * bitcoinjs alone, it refuses bytes after the last map and lengths written
- * as non-canonical varints. Every failure is an Error with a message, also
- * where the underlying parser would throw a RangeError.
+ * bitcoinjs alone, it refuses bytes after the last map, lengths written as
+ * non-canonical varints, and an input sighash type that is not 4 bytes.
+ * Every failure is an Error with a message, also where the underlying parser
+ * would throw a RangeError.
  */
 export function parsePsbt(base64: string): Psbt {
   if (typeof base64 !== 'string') {
@@ -81,10 +82,16 @@ export function parsePsbt(base64: string): Psbt {
   try {
     psbt = Psbt.fromBase64(base64);
   } catch (error) {
-    throw new Error(`invalid PSBT: ${error instanceof Error ? error.message : String(error)}`);
+    // A RangeError or TypeError here is the engine's, from bip174 trusting a
+    // length it read; its message says nothing about the PSBT.
+    const reason =
+      error instanceof RangeError || error instanceof TypeError || !(error instanceof Error)
+        ? 'a field is malformed'
+        : error.message;
+    throw new Error(`invalid PSBT: ${reason}`);
   }
   const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-  const end = psbtEnd(bytes, 1 + psbt.inputCount + psbt.txOutputs.length);
+  const end = psbtEnd(bytes, psbt.inputCount, psbt.txOutputs.length);
   if (end !== bytes.length) {
     throw new Error(`invalid PSBT: ${bytes.length - end} bytes follow the last map`);
   }
@@ -93,12 +100,16 @@ export function parsePsbt(base64: string): Psbt {
 
 const PSBT_MAGIC_LENGTH = 5;
 
+const PSBT_IN_SIGHASH_TYPE = 0x03;
+
 /**
  * Walks the key-value maps of a PSBT that already parsed and returns the
  * offset after the last one. bitcoinjs stops reading there without looking
- * at what follows.
+ * at what follows. On the way it checks what bitcoinjs does not: lengths are
+ * canonical varints, and an input's sighash type is exactly 4 bytes, where
+ * bip174 reads the first 4 of any longer value and drops the rest.
  */
-function psbtEnd(bytes: Uint8Array, maps: number): number {
+function psbtEnd(bytes: Uint8Array, inputs: number, outputs: number): number {
   let offset = PSBT_MAGIC_LENGTH;
   const malformed = (): Error => new Error('invalid PSBT: a key or value runs past the end');
   const readLength = (): number => {
@@ -116,13 +127,18 @@ function psbtEnd(bytes: Uint8Array, maps: number): number {
     }
     return value;
   };
-  for (let map = 0; map < maps; map += 1) {
+  for (let map = 0; map < 1 + inputs + outputs; map += 1) {
+    const isInput = map >= 1 && map <= inputs;
     for (let keyLength = readLength(); keyLength !== 0; keyLength = readLength()) {
+      const sighashType = isInput && keyLength === 1 && bytes[offset] === PSBT_IN_SIGHASH_TYPE;
       offset += keyLength;
       // Read into a constant first: `offset += readLength()` would add to the offset from before the read.
       const valueLength = readLength();
       offset += valueLength;
       if (offset > bytes.length) throw malformed();
+      if (sighashType && valueLength !== 4) {
+        throw new Error(`invalid PSBT: input ${map - 1} has a sighash type of ${valueLength} bytes, not 4`);
+      }
     }
   }
   return offset;
