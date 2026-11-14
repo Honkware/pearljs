@@ -300,7 +300,9 @@ export function payFromAccount(account: PearlSigningAccount, options: AccountPay
       ...(options.trustPrevouts === undefined ? {} : { trustPrevouts: options.trustPrevouts }),
     });
   });
-  return finalizePayment(payment, options.minRelayFee === undefined ? {} : { minRelayFee: options.minRelayFee });
+  return finalizePayment(payment, {
+    ...(options.minRelayFee === undefined ? {} : { minRelayFee: options.minRelayFee }),
+  });
 }
 
 function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
