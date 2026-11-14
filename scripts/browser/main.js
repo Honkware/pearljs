@@ -72,7 +72,8 @@ const checkAsync = async (name, fn) => {
   }
 };
 // IndexedDB and Web Locks requests never complete under --virtual-time-budget,
-// so the IndexedDB store is only checked to bundle here.
+// so the IndexedDB store is only checked to bundle here; it runs against
+// fake-indexeddb in test/store-indexeddb.test.ts.
 check('indexeddb store bundles', () => typeof p.openIndexedDbStore === 'function' && typeof p.createMemoryStore === 'function');
 await checkAsync('keystore under WebCrypto', async () => {
   const keystore = await p.createKeystore('pass', { kdf: { N: 1024 } });
