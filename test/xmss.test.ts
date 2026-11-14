@@ -63,6 +63,22 @@ describe('XMSS', () => {
     expect(xmssVerify(publicKey, message, signature.slice(1))).toBe(false);
   });
 
+  it('answers false for arguments that are not bytes', () => {
+    const expected = vectors.xmss.signatures.find((item) => item.valid)!;
+    const args = [
+      hexToBytes(keyVector(expected.key).publicKey),
+      hexToBytes(expected.message),
+      hexToBytes(expected.signature),
+    ] as const;
+    expect(xmssVerify(...args)).toBe(true);
+    for (const bad of [undefined, null, expected.signature, 7, Array.from(args[2])]) {
+      for (let position = 0; position < 3; position += 1) {
+        const mixed = args.map((arg, i) => (i === position ? bad : arg)) as unknown as typeof args;
+        expect(xmssVerify(...mixed)).toBe(false);
+      }
+    }
+  });
+
   it('checks seed and message lengths', () => {
     const key = keyVector('b');
     expect(() => xmssKeygen(new Uint8Array(32), hexToBytes(key.publicSeed))).toThrow('private seed must be 64 bytes');

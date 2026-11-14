@@ -312,7 +312,7 @@ function keyPairWithTree(
 ): { pair: XmssKeyPair; levels: Uint8Array[][] } {
   checkLength(privateSeed, XMSS_PRIVATE_SEED_LENGTH, 'XMSS private seed');
   checkLength(publicSeed, XMSS_PUBLIC_SEED_LENGTH, 'XMSS public seed');
-  const levels = buildTree(privateSeed.slice(0, N), publicSeed);
+  const levels = buildTree(privateSeed.subarray(0, N), publicSeed);
   const root = levels[TREE_HEIGHT]![0]!;
   return {
     pair: { publicKey: concat([root, publicSeed]), secretKey: concat([privateSeed, root, publicSeed]) },
@@ -322,11 +322,25 @@ function keyPairWithTree(
 
 /**
  * Sign a 32-byte message with the one-time leaf at msgUid (0 to 30). The
- * caller must make sure no index is ever used twice for the same key.
+ * caller must make sure no index is ever used twice for the same key. A
+ * secret key whose root does not belong to its seeds is refused, and the
+ * signature is verified before it is returned.
  */
 export function xmssSign(secretKey: Uint8Array, msgUid: number, message: Uint8Array): Uint8Array {
   checkLength(secretKey, XMSS_SECRET_KEY_LENGTH, 'XMSS secret key');
-  return signWithTree(secretKey, buildTree(secretKey.slice(0, N), secretKey.slice(3 * N, 4 * N)), msgUid, message);
+  const levels = buildTree(secretKey.subarray(0, N), secretKey.subarray(3 * N, 4 * N));
+  if (!equalBytes(levels[TREE_HEIGHT]![0]!, secretKey.subarray(2 * N, 3 * N))) {
+    throw new Error('XMSS secret key is inconsistent: its root does not match its seeds');
+  }
+  const signature = signWithTree(secretKey, levels, msgUid, message);
+  if (!xmssVerify(secretKey.subarray(2 * N), message, signature)) {
+    throw new Error('XMSS signature failed verification');
+  }
+  return signature;
+}
+
+function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, i) => byte === b[i]);
 }
 
 function signWithTree(
@@ -339,10 +353,11 @@ function signWithTree(
   if (!Number.isInteger(msgUid) || msgUid < 0 || msgUid >= XMSS_MAX_SIGNATURES) {
     throw new RangeError(`XMSS index must be an integer from 0 to ${XMSS_MAX_SIGNATURES - 1}`);
   }
-  const skSeed = secretKey.slice(0, N);
-  const skPrf = secretKey.slice(N, 2 * N);
-  const root = secretKey.slice(2 * N, 3 * N);
-  const pubSeed = secretKey.slice(3 * N, 4 * N);
+  // Views, so no further copies of the secret halves are left behind.
+  const skSeed = secretKey.subarray(0, N);
+  const skPrf = secretKey.subarray(N, 2 * N);
+  const root = secretKey.subarray(2 * N, 3 * N);
+  const pubSeed = secretKey.subarray(3 * N, 4 * N);
   const r = prf(skPrf, toBytes(msgUid, 32));
   const mhash = hashMessage(r, root, msgUid, message);
   const otsAddr = newAddress(ADDR_TYPE_OTS);
@@ -352,9 +367,15 @@ function signWithTree(
   return concat([toBytes(msgUid, INDEX_BYTES), r, ...wotsSig, ...authPath(levels, msgUid)]);
 }
 
-/** Verify a signature over a 32-byte message, as Pearl's xmss.Verify does. */
+/**
+ * Verify a signature over a 32-byte message, as Pearl's xmss.Verify does.
+ * Anything that is not bytes of the right length is false, never an error.
+ */
 export function xmssVerify(publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array): boolean {
   if (
+    !(publicKey instanceof Uint8Array) ||
+    !(message instanceof Uint8Array) ||
+    !(signature instanceof Uint8Array) ||
     publicKey.length !== XMSS_PUBLIC_KEY_LENGTH ||
     message.length !== XMSS_MESSAGE_LENGTH ||
     signature.length !== XMSS_SIGNATURE_LENGTH
@@ -390,6 +411,11 @@ export function xmssVerify(publicKey: Uint8Array, message: Uint8Array, signature
  * returned for this public key, and must persist that before returning: a
  * signature is only made after the index is recorded as used, so a crash can
  * waste an index but never reuse one.
+ *
+ * A key must have exactly one store, shared by everything that signs with
+ * it. Two stores for one key, in one process or on two machines, each hand
+ * out index 0, and a signer cannot see the other store. A store restored from
+ * a backup repeats the indices used since the backup was taken.
  */
 export interface XmssIndexStore {
   reserve(publicKey: Uint8Array): number | Promise<number>;
@@ -397,13 +423,41 @@ export interface XmssIndexStore {
 
 export interface XmssSigner {
   readonly publicKey: Uint8Array;
-  /** Signs a 32-byte message with a freshly reserved index. */
+  /**
+   * Signs a 32-byte message with a freshly reserved index. Calls run one at
+   * a time, in the order they were made.
+   */
   sign(message: Uint8Array): Promise<Uint8Array>;
+  /**
+   * Overwrites the signer's copy of the secret key with zeros; sign rejects
+   * afterwards. The seeds passed to createXmssSigner belong to the caller and
+   * are not touched, and JavaScript cannot promise that no other copy exists:
+   * values derived while signing wait for the garbage collector, which does
+   * not wipe them, and the engine may have moved or paged out the bytes.
+   */
+  destroy(): void;
+}
+
+// Messages signed in this process, by public key and index. Signer objects
+// for one key share it, so a second store that restarts at index 0 is caught
+// when it would sign a different message. Signing the same message at the
+// same index again yields the same signature and reveals nothing new.
+const signedMessages = new Map<string, Map<number, string>>();
+
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 /**
  * An XMSS signer over raw seeds. Each signature takes an index from store,
  * and is verified before it is returned.
+ *
+ * The signer does not rely on the store alone: sign calls are serialized, so
+ * a store that reads, waits and writes cannot hand two calls one index; an
+ * index that is not above the last one this signer used is refused; and no
+ * signer in this process signs a second message at an index another signer
+ * for the same key already used. None of this reaches across processes or
+ * restarts, which is the store's job.
  */
 export function createXmssSigner(
   privateSeed: Uint8Array,
@@ -415,35 +469,76 @@ export function createXmssSigner(
     pair: { publicKey, secretKey },
     levels,
   } = keyPairWithTree(privateSeed, publicSeed);
+  const keyHex = toHex(publicKey);
+  let lastIndex = -1;
+  let destroyed = false;
+  let queue: Promise<unknown> = Promise.resolve();
+
+  const signNext = async (message: Uint8Array): Promise<Uint8Array> => {
+    if (destroyed) throw new Error('this XMSS signer has been destroyed');
+    const index = await store.reserve(publicKey);
+    if (!Number.isInteger(index) || index < 0) {
+      throw new Error(`XMSS index store returned ${String(index)}`);
+    }
+    if (index >= XMSS_MAX_SIGNATURES) {
+      throw new Error(`this XMSS key has used all ${XMSS_MAX_SIGNATURES} of its signatures`);
+    }
+    if (index <= lastIndex) {
+      throw new Error(
+        `XMSS index store returned index ${index} after index ${lastIndex}; refusing to reuse a one-time index`,
+      );
+    }
+    if (destroyed) throw new Error('this XMSS signer has been destroyed');
+    const messageHex = toHex(message);
+    let signed = signedMessages.get(keyHex);
+    if (signed === undefined) {
+      signed = new Map();
+      signedMessages.set(keyHex, signed);
+    }
+    const earlier = signed.get(index);
+    if (earlier !== undefined && earlier !== messageHex) {
+      throw new Error(
+        `XMSS index ${index} already signed a different message for this key; ` +
+          'a key must have exactly one index store',
+      );
+    }
+    // Recorded before signing: an index is spent even if signing fails.
+    lastIndex = index;
+    signed.set(index, messageHex);
+    const signature = signWithTree(secretKey, levels, index, message);
+    if (!xmssVerify(publicKey, message, signature)) {
+      throw new Error('XMSS signature failed verification');
+    }
+    return signature;
+  };
+
   return {
     publicKey,
     async sign(message: Uint8Array): Promise<Uint8Array> {
       checkLength(message, XMSS_MESSAGE_LENGTH, 'XMSS message');
-      const index = await store.reserve(publicKey);
-      if (!Number.isInteger(index) || index < 0) {
-        throw new Error(`XMSS index store returned ${String(index)}`);
-      }
-      if (index >= XMSS_MAX_SIGNATURES) {
-        throw new Error(`this XMSS key has used all ${XMSS_MAX_SIGNATURES} of its signatures`);
-      }
-      const signature = signWithTree(secretKey, levels, index, message);
-      if (!xmssVerify(publicKey, message, signature)) {
-        throw new Error('XMSS signature failed verification');
-      }
-      return signature;
+      const copy = Uint8Array.from(message);
+      const result = queue.then(() => signNext(copy));
+      queue = result.catch(() => undefined);
+      return result;
+    },
+    destroy(): void {
+      destroyed = true;
+      secretKey.fill(0);
     },
   };
 }
 
 /**
  * Index store that only lives in memory. State is lost on restart, which
- * would reuse indices, so it is for tests and short-lived tools only.
+ * would reuse indices, so it is for tests and short-lived tools only. For a
+ * store that survives restarts under Node, see createFileXmssIndexStore in
+ * xmss-file-store.
  */
 export function createMemoryXmssIndexStore(): XmssIndexStore {
   const next = new Map<string, number>();
   return {
     reserve(publicKey: Uint8Array): number {
-      const key = Array.from(publicKey, (byte) => byte.toString(16).padStart(2, '0')).join('');
+      const key = toHex(publicKey);
       const index = next.get(key) ?? 0;
       next.set(key, index + 1);
       return index;
