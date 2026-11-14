@@ -170,13 +170,22 @@ function checkAnnex(annex: Uint8Array | undefined): void {
   }
 }
 
-/** Whether NewTxSigHashes computes the amount and script hashes for this spend. */
+/**
+ * Whether NewTxSigHashes computes the amount and script hashes for this
+ * spend. With tx, an input whose outpoint is null does not count as P2TR;
+ * no transaction on chain but a coinbase has one.
+ */
 function coversInputValues(
   prevouts: readonly TxOutput[],
   sighashType: number,
+  tx?: Transaction,
 ): boolean {
   if ((sighashType & SIGHASH_ANYONECANPAY) !== 0) return true;
-  return prevouts.some((prevout) => classifyOutputScript(prevout.script) === 'p2tr');
+  return prevouts.some((prevout, index) => {
+    const input = tx?.ins[index];
+    const nullOutpoint = input !== undefined && input.index === 0xffffffff && input.hash.every((byte) => byte === 0);
+    return !nullOutpoint && classifyOutputScript(prevout.script) === 'p2tr';
+  });
 }
 
 /**
@@ -201,7 +210,7 @@ function pearlTapscriptSighash(
     uint32le(tx.locktime),
   ];
   if (!anyoneCanPay) {
-    const coversValues = coversInputValues(prevouts, sighashType);
+    const coversValues = coversInputValues(prevouts, sighashType, tx);
     parts.push(sha256(concat(tx.ins.map((input) => concat([input.hash, uint32le(input.index)])))));
     parts.push(
       coversValues ? sha256(concat(prevouts.map((prevout) => uint64le(prevout.value)))) : ZERO_HASH,

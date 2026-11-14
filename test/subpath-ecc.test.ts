@@ -59,6 +59,14 @@ const programs: Record<string, string> = {
     const psbt = createPsbt(parseTransaction(${JSON.stringify(signing.unsignedTxHex)}));
     prepareTaprootScriptPathInput(psbt, 0, { internalPubkey: key, tree, leafIndex: 0, value: 1000n });
     console.log(psbt.data.inputs[0].tapLeafScript.length);`,
+  // The interpreter calls the curve library directly and never through bitcoinjs.
+  interpreter: `
+    import { verifyInput } from './src/interpreter.ts';
+    import { parseTransaction } from './src/transaction.ts';
+    const prevouts = [{ script: ${bytes(`5120${signing.tweakedPubKey}`)}, value: ${signing.value}n }];
+    const result = verifyInput(parseTransaction(${JSON.stringify(signing.finalTxHex)}), 0, prevouts);
+    if (!result.ok) throw new Error(result.code);
+    console.log(result.ok);`,
   builder: `
     import { toOutputScript } from './src/address.ts';
     import { payFromAccount } from './src/builder.ts';

@@ -6,7 +6,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   OP_CODES,
+  PearlError,
   SCRIPT_ERROR_CODES,
+  ScriptRejectedError,
+  assertAccepted,
   assembleScriptTree,
   compileScript,
   createTransaction,
@@ -18,23 +21,23 @@ import {
   parsePsbt,
   parseTransaction,
   sha256,
-  signTapscript,
+  signTapscriptUnchecked,
   tapscriptSighash,
   verifyFinalizedPsbt,
   verifyInput,
   verifyTransaction,
 } from '../src/index.js';
-import type { Prevout, ScriptResult, ScriptStep } from '../src/index.js';
+import type { ScriptResult, ScriptStep, TxOutput } from '../src/index.js';
 import * as ecc from 'tiny-secp256k1';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
 import { bytesToHex, hexToBytes } from './vector-helpers.js';
 
-function prevoutsOf(list: { script: string; value: number }[]): Prevout[] {
+function prevoutsOf(list: { script: string; value: number }[]): TxOutput[] {
   return list.map((item) => ({ script: hexToBytes(item.script), value: BigInt(item.value) }));
 }
 
 /** Every signed transaction in pearl-go.json that Pearl's engine accepted, with what it spends. */
-const accepted: { name: string; hex: string; prevouts: Prevout[] }[] = [
+const accepted: { name: string; hex: string; prevouts: TxOutput[] }[] = [
   ...vectors.signing.map((item) => ({
     name: `key path ${item.name}`,
     hex: item.finalTxHex,
@@ -60,6 +63,11 @@ const accepted: { name: string; hex: string; prevouts: Prevout[] }[] = [
     hex: item.finalTxHex,
     prevouts: prevoutsOf(item.prevouts),
   })),
+  ...vectors.tapscriptExtras.map((item) => ({
+    name: `annex and code separator ${item.name}`,
+    hex: item.finalTxHex,
+    prevouts: prevoutsOf(item.prevouts),
+  })),
   ...vectors.leaves.timelocks
     .filter((item) => item.error === '')
     .map((item) => ({ name: `timelock ${item.name}`, hex: item.spendTxHex, prevouts: prevoutsOf([item.prevout]) })),
@@ -78,8 +86,8 @@ function drain(steps: Generator<ScriptStep, ScriptResult, void>): { steps: Scrip
 const num = (value: number): Uint8Array => encodeScriptNumber(BigInt(value));
 
 describe('signed transactions from the Go vectors', () => {
-  it('covers key paths, script paths, multi_a, XMSS, P2MR PSBTs and timelocks', () => {
-    expect(accepted.length).toBe(38);
+  it('covers key paths, script paths, multi_a, XMSS, P2MR PSBTs, annexes, code separators and timelocks', () => {
+    expect(accepted.length).toBe(49);
   });
 
   for (const item of accepted) {
@@ -124,7 +132,7 @@ describe('signed transactions from the Go vectors', () => {
     for (const item of vectors.scriptPathSpends) {
       const tx = parseTransaction(item.finalTxHex);
       const prevouts = prevoutsOf(item.prevouts);
-      const hash = tapscriptSighash(tx, item.inputIndex, prevouts, hexToBytes(item.leafHash), item.hashType);
+      const hash = tapscriptSighash(tx, item.inputIndex, { prevouts, leafHash: hexToBytes(item.leafHash), sighashType: item.hashType });
       expect(bytesToHex(hash)).toBe(item.sighash);
       const signature = hexToBytes(item.signature).subarray(0, 64);
       const key = hexToBytes(item.leafScript).subarray(1, 33);
@@ -153,6 +161,44 @@ describe('verifyInput and verifyTransaction', () => {
     expect(() => verifyTransaction(tx, [{ script: prevouts[0]!.script, value: 1 as unknown as bigint }])).toThrow(
       TypeError,
     );
+  });
+
+  it('throws for a prevout value no output can hold', () => {
+    for (const value of [-1n, 2_100_000_000_000_000_001n]) {
+      const error = (() => {
+        try {
+          verifyInput(tx, 0, [{ script: prevouts[0]!.script, value }]);
+        } catch (err) {
+          return err;
+        }
+      })();
+      expect(error).toBeInstanceOf(PearlError);
+      expect((error as PearlError).code).toBe('AMOUNT_OUT_OF_RANGE');
+    }
+  });
+
+  it('turns a failure into a ScriptRejectedError on request', () => {
+    expect(() => assertAccepted(verifyTransaction(tx, prevouts))).not.toThrow();
+    const changed = parseTransaction(spend.finalTxHex);
+    changed.locktime += 1;
+    const error = (() => {
+      try {
+        assertAccepted(verifyTransaction(changed, prevouts));
+      } catch (err) {
+        return err;
+      }
+    })() as ScriptRejectedError;
+    expect(error).toBeInstanceOf(ScriptRejectedError);
+    expect(error).toBeInstanceOf(PearlError);
+    expect(error).toMatchObject({
+      code: 'SCRIPT_REJECTED',
+      scriptCode: 'ErrNullFail',
+      scriptMessage: 'signature not empty on failed checksig',
+      message: 'ErrNullFail: signature not empty on failed checksig',
+      inputIndex: 0,
+      at: { name: 'OP_CHECKSIG' },
+    });
+    expect(error.toJSON()).toEqual({ name: 'ScriptRejectedError', code: 'SCRIPT_REJECTED', message: error.message });
   });
 
   it('names the failing input of a transaction', () => {
@@ -286,7 +332,7 @@ describe('executeScript', () => {
     tx.addInput(new Uint8Array(32).fill(1), 0, 0xfffffffe);
     tx.locktime = 500;
     const signer = { publicKey, signSchnorr: (hash: Uint8Array) => ecc.signSchnorr(hash, key) };
-    const signature = signTapscript(tx, 0, prevouts, leaf, signer);
+    const signature = signTapscriptUnchecked(tx, 0, signer, { prevouts, script: leaf });
     expect(drain(executeScript(leaf, { stack: [signature], tx, prevouts })).result).toEqual({ ok: true });
     tx.locktime = 499;
     expect(drain(executeScript(leaf, { stack: [signature], tx, prevouts })).result).toMatchObject({
@@ -347,7 +393,7 @@ describe('random input', () => {
     for (let round = 0; round < 5000; round += 1) {
       const tx = createTransaction(int(3));
       const count = 1 + int(3);
-      const prevouts: Prevout[] = [];
+      const prevouts: TxOutput[] = [];
       for (let index = 0; index < count; index += 1) {
         tx.addInput(bytes(32), int(4), int(2) === 0 ? 0xffffffff : int(0x10000));
         tx.ins[index]!.witness = Array.from({ length: int(5) }, () => (int(4) === 0 ? Uint8Array.of(0x50) : bytes(int(70))));

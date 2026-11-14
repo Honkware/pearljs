@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { sha256 } from '@noble/hashes/sha2';
 import { debugInput, parseTransaction } from '../src/index.js';
-import type { Prevout, ScriptResult, Transaction } from '../src/index.js';
+import type { ScriptResult, Transaction, TxOutput } from '../src/index.js';
 import { bytesToHex, hexToBytes } from './vector-helpers.js';
 
 /** One case of vectors/interpreter/vectors.json.gz: a spend and the verdict of Pearl's engine on it. */
@@ -29,7 +29,7 @@ export function loadEngineVectors(path: string | URL): EngineVectors {
   return JSON.parse(text) as EngineVectors;
 }
 
-export function caseInputs(item: EngineCase): { tx: Transaction; index: number; prevouts: Prevout[] } {
+export function caseInputs(item: EngineCase): { tx: Transaction; index: number; prevouts: TxOutput[] } {
   const prevouts = item.prevouts.map((text) => {
     const colon = text.indexOf(':');
     return { value: BigInt(text.slice(0, colon)), script: hexToBytes(text.slice(colon + 1)) };
@@ -48,7 +48,7 @@ function uint32le(value: number): Uint8Array {
 export function runWithTrace(
   tx: Transaction,
   index: number,
-  prevouts: Prevout[],
+  prevouts: TxOutput[],
 ): { result: ScriptResult; trace: string; steps: number } {
   const hasher = sha256.create();
   const steps = debugInput(tx, index, prevouts);

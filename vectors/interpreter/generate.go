@@ -362,6 +362,9 @@ func (s *spend) setStack(items ...[]byte) {
 
 const noCodeSep = 0xffffffff
 
+// maxGrain is the largest value an output can hold, btcutil.MaxGrain.
+const maxGrain = 2100000000000000000
+
 // sigMsg assembles Pearl's Taproot signature message from the midstate of
 // txscript.NewTxSigHashes. leafHash is nil for a key path. The engine is the
 // judge of whether this is right: every spend meant to be valid goes through
@@ -845,7 +848,7 @@ func mutations() {
 			emit(fmt.Sprintf("tx/outpoint-index-%d", i), func(tx *wire.MsgTx, _ int, _ []*wire.TxOut) { tx.TxIn[i].PreviousOutPoint.Index ^= 1 })
 			emit(fmt.Sprintf("tx/outpoint-hash-%d", i), func(tx *wire.MsgTx, _ int, _ []*wire.TxOut) { tx.TxIn[i].PreviousOutPoint.Hash[5] ^= 1 })
 			emit(fmt.Sprintf("prevout/value-%d", i), func(_ *wire.MsgTx, _ int, prevOuts []*wire.TxOut) { prevOuts[i].Value++ })
-			emit(fmt.Sprintf("prevout/value-%d-max", i), func(_ *wire.MsgTx, _ int, prevOuts []*wire.TxOut) { prevOuts[i].Value = 1<<63 - 1 })
+			emit(fmt.Sprintf("prevout/value-%d-max", i), func(_ *wire.MsgTx, _ int, prevOuts []*wire.TxOut) { prevOuts[i].Value = maxGrain })
 		}
 		if len(tx.TxIn) > 1 {
 			// Changing what another input spends changes the scripts

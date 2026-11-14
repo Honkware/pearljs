@@ -22,6 +22,9 @@ import { sha256 } from '@noble/hashes/sha2';
 import { Transaction } from 'bitcoinjs-lib';
 import type { Psbt } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
+import { MAX_GRAIN } from './amount.js';
+import { PearlError } from './errors.js';
+import { concat, equalBytes, fromHex, toHex, uint32le, varInt, varIntSize } from './internal/bytes.js';
 import { OP_CODES, OPCODE_NAMES } from './opcodes.js';
 import {
   BASE_LEAF_VERSION,
@@ -30,12 +33,14 @@ import {
   SEQUENCE_LOCKTIME_DISABLED,
   SEQUENCE_LOCKTIME_IS_SECONDS,
   SEQUENCE_LOCKTIME_MASK,
+  TAPROOT_ANNEX_TAG,
   encodeScriptNumber,
   taggedHash,
   tapBranchHash,
   tapLeafHash,
 } from './script.js';
-import type { Prevout } from './scriptpath.js';
+import { tapscriptSighash } from './scriptpath.js';
+import type { TxOutput } from './transaction.js';
 import { XMSS_PUBLIC_KEY_LENGTH, XMSS_SIGNATURE_LENGTH, xmssVerify } from './xmss.js';
 
 /**
@@ -195,22 +200,38 @@ export interface ExecuteScriptOptions {
    * The outputs tx spends, one per input. Unless given, the input spends a
    * P2MR output of value 0 whose only leaf is the script.
    */
-  prevouts?: readonly Prevout[];
+  prevouts?: readonly TxOutput[];
   /** An annex to commit signatures to; it must start with 0x50. */
   annex?: Uint8Array;
 }
 
-class ScriptError extends Error {
-  constructor(
-    readonly code: ScriptErrorCode,
-    message: string,
-  ) {
-    super(message);
+/**
+ * A script failure as an error, for code that would rather throw than branch
+ * on a result: see assertAccepted. `code` is SCRIPT_REJECTED; `scriptCode` is
+ * the engine's ErrorCode name.
+ */
+export class ScriptRejectedError extends PearlError {
+  override name = 'ScriptRejectedError';
+  /** The engine's ErrorCode name. */
+  readonly scriptCode: ScriptErrorCode;
+  /** The engine's error text, without the code in front. */
+  readonly scriptMessage: string;
+  /** The opcode that failed, when one did. */
+  readonly at: ScriptPosition | undefined;
+  /** The input that failed, when a whole transaction was verified. */
+  readonly inputIndex: number | undefined;
+
+  constructor(scriptCode: ScriptErrorCode, message: string, where: { at?: ScriptPosition; inputIndex?: number } = {}) {
+    super('SCRIPT_REJECTED', message === '' ? scriptCode : `${scriptCode}: ${message}`);
+    this.scriptCode = scriptCode;
+    this.scriptMessage = message;
+    this.at = where.at;
+    this.inputIndex = where.inputIndex;
   }
 }
 
 function fail(code: ScriptErrorCode, message: string): never {
-  throw new ScriptError(code, message);
+  throw new ScriptRejectedError(code, message);
 }
 
 const MAX_STACK_SIZE = 1000;
@@ -219,7 +240,6 @@ const MAX_OPS_PER_SCRIPT = 201;
 const SIG_OPS_DELTA = 50;
 const XMSS_OPS_COST = 1000;
 const XMSS_SIGNATURE_CHUNKS = 5;
-const ANNEX_TAG = 0x50;
 const LEAF_VERSION_MASK = 0xfe;
 const NODE_SIZE = 32;
 const MAX_PROOF_SIZE = 128 * NODE_SIZE;
@@ -233,40 +253,10 @@ const EMPTY = new Uint8Array(0);
 const TRUE = Uint8Array.of(1);
 const ZERO_HASH = new Uint8Array(32);
 
-const FIELD_PRIME = hexToBytes('fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f');
-const GROUP_ORDER = hexToBytes('fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
+const FIELD_PRIME = fromHex('fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f');
+const GROUP_ORDER = fromHex('fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141');
 
 const OP = OP_CODES;
-
-function hexToBytes(hex: string): Uint8Array {
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i += 1) out[i] = parseInt(hex.slice(2 * i, 2 * i + 2), 16);
-  return out;
-}
-
-function toHex(bytes: Uint8Array): string {
-  let out = '';
-  for (const byte of bytes) out += byte.toString(16).padStart(2, '0');
-  return out;
-}
-
-function concat(parts: readonly Uint8Array[]): Uint8Array {
-  let length = 0;
-  for (const part of parts) length += part.length;
-  const out = new Uint8Array(length);
-  let offset = 0;
-  for (const part of parts) {
-    out.set(part, offset);
-    offset += part.length;
-  }
-  return out;
-}
-
-function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
-  return true;
-}
 
 /** Big-endian a >= b for two 32-byte values. */
 function notBelow(a: Uint8Array, b: Uint8Array): boolean {
@@ -276,31 +266,14 @@ function notBelow(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
-function uint32le(value: number): Uint8Array {
-  const out = new Uint8Array(4);
-  new DataView(out.buffer).setUint32(0, value >>> 0, true);
-  return out;
-}
-
 function int64le(value: bigint): Uint8Array {
   const out = new Uint8Array(8);
   new DataView(out.buffer).setBigUint64(0, BigInt.asUintN(64, value), true);
   return out;
 }
 
-function varIntSize(n: number): number {
-  return n < 0xfd ? 1 : n <= 0xffff ? 3 : 5;
-}
-
 function varBytes(bytes: Uint8Array): Uint8Array {
-  const n = bytes.length;
-  const prefix =
-    n < 0xfd
-      ? Uint8Array.of(n)
-      : n <= 0xffff
-        ? Uint8Array.of(0xfd, n & 0xff, n >> 8)
-        : Uint8Array.of(0xfe, n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, n >>> 24);
-  return concat([prefix, bytes]);
+  return concat([varInt(bytes.length), bytes]);
 }
 
 function serializeOutput(output: { value: bigint; script: Uint8Array }): Uint8Array {
@@ -524,67 +497,69 @@ function isNullOutpoint(input: { hash: Uint8Array; index: number }): boolean {
   return input.index === 0xffffffff && input.hash.every((byte) => byte === 0);
 }
 
-/** The transaction being verified, its spent outputs and the hashes its signature messages share. */
+/** The transaction being verified, its spent outputs and how its signature messages are computed. */
 class TxContext {
-  private prevoutsHash?: Uint8Array;
-  private amountsHash?: Uint8Array;
-  private scriptsHash?: Uint8Array;
-  private sequencesHash?: Uint8Array;
-  private outputsHash?: Uint8Array;
-
   constructor(
     readonly tx: Transaction,
-    readonly prevouts: readonly Prevout[],
+    readonly prevouts: readonly TxOutput[],
   ) {}
 
   /**
-   * calcTaprootSignatureHashRaw (sighash.go:296) over the midstate of
-   * NewTxSigHashes (hashcache.go:210). extension is the tapscript part of
-   * the message, null for a key path. Returns null where the Go function
-   * returns an error, which callers treat as a signature that does not
-   * verify.
+   * The message a leaf's signature signs: calcTaprootSignatureHashRaw
+   * (sighash.go:296) with the tapscript extension, which tapscriptSighash
+   * computes. Returns null where the Go function returns an error, which
+   * the engine treats as a signature that does not verify.
    */
-  signatureHash(
-    inputIndex: number,
-    sighashType: number,
-    annexHash: Uint8Array | null,
-    extension: { leafHash: Uint8Array; codeSeparatorPosition: number } | null,
-  ): Uint8Array | null {
+  tapscriptHash(inputIndex: number, sighashType: number, tapscript: TapscriptContext): Uint8Array | null {
+    if (!SIGHASH_TYPES.has(sighashType)) return null;
+    if ((sighashType & 0x03) === SIGHASH_SINGLE && inputIndex >= this.tx.outs.length) return null;
+    return tapscriptSighash(this.tx, inputIndex, {
+      prevouts: this.prevouts,
+      leafHash: tapscript.leafHash,
+      sighashType,
+      ...(tapscript.annex === null ? {} : { annex: tapscript.annex }),
+      ...(tapscript.codeSeparatorPosition === NO_CODESEPARATOR
+        ? {}
+        : { codeSeparatorPosition: tapscript.codeSeparatorPosition }),
+    });
+  }
+
+  /**
+   * The message a key path signature signs: the same function without the
+   * tapscript extension, over the midstate of NewTxSigHashes
+   * (hashcache.go:210).
+   */
+  keyPathHash(inputIndex: number, sighashType: number, annex: Uint8Array | null): Uint8Array | null {
     const { tx, prevouts } = this;
     if (!SIGHASH_TYPES.has(sighashType)) return null;
     const anyoneCanPay = (sighashType & SIGHASH_ANYONECANPAY) !== 0;
     const outputMode = sighashType & 0x03;
     const parts: Uint8Array[] = [Uint8Array.of(0x00, sighashType), uint32le(tx.version), uint32le(tx.locktime)];
     if (!anyoneCanPay) {
-      this.prevoutsHash ??= sha256(concat(tx.ins.map((input) => concat([input.hash, uint32le(input.index)]))));
-      this.sequencesHash ??= sha256(concat(tx.ins.map((input) => uint32le(input.sequence))));
-      if (this.amountsHash === undefined || this.scriptsHash === undefined) {
-        const covered =
-          prevouts.some((prevout, index) => !isNullOutpoint(tx.ins[index]!) && isP2tr(prevout.script));
-        this.amountsHash = covered ? sha256(concat(prevouts.map((prevout) => int64le(prevout.value)))) : ZERO_HASH;
-        this.scriptsHash = covered ? sha256(concat(prevouts.map((prevout) => varBytes(prevout.script)))) : ZERO_HASH;
-      }
-      parts.push(this.prevoutsHash, this.amountsHash, this.scriptsHash, this.sequencesHash);
+      const covered =
+        prevouts.some((prevout, index) => !isNullOutpoint(tx.ins[index]!) && isP2tr(prevout.script));
+      parts.push(
+        sha256(concat(tx.ins.map((input) => concat([input.hash, uint32le(input.index)])))),
+        covered ? sha256(concat(prevouts.map((prevout) => int64le(prevout.value)))) : ZERO_HASH,
+        covered ? sha256(concat(prevouts.map((prevout) => varBytes(prevout.script)))) : ZERO_HASH,
+        sha256(concat(tx.ins.map((input) => uint32le(input.sequence)))),
+      );
     }
     if (outputMode !== SIGHASH_SINGLE && outputMode !== SIGHASH_NONE) {
-      this.outputsHash ??= sha256(concat(tx.outs.map(serializeOutput)));
-      parts.push(this.outputsHash);
+      parts.push(sha256(concat(tx.outs.map(serializeOutput))));
     }
-    parts.push(Uint8Array.of((extension === null ? 0 : 2) + (annexHash === null ? 0 : 1)));
+    parts.push(Uint8Array.of(annex === null ? 0 : 1));
     const input = tx.ins[inputIndex]!;
     if (anyoneCanPay) {
       parts.push(input.hash, uint32le(input.index), serializeOutput(prevouts[inputIndex]!), uint32le(input.sequence));
     } else {
       parts.push(uint32le(inputIndex));
     }
-    if (annexHash !== null) parts.push(annexHash);
+    if (annex !== null) parts.push(sha256(varBytes(annex)));
     if (outputMode === SIGHASH_SINGLE) {
       const output = tx.outs[inputIndex];
       if (output === undefined) return null;
       parts.push(sha256(serializeOutput(output)));
-    }
-    if (extension !== null) {
-      parts.push(extension.leafHash, Uint8Array.of(0x00), uint32le(extension.codeSeparatorPosition));
     }
     return taggedHash('TapSighash', concat(parts));
   }
@@ -592,7 +567,7 @@ class TxContext {
 
 /** engine.go tapscriptExecutionCtx. */
 interface TapscriptContext {
-  annexHash: Uint8Array | null;
+  annex: Uint8Array | null;
   codeSeparatorPosition: number;
   leafHash: Uint8Array;
   opsBudget: number;
@@ -634,10 +609,6 @@ function verifySchnorr(hash: Uint8Array | null, key: Uint8Array, signature: Uint
   return ecc.verifySchnorr(hash, key, signature);
 }
 
-function hashAnnex(annex: Uint8Array): Uint8Array {
-  return sha256(varBytes(annex));
-}
-
 /** taproot.go computeMerkleRootFromProof. */
 function rootFromProof(leafVersion: number, proof: Uint8Array, script: Uint8Array): Uint8Array {
   let node = tapLeafHash(script, leafVersion);
@@ -675,7 +646,7 @@ function verifyTaprootCommitment(controlBlock: Uint8Array, program: Uint8Array, 
   let tweak = taggedHash('TapTweak', concat([internalKey, root]));
   if (notBelow(tweak, GROUP_ORDER)) {
     const reduced = BigInt(`0x${toHex(tweak)}`) - BigInt(`0x${toHex(GROUP_ORDER)}`);
-    tweak = hexToBytes(reduced.toString(16).padStart(64, '0'));
+    tweak = fromHex(reduced.toString(16).padStart(64, '0'));
   }
   const tweaked = ecc.xOnlyPointAddTweak(internalKey, tweak);
   const outputKey = tweaked === null ? ZERO_HASH : tweaked.xOnlyPubkey;
@@ -1298,8 +1269,7 @@ class Engine {
   }
 
   private tapscriptSignatureHash(sighashType: number): Uint8Array | null {
-    const { annexHash, leafHash, codeSeparatorPosition } = this.tapscript!;
-    return this.context.signatureHash(this.inputIndex, sighashType, annexHash, { leafHash, codeSeparatorPosition });
+    return this.context.tapscriptHash(this.inputIndex, sighashType, this.tapscript!);
   }
 
   /**
@@ -1394,7 +1364,7 @@ class Engine {
     const witnessSize = witnessSerializeSize(witness);
     // stripWitnessAnnex (engine.go:475), for P2TR and P2MR alike.
     const last = witness[witness.length - 1]!;
-    const annexed = witness.length >= 2 && last.length > 0 && last[0] === ANNEX_TAG;
+    const annexed = witness.length >= 2 && last.length > 0 && last[0] === TAPROOT_ANNEX_TAG;
     const items = annexed ? witness.slice(0, -1) : witness;
     const annex = annexed ? last : null;
 
@@ -1415,12 +1385,7 @@ class Engine {
   /** verifyTaprootKeyPath (engine.go:522) and verifyTaprootKeySpendWithAnnex (taproot.go:94). */
   private verifyKeyPath(program: Uint8Array, rawSignature: Uint8Array, annex: Uint8Array | null): void {
     const { signature, sighashType } = parseSignature(program, rawSignature);
-    const hash = this.context.signatureHash(
-      this.inputIndex,
-      sighashType,
-      annex === null ? null : hashAnnex(annex),
-      null,
-    );
+    const hash = this.context.keyPathHash(this.inputIndex, sighashType, annex);
     if (!verifySchnorr(hash, program, signature)) fail('ErrTaprootSigInvalid', '');
     this.stack.items = [TRUE];
   }
@@ -1443,7 +1408,7 @@ class Engine {
     }
     checkScriptParses(script);
     this.tapscript = {
-      annexHash: annex === null ? null : hashAnnex(annex),
+      annex,
       codeSeparatorPosition: NO_CODESEPARATOR,
       leafHash: tapLeafHash(script),
       opsBudget: SIG_OPS_DELTA + witnessSize,
@@ -1462,11 +1427,11 @@ class Engine {
 }
 
 function failure(error: unknown, at: ScriptPosition | null): ScriptFailure {
-  if (!(error instanceof ScriptError)) throw error;
-  return { ok: false, code: error.code, message: error.message, ...(at === null ? {} : { at }) };
+  if (!(error instanceof ScriptRejectedError)) throw error;
+  return { ok: false, code: error.scriptCode, message: error.scriptMessage, ...(at === null ? {} : { at }) };
 }
 
-function checkArguments(tx: Transaction, prevouts: readonly Prevout[]): void {
+function checkArguments(tx: Transaction, prevouts: readonly TxOutput[]): void {
   if (prevouts.length !== tx.ins.length) {
     throw new Error(`expected ${tx.ins.length} prevouts, got ${prevouts.length}`);
   }
@@ -1474,6 +1439,22 @@ function checkArguments(tx: Transaction, prevouts: readonly Prevout[]): void {
     if (!(prevout.script instanceof Uint8Array) || typeof prevout.value !== 'bigint') {
       throw new TypeError(`prevout ${index} must have a script and a bigint value in grain`);
     }
+    // No output on chain holds a value outside these bounds, and the signature message is not defined for one.
+    if (prevout.value < 0n || prevout.value > MAX_GRAIN) {
+      throw new PearlError('AMOUNT_OUT_OF_RANGE', `prevout ${index} value is outside Pearl amount bounds`);
+    }
+  });
+}
+
+/**
+ * Throws a ScriptRejectedError for a failure and returns for a success, for
+ * callers that treat a refused spend as an exception.
+ */
+export function assertAccepted(result: ScriptResult | TransactionResult): void {
+  if (result.ok) return;
+  throw new ScriptRejectedError(result.code, result.message, {
+    ...(result.at === undefined ? {} : { at: result.at }),
+    ...('inputIndex' in result ? { inputIndex: result.inputIndex } : {}),
   });
 }
 
@@ -1524,7 +1505,7 @@ function runToEnd(steps: Generator<ScriptStep, ScriptResult, void>): ScriptResul
 export function verifyInput(
   tx: Transaction,
   inputIndex: number,
-  prevouts: readonly Prevout[],
+  prevouts: readonly TxOutput[],
 ): ScriptResult {
   checkArguments(tx, prevouts);
   return runToEnd(stepInput(new TxContext(tx, prevouts), inputIndex, false));
@@ -1541,7 +1522,7 @@ export function verifyInput(
  */
 export function verifyTransaction(
   tx: Transaction,
-  prevouts: readonly Prevout[],
+  prevouts: readonly TxOutput[],
 ): TransactionResult {
   checkArguments(tx, prevouts);
   if (tx.ins.length === 1 && isNullOutpoint(tx.ins[0]!)) return { ok: true };
@@ -1565,7 +1546,7 @@ export function verifyTransaction(
 export function debugInput(
   tx: Transaction,
   inputIndex: number,
-  prevouts: readonly Prevout[],
+  prevouts: readonly TxOutput[],
 ): Generator<ScriptStep, ScriptResult, void> {
   checkArguments(tx, prevouts);
   return stepInput(new TxContext(tx, prevouts), inputIndex, true);
@@ -1588,7 +1569,7 @@ export function executeScript(
 ): Generator<ScriptStep, ScriptResult, void> {
   const stack = options.stack ?? [];
   const annex = options.annex ?? null;
-  if (annex !== null && annex[0] !== ANNEX_TAG) throw new Error('an annex must start with 0x50');
+  if (annex !== null && annex[0] !== TAPROOT_ANNEX_TAG) throw new Error('an annex must start with 0x50');
   const inputIndex = options.inputIndex ?? 0;
   let tx = options.tx;
   let prevouts = options.prevouts;
@@ -1600,8 +1581,7 @@ export function executeScript(
   }
   prevouts ??= tx.ins.map(() => ({ script: concat([Uint8Array.of(OP.OP_2, 32), tapLeafHash(script)]), value: 0n }));
   checkArguments(tx, prevouts);
-  const context = new TxContext(tx, prevouts);
-  return stepInput(context, inputIndex, true, { script, stack, annex });
+  return stepInput(new TxContext(tx, prevouts), inputIndex, true, { script, stack, annex });
 }
 
 /**
@@ -1613,7 +1593,7 @@ export function executeScript(
  */
 export function verifyFinalizedPsbt(psbt: Psbt): TransactionResult {
   const tx = psbt.extractTransaction(true);
-  const prevouts = tx.ins.map((input, index): Prevout => {
+  const prevouts = tx.ins.map((input, index): TxOutput => {
     const data = psbt.data.inputs[index]!;
     const utxo =
       data.witnessUtxo ??
