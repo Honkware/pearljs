@@ -13,7 +13,7 @@ import {
   checkStandard,
   createTransaction,
   deriveSigningAccountFromSeed,
-  encodeAddress,
+  p2mrAddress,
   formatPearl,
   mnemonicToSeed,
   networks,
@@ -31,7 +31,7 @@ const account = deriveSigningAccountFromSeed(mnemonicToSeed(MNEMONIC), network);
 // Three single-key leaves, held by the account's children 0, 1 and 2.
 const tree = assembleScriptTree([0, 1, 2].map((index) => checksigScript(account.derivePublicKey(index))));
 const output = p2mr({ merkleRoot: tree.root }).output;
-const address = encodeAddress({ version: 2, program: tree.root }, network);
+const address = p2mrAddress({ merkleRoot: tree.root }, network);
 console.log('P2MR address', address);
 tree.leaves.forEach((leaf, i) => console.log(`leaf ${i}`, scriptToAsm(leaf.script)));
 

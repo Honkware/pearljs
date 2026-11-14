@@ -14,7 +14,7 @@ import {
   createTransaction,
   csvScript,
   deriveSigningAccountFromSeed,
-  encodeAddress,
+  p2mrAddress,
   encodeSequence,
   finalizePsbt,
   inspectTransaction,
@@ -44,7 +44,7 @@ const tree = assembleScriptTree([
   csvScript(encodeSequence({ blocks: 1008 }), checksigScript(keys[2]!)),
 ]);
 const output = p2mr({ merkleRoot: tree.root }).output;
-console.log('vault address', encodeAddress({ version: 2, program: tree.root }, network));
+console.log('vault address', p2mrAddress({ merkleRoot: tree.root }, network));
 tree.leaves.forEach((leaf, i) => console.log(`leaf ${i}`, scriptToAsm(leaf.script)));
 
 // A made-up transaction paying the vault 3 PRL.

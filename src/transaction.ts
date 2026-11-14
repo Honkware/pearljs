@@ -99,11 +99,10 @@ export function witnessTransactionId(tx: Transaction): string {
 }
 
 /**
- * Parses a base64 PSBT. Like Pearl's psbt.NewFromRawBytes, and unlike
- * bitcoinjs alone, it refuses bytes after the last map, lengths written as
- * non-canonical varints, and an input sighash type that is not 4 bytes.
- * Every failure is an Error with a message, also where the underlying parser
- * would throw a RangeError.
+ * Parses a base64 PSBT with the checks of Pearl's psbt.NewFromRawBytes: it
+ * refuses bytes after the last map, lengths written as non-canonical varints,
+ * and an input sighash type that is not 4 bytes. Every failure is a
+ * PearlError with code PSBT_MALFORMED.
  */
 export function parsePsbt(base64: string): Psbt {
   if (typeof base64 !== 'string') {
@@ -212,18 +211,17 @@ export function createPsbt(tx: Transaction): Psbt {
 
 /**
  * Finalizes every input and extracts the transaction. Script-path inputs
- * spending a multi_a leaf, and all P2MR script-path inputs, are finalized
- * like Pearl's psbt.Finalize, since bitcoinjs leaves no empty item for keys
- * that did not sign and Pearl rejects that witness; other inputs use
- * bitcoinjs's finalizers.
+ * spending a multi_a leaf, and all P2MR script-path inputs, get the witness
+ * Pearl's psbt.Finalize builds, with an empty item for each key that did not
+ * sign; Pearl rejects a multi_a witness without them.
  *
  * For the inputs finalized here, the leaf must open the output and every
  * signature for a key in the leaf must verify, so a PSBT that cannot make a
  * valid spend fails here and not at the node.
  *
  * Throws when an input lacks the signatures its leaf needs, when a script-path
- * signature does not verify, and when bitcoinjs's fee-rate guard refuses the
- * result.
+ * signature does not verify, and when the result pays more than 5000 grain
+ * per vbyte.
  */
 export function finalizePsbt(psbt: Psbt): Transaction {
   ensureEcc();

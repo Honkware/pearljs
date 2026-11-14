@@ -55,7 +55,7 @@ function checkProgram(bytes: Uint8Array, what: string): void {
 /**
  * P2TR from a 32-byte x-only internal key and, for outputs with script
  * paths, the root of a tree from assembleScriptTree. The output script is
- * OP_1 <tweaked key>; the tweak is computed by bitcoinjs with tiny-secp256k1.
+ * OP_1 <tweaked key>.
  */
 export function p2tr(args: { internalPubkey: Uint8Array; merkleRoot?: Uint8Array }): P2trPayment {
   checkProgram(args.internalPubkey, 'internal pubkey');

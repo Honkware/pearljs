@@ -1,6 +1,5 @@
-// The hashes bitcoinjs exposes as crypto.*, under the same names. Pearl uses
-// hash256 for txids, block hashes and checksums, and hash160 for BIP32 key
-// fingerprints.
+// Pearl uses hash256 for txids, block hashes and checksums, and hash160 for
+// BIP32 key fingerprints.
 
 /**
  * SHA-256, double SHA-256 and HASH160.

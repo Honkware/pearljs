@@ -14,7 +14,7 @@ import {
   createTransaction,
   createXmssSigner,
   deriveAccountFromSeed,
-  encodeAddress,
+  p2mrAddress,
   mnemonicToSeed,
   networks,
   p2mr,
@@ -41,7 +41,7 @@ const signer = createXmssSigner(privateSeed, publicSeed, createMemoryXmssIndexSt
 
 const tree = assembleScriptTree([xmssLeafScript(signer.publicKey)]);
 const output = p2mr({ merkleRoot: tree.root }).output;
-console.log('XMSS P2MR address', encodeAddress({ version: 2, program: tree.root }, network));
+console.log('XMSS P2MR address', p2mrAddress({ merkleRoot: tree.root }, network));
 console.log('signatures this key can make', XMSS_MAX_SIGNATURES);
 
 // A made-up transaction paying the address 10 PRL.

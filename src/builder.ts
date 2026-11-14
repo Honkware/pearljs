@@ -34,8 +34,8 @@ const FINAL_SEQUENCE = 0xffffffff;
 const RBF_SEQUENCE = 0xfffffffd;
 
 /**
- * Adds an input by the transaction id that explorers and RPC show.
- * bitcoinjs's Transaction.addInput wants those bytes reversed instead.
+ * Adds an input by the transaction id that explorers and RPC show. The
+ * classes' own addInput takes those bytes reversed.
  *
  * sequence is 0xffffffff unless given. Throws for a txid that is not 64 hex
  * characters or an output index outside 32 bits.
@@ -84,8 +84,8 @@ export interface Payment<T extends Utxo = Utxo> {
   transaction: Transaction;
   /**
    * The same transaction as a PSBT. Its inputs are bare: prepareInput and
-   * the script-path prepare functions add each witness UTXO, and bitcoinjs
-   * refuses to set one twice.
+   * the script-path prepare functions add each witness UTXO, which can be
+   * set only once.
    */
   psbt: Psbt;
   /** The outputs being spent, in input order. */

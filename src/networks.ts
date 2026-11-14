@@ -12,7 +12,7 @@
 /** The name of a Pearl network, a key of `networks`. */
 export type PearlNetworkName = 'mainnet' | 'testnet' | 'testnet2' | 'regtest' | 'simnet';
 
-/** Parameters of one Pearl network, from Pearl's chaincfg. Not a bitcoinjs Network object. */
+/** Parameters of one Pearl network, from Pearl's chaincfg. */
 export interface PearlNetwork {
   /** Lowercase canonical name, e.g. "mainnet". */
   name: PearlNetworkName;
@@ -34,9 +34,8 @@ export interface PearlNetwork {
   genesisHash: string;
   /**
    * Header used by Pearl's signed-message format, from
-   * messageSignatureHeader in rpcserver.go. Present only so callers can
-   * build a bitcoinjs-compatible network object; Pearl does not vary it
-   * per network.
+   * messageSignatureHeader in rpcserver.go. Pearl does not vary it per
+   * network.
    */
   messagePrefix: string;
   /**

@@ -366,8 +366,8 @@ export function scriptPathWitness(
 }
 
 /**
- * Default for maxFeeRate, in grain per 1000 vbytes: the 5000 per vbyte of
- * bitcoinjs's PSBT guard, half of the 0.1 PRL per 1000 vbytes above which
+ * Default for maxFeeRate, in grain per 1000 vbytes: the 5000 per vbyte at
+ * which finalizePsbt refuses a PSBT, half of the 0.1 PRL per 1000 vbytes above which
  * pearld's testmempoolaccept reports a transaction as not allowed. Oyster's
  * txrules set no upper bound, and pearld's sendrawtransaction ignores its
  * fee limit, so nothing downstream stops an overpaying transaction.
