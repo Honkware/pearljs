@@ -94,6 +94,9 @@ export function extractWitnessProgram(script: Uint8Array): WitnessProgram | null
  * padding byte appended when the value would otherwise set it.
  */
 export function encodeScriptNumber(value: bigint): Uint8Array {
+  if (typeof value !== 'bigint') {
+    throw new TypeError('script number must be a bigint');
+  }
   if (value === 0n) {
     return new Uint8Array(0);
   }

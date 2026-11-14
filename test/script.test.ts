@@ -193,6 +193,13 @@ describe('encodeScriptNumber', () => {
     }
   });
 
+  it('rejects a value that is not a bigint', () => {
+    // null used to encode as the empty number, and a JS number threw an engine error.
+    for (const bad of [null, undefined, 1, 1.5, '5']) {
+      expect(() => encodeScriptNumber(bad as unknown as bigint)).toThrow('script number must be a bigint');
+    }
+  });
+
   it('round trips values through decode as minimal encodings', () => {
     for (const { value } of cases) {
       const encoded = encodeScriptNumber(value);
