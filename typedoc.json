@@ -17,6 +17,7 @@
     "src/errors.ts",
     "src/gcs.ts",
     "src/inspect.ts",
+    "src/interpreter.ts",
     "src/invoice.ts",
     "src/keys.ts",
     "src/message.ts",
