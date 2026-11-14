@@ -55,6 +55,10 @@
       "types": "./dist/discovery.d.ts",
       "default": "./dist/discovery.js"
     },
+    "./errors": {
+      "types": "./dist/errors.d.ts",
+      "default": "./dist/errors.js"
+    },
     "./gcs": {
       "types": "./dist/gcs.d.ts",
       "default": "./dist/gcs.js"
