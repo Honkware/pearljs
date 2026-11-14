@@ -73,6 +73,10 @@ function xOnly(publicKey: Uint8Array): Uint8Array {
   throw new Error(`signer public key must be 32 or 33 bytes, got ${publicKey.length}`);
 }
 
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && a.every((byte, index) => byte === b[index]);
 }
@@ -131,6 +135,15 @@ function serializeOutput(value: bigint, script: Uint8Array): Uint8Array {
   return concat([uint64le(value), varBytes(script)]);
 }
 
+/** Whether NewTxSigHashes computes the amount and script hashes for this spend. */
+function coversInputValues(
+  prevouts: readonly Prevout[],
+  sighashType: number,
+): boolean {
+  if ((sighashType & SIGHASH_ANYONECANPAY) !== 0) return true;
+  return prevouts.some((prevout) => classifyOutputScript(prevout.script) === 'p2tr');
+}
+
 /**
  * Pearl's Taproot signature message with the tapscript extension, mirroring
  * calcTaprootSignatureHashRaw and the midstate from NewTxSigHashes. It
@@ -152,13 +165,13 @@ function pearlTapscriptSighash(
     uint32le(tx.locktime),
   ];
   if (!anyoneCanPay) {
-    const hasP2trInput = prevouts.some((prevout) => classifyOutputScript(prevout.script) === 'p2tr');
+    const coversValues = coversInputValues(prevouts, sighashType);
     parts.push(sha256(concat(tx.ins.map((input) => concat([input.hash, uint32le(input.index)])))));
     parts.push(
-      hasP2trInput ? sha256(concat(prevouts.map((prevout) => uint64le(prevout.value)))) : ZERO_HASH,
+      coversValues ? sha256(concat(prevouts.map((prevout) => uint64le(prevout.value)))) : ZERO_HASH,
     );
     parts.push(
-      hasP2trInput ? sha256(concat(prevouts.map((prevout) => varBytes(prevout.script)))) : ZERO_HASH,
+      coversValues ? sha256(concat(prevouts.map((prevout) => varBytes(prevout.script)))) : ZERO_HASH,
     );
     parts.push(sha256(concat(tx.ins.map((input) => uint32le(input.sequence)))));
   }
@@ -187,9 +200,8 @@ function pearlTapscriptSighash(
 }
 
 /**
- * Tapscript sighash for one input, as Pearl computes it (see the P2MR note
- * on pearlTapscriptSighash). prevouts must list every input's spent output
- * in order.
+ * Tapscript sighash for one input, as Pearl computes it. prevouts must list
+ * every input's spent output in order.
  */
 export function tapscriptSighash(
   tx: Transaction,
@@ -252,6 +264,41 @@ export interface P2mrSignOptions {
   tree: ScriptTree;
   leafIndex: number;
   sighashType?: number;
+  /**
+   * Transactions that created the spent outputs. When every input is P2MR,
+   * every prevout is checked against them before signing.
+   */
+  previousTransactions?: readonly Transaction[];
+  /** Sign without that check, for callers that already trust the prevouts. */
+  trustPrevouts?: boolean;
+}
+
+/**
+ * Checks each prevout against the output it spends in previousTransactions,
+ * so a wrong value or script fails here instead of after signing.
+ */
+function checkPrevouts(
+  tx: Transaction,
+  prevouts: readonly Prevout[],
+  previousTransactions: readonly Transaction[],
+): void {
+  const byHash = new Map(previousTransactions.map((prev) => [toHex(prev.getHash()), prev]));
+  tx.ins.forEach((input, index) => {
+    const previous = byHash.get(toHex(input.hash));
+    if (previous === undefined) {
+      throw new Error(`input ${index} is missing the previous transaction it spends`);
+    }
+    const output = previous.outs[input.index];
+    const prevout = prevouts[index];
+    if (
+      output === undefined ||
+      prevout === undefined ||
+      output.value !== prevout.value ||
+      !equalBytes(output.script, prevout.script)
+    ) {
+      throw new Error(`prevout ${index} does not match its previous transaction`);
+    }
+  });
 }
 
 /**
@@ -259,6 +306,10 @@ export interface P2mrSignOptions {
  * checksigScript) and sets its witness to {signature, script, control
  * block}, the witness Pearl's wallet builds. The prevout must commit to the
  * tree's root and the leaf must push the signer's key.
+ *
+ * When every input is P2MR, the prevouts are checked against
+ * previousTransactions first, and signing is refused without them unless
+ * trustPrevouts is set.
  *
  * For other leaf scripts, sign with signTapscript and set the witness from
  * scriptPathWitness and p2mrControlBlock.
@@ -292,13 +343,23 @@ export function signP2mrInput(
   if (input.script.length !== 0) {
     throw new Error('P2MR inputs must have an empty scriptSig');
   }
+  const sighashType = options.sighashType ?? Transaction.SIGHASH_DEFAULT;
+  if (!coversInputValues(options.prevouts, sighashType) && options.trustPrevouts !== true) {
+    if (options.previousTransactions === undefined) {
+      throw new Error(
+        'this spend needs the previous transactions (previousTransactions) to check ' +
+          'input values before signing; set trustPrevouts to skip the check',
+      );
+    }
+    checkPrevouts(tx, options.prevouts, options.previousTransactions);
+  }
   const signature = signTapscript(
     tx,
     inputIndex,
     options.prevouts,
     leaf.script,
     signer,
-    options.sighashType ?? Transaction.SIGHASH_DEFAULT,
+    sighashType,
   );
   tx.setWitness(inputIndex, scriptPathWitness([signature], leaf.script, controlBlock));
 }

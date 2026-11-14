@@ -17,8 +17,7 @@ import {
   signP2mrInput,
   signTaprootScriptPathInput,
 } from './scriptpath.js';
-import type { Prevout } from './scriptpath.js';
-import type { ScriptTree } from './scripttree.js';
+import type { P2mrSignOptions } from './scriptpath.js';
 
 const bip32 = BIP32Factory(ecc);
 
@@ -86,13 +85,9 @@ export interface PearlScriptPathSignOptions {
   leafHash: Uint8Array;
 }
 
-export interface PearlP2mrSignOptions {
+export interface PearlP2mrSignOptions extends P2mrSignOptions {
   index: number;
   change?: boolean;
-  prevouts: readonly Prevout[];
-  tree: ScriptTree;
-  leafIndex: number;
-  sighashType?: number;
 }
 
 /**

@@ -227,6 +227,7 @@ describe('P2MR spends', () => {
       expect(bytesToHex(sighash)).toBe(expected.sighash);
 
       account.signP2mrInput(tx, input, {
+        trustPrevouts: true, // vector prevouts point at synthetic transactions
         index: expected.leafIndex,
         prevouts,
         tree,
