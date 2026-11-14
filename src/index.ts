@@ -24,3 +24,4 @@ export * from './wif.js';
 export * from './xmss.js';
 export * from './coinselect.js';
 export * from './builder.js';
+export * from './sweep.js';
