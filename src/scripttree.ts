@@ -82,7 +82,8 @@ export function assembleScriptTree(scripts: readonly Uint8Array[]): ScriptTree {
   let root: Uint8Array;
 
   if (scripts.length === 1) {
-    root = leafHash(0);
+    // A copy, so changing the root cannot change the leaf hash or the reverse.
+    root = Uint8Array.from(leafHash(0));
   } else {
     const branches: TreeNode[] = [];
     for (let i = 0; i < scripts.length; i += 2) {
@@ -199,6 +200,9 @@ export interface P2mrControlBlock {
 }
 
 function checkControlBlockSize(bytes: Uint8Array, baseSize: number, what: string): void {
+  if (!(bytes instanceof Uint8Array)) {
+    throw new TypeError(`${what} control block must be a Uint8Array`);
+  }
   const maxSize = baseSize + MAX_PROOF_NODES * HASH_SIZE;
   if (bytes.length < baseSize) {
     throw new Error(`${what} control block is ${bytes.length} bytes, min is ${baseSize}`);
@@ -211,10 +215,13 @@ function checkControlBlockSize(bytes: Uint8Array, baseSize: number, what: string
   }
 }
 
-/** Parses a Taproot control block with the checks of Pearl's ParseControlBlock. */
+/**
+ * Parses a Taproot control block with the checks of Pearl's ParseControlBlock.
+ * The returned key and proof are copies, also when bytes is a Node Buffer.
+ */
 export function parseTaprootControlBlock(bytes: Uint8Array): TaprootControlBlock {
   checkControlBlockSize(bytes, TAPROOT_CONTROL_BLOCK_BASE_SIZE, 'taproot');
-  const internalPubkey = bytes.slice(1, TAPROOT_CONTROL_BLOCK_BASE_SIZE);
+  const internalPubkey = Uint8Array.from(bytes.subarray(1, TAPROOT_CONTROL_BLOCK_BASE_SIZE));
   if (!ecc.isXOnlyPoint(internalPubkey)) {
     throw new Error('taproot control block internal key is not a valid x-only key');
   }
@@ -222,13 +229,14 @@ export function parseTaprootControlBlock(bytes: Uint8Array): TaprootControlBlock
     leafVersion: bytes[0]! & LEAF_VERSION_MASK,
     outputKeyYIsOdd: (bytes[0]! & 1) === 1,
     internalPubkey,
-    proof: bytes.slice(TAPROOT_CONTROL_BLOCK_BASE_SIZE),
+    proof: Uint8Array.from(bytes.subarray(TAPROOT_CONTROL_BLOCK_BASE_SIZE)),
   };
 }
 
 /**
  * Parses a P2MR control block with the checks of Pearl's
- * ParseMerkleRootControlBlock, including the required parity bit of 1.
+ * ParseMerkleRootControlBlock, including the required parity bit of 1. The
+ * returned proof is a copy.
  */
 export function parseP2mrControlBlock(bytes: Uint8Array): P2mrControlBlock {
   checkControlBlockSize(bytes, P2MR_CONTROL_BLOCK_BASE_SIZE, 'P2MR');
@@ -237,7 +245,7 @@ export function parseP2mrControlBlock(bytes: Uint8Array): P2mrControlBlock {
   }
   return {
     leafVersion: bytes[0]! & LEAF_VERSION_MASK,
-    proof: bytes.slice(P2MR_CONTROL_BLOCK_BASE_SIZE),
+    proof: Uint8Array.from(bytes.subarray(P2MR_CONTROL_BLOCK_BASE_SIZE)),
   };
 }
 

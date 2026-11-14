@@ -78,13 +78,15 @@ export function parseBlockHeader(bytes: Uint8Array): PearlBlockHeader {
     );
   }
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // slice on a Node Buffer returns a view, so the copies are made explicitly.
+  const copy = (start: number, end: number): Uint8Array => Uint8Array.from(bytes.subarray(start, end));
   return {
     version: view.getInt32(0, true),
-    prevBlock: bytes.slice(4, 36),
-    merkleRoot: bytes.slice(36, 68),
+    prevBlock: copy(4, 36),
+    merkleRoot: copy(36, 68),
     timestamp: view.getUint32(68, true),
     bits: view.getUint32(72, true),
-    proofCommitment: bytes.slice(76, 108),
+    proofCommitment: copy(76, 108),
   };
 }
 

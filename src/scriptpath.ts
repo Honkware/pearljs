@@ -317,13 +317,17 @@ function finishTapscriptSignature(
     : Uint8Array.from([...signature, sighashType]);
 }
 
-/** Script-path witness: the leaf's arguments, then the script and control block. */
+/**
+ * Script-path witness: the leaf's arguments, then the script and control
+ * block. Every item is a copy, so a witness set on a transaction shares no
+ * memory with the script tree or the caller's buffers.
+ */
 export function scriptPathWitness(
   stack: readonly Uint8Array[],
   script: Uint8Array,
   controlBlock: Uint8Array,
 ): Uint8Array[] {
-  return [...stack, script, controlBlock];
+  return [...stack, script, controlBlock].map((item) => Uint8Array.from(item));
 }
 
 /**
@@ -633,7 +637,7 @@ export function prepareTaprootScriptPathInput(
     tapLeafScript: [
       {
         leafVersion: leaf.leafVersion,
-        script: leaf.script,
+        script: Uint8Array.from(leaf.script),
         controlBlock: taprootControlBlock(options.internalPubkey, options.tree, options.leafIndex),
       },
     ],
@@ -786,7 +790,7 @@ export function prepareP2mrScriptPathInput(
     tapLeafScript: [
       {
         leafVersion: leaf.leafVersion,
-        script: leaf.script,
+        script: Uint8Array.from(leaf.script),
         controlBlock: p2mrControlBlock(options.tree, options.leafIndex),
       },
     ],

@@ -476,7 +476,7 @@ export function createXmssSigner(
 
   const signNext = async (message: Uint8Array): Promise<Uint8Array> => {
     if (destroyed) throw new Error('this XMSS signer has been destroyed');
-    const index = await store.reserve(publicKey);
+    const index = await store.reserve(Uint8Array.from(publicKey));
     if (!Number.isInteger(index) || index < 0) {
       throw new Error(`XMSS index store returned ${String(index)}`);
     }
@@ -513,7 +513,8 @@ export function createXmssSigner(
   };
 
   return {
-    publicKey,
+    // A copy: the signer's own key must not change when a caller's does.
+    publicKey: Uint8Array.from(publicKey),
     async sign(message: Uint8Array): Promise<Uint8Array> {
       checkLength(message, XMSS_MESSAGE_LENGTH, 'XMSS message');
       const copy = Uint8Array.from(message);

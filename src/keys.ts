@@ -357,11 +357,11 @@ export function deriveSigningAccountFromSeed(
       const script = p2tr({ internalPubkey }).output;
       psbt.updateInput(inputIndex, {
         witnessUtxo: { script, value: options.value },
-        tapInternalKey: internalPubkey,
+        tapInternalKey: Uint8Array.from(internalPubkey),
         tapBip32Derivation: [
           {
             pubkey: internalPubkey,
-            masterFingerprint,
+            masterFingerprint: Uint8Array.from(masterFingerprint),
             path: `${path}/${change ? 1 : 0}/${options.index}`,
             leafHashes: [],
           },
