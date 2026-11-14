@@ -1,5 +1,6 @@
 export * from './address.js';
 export * from './amount.js';
+export * from './backend.js';
 export * from './block.js';
 export * from './blockheader.js';
 export * from './builder.js';
@@ -7,6 +8,7 @@ export * from './client.js';
 export * from './coinselect.js';
 export * from './consensus.js';
 export * from './crypto.js';
+export * from './discovery.js';
 export * from './gcs.js';
 export * from './inspect.js';
 export * from './invoice.js';

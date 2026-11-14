@@ -19,6 +19,10 @@
       "types": "./dist/amount.d.ts",
       "default": "./dist/amount.js"
     },
+    "./backend": {
+      "types": "./dist/backend.d.ts",
+      "default": "./dist/backend.js"
+    },
     "./block": {
       "types": "./dist/block.d.ts",
       "default": "./dist/block.js"
@@ -46,6 +50,10 @@
     "./crypto": {
       "types": "./dist/crypto.d.ts",
       "default": "./dist/crypto.js"
+    },
+    "./discovery": {
+      "types": "./dist/discovery.d.ts",
+      "default": "./dist/discovery.js"
     },
     "./gcs": {
       "types": "./dist/gcs.d.ts",
