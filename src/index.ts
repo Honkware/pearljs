@@ -22,6 +22,7 @@ export * from './scripttree.js';
 export * from './transaction.js';
 export * from './wif.js';
 export * from './xmss.js';
-export * from './coinselect.js';
 export * from './builder.js';
+export * from './coinselect.js';
+export * from './inspect.js';
 export * from './sweep.js';
