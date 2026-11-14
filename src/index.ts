@@ -7,4 +7,6 @@ export * from './keys.js';
 export * from './networks.js';
 export * from './payments.js';
 export * from './script.js';
+export * from './scriptpath.js';
+export * from './scripttree.js';
 export * from './transaction.js';

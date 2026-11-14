@@ -12,6 +12,13 @@ import { MAX_GRAIN } from './amount.js';
 import { fromOutputScript } from './address.js';
 import type { PearlNetwork } from './networks.js';
 import { p2tr } from './payments.js';
+import {
+  assertTaprootSighashType as assertSighashType,
+  signP2mrInput,
+  signTaprootScriptPathInput,
+} from './scriptpath.js';
+import type { Prevout } from './scriptpath.js';
+import type { ScriptTree } from './scripttree.js';
 
 const bip32 = BIP32Factory(ecc);
 
@@ -72,7 +79,27 @@ export interface PearlSignOptions {
   change?: boolean;
 }
 
-/** A BIP86 account that retains private keys for Taproot key-path spends. */
+export interface PearlScriptPathSignOptions {
+  index: number;
+  change?: boolean;
+  /** Hash of the tap leaf to sign, from assembleScriptTree. */
+  leafHash: Uint8Array;
+}
+
+export interface PearlP2mrSignOptions {
+  index: number;
+  change?: boolean;
+  prevouts: readonly Prevout[];
+  tree: ScriptTree;
+  leafIndex: number;
+  sighashType?: number;
+}
+
+/**
+ * A BIP86 account that retains private keys. Key-path spends sign with the
+ * BIP86-tweaked child key; script-path spends sign with the untweaked child
+ * key, which is the key derivePublicKey returns and a leaf script names.
+ */
 export interface PearlSigningAccount {
   readonly path: string;
   watchOnlyAccount(): PearlAccount;
@@ -80,6 +107,10 @@ export interface PearlSigningAccount {
   deriveAddress(index: number, change?: boolean): string;
   prepareInput(psbt: Psbt, inputIndex: number, options: PearlInputOptions): void;
   signInput(psbt: Psbt, inputIndex: number, options: PearlSignOptions): void;
+  /** Signs a P2TR script-path PSBT input; see signTaprootScriptPathInput. */
+  signScriptPathInput(psbt: Psbt, inputIndex: number, options: PearlScriptPathSignOptions): void;
+  /** Signs a P2MR input and sets its witness; see signP2mrInput. */
+  signP2mrInput(tx: Transaction, inputIndex: number, options: PearlP2mrSignOptions): void;
 }
 
 function assertNonHardenedIndex(value: number, label: string): void {
@@ -181,22 +212,6 @@ export function deriveAccountFromSeed(
   const master = bip32.fromSeed(seed, toBip32Params(network));
   const accountNode = master.derivePath(path);
   return toWatchOnlyAccount(accountNode, path, network);
-}
-
-const SIGHASH_TYPES = new Set([
-  Transaction.SIGHASH_DEFAULT,
-  Transaction.SIGHASH_ALL,
-  Transaction.SIGHASH_NONE,
-  Transaction.SIGHASH_SINGLE,
-  Transaction.SIGHASH_ALL | Transaction.SIGHASH_ANYONECANPAY,
-  Transaction.SIGHASH_NONE | Transaction.SIGHASH_ANYONECANPAY,
-  Transaction.SIGHASH_SINGLE | Transaction.SIGHASH_ANYONECANPAY,
-]);
-
-function assertSighashType(value: number): void {
-  if (!SIGHASH_TYPES.has(value)) {
-    throw new Error(`unsupported Taproot sighash type ${value}`);
-  }
 }
 
 function assertInputIndex(psbt: Psbt, inputIndex: number): void {
@@ -310,6 +325,19 @@ export function deriveSigningAccountFromSeed(
       if (!valid) {
         throw new Error(`invalid Taproot signature for PSBT input ${inputIndex}`);
       }
+    },
+    signScriptPathInput(
+      psbt: Psbt,
+      inputIndex: number,
+      options: PearlScriptPathSignOptions,
+    ): void {
+      assertInputIndex(psbt, inputIndex);
+      const child = deriveChild(options.index, options.change ?? false);
+      signTaprootScriptPathInput(psbt, inputIndex, child, options.leafHash);
+    },
+    signP2mrInput(tx: Transaction, inputIndex: number, options: PearlP2mrSignOptions): void {
+      const child = deriveChild(options.index, options.change ?? false);
+      signP2mrInput(tx, inputIndex, child, options);
     },
   };
 }

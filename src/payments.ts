@@ -18,6 +18,8 @@ const OP_2 = 0x52;
 export interface P2trPayment {
   name: 'p2tr';
   internalPubkey: Uint8Array;
+  /** Script tree root, present when the output commits to a tree. */
+  merkleRoot?: Uint8Array;
   output: Uint8Array;
 }
 
@@ -42,12 +44,18 @@ function checkProgram(bytes: Uint8Array, what: string): void {
 }
 
 /**
- * Key-path P2TR from a 32-byte x-only internal key. The output script is
+ * P2TR from a 32-byte x-only internal key and, for outputs with script
+ * paths, the root of a tree from assembleScriptTree. The output script is
  * OP_1 <tweaked key>; the tweak is computed by bitcoinjs with tiny-secp256k1.
  */
-export function p2tr(args: { internalPubkey: Uint8Array }): P2trPayment {
+export function p2tr(args: { internalPubkey: Uint8Array; merkleRoot?: Uint8Array }): P2trPayment {
   checkProgram(args.internalPubkey, 'internal pubkey');
-  const payment = payments.p2tr({ internalPubkey: args.internalPubkey });
+  if (args.merkleRoot !== undefined) checkProgram(args.merkleRoot, 'merkle root');
+  const payment = payments.p2tr(
+    args.merkleRoot === undefined
+      ? { internalPubkey: args.internalPubkey }
+      : { internalPubkey: args.internalPubkey, hash: args.merkleRoot },
+  );
   // bitcoinjs computes the tweak lazily, so touch output to surface an
   // invalid internal key here instead of at the call site later.
   const output = payment.output;
@@ -57,6 +65,7 @@ export function p2tr(args: { internalPubkey: Uint8Array }): P2trPayment {
   return {
     name: 'p2tr',
     internalPubkey: Uint8Array.from(args.internalPubkey),
+    ...(args.merkleRoot === undefined ? {} : { merkleRoot: Uint8Array.from(args.merkleRoot) }),
     output: Uint8Array.from(output),
   };
 }
