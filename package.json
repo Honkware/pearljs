@@ -47,6 +47,10 @@
       "types": "./dist/crypto.d.ts",
       "default": "./dist/crypto.js"
     },
+    "./gcs": {
+      "types": "./dist/gcs.d.ts",
+      "default": "./dist/gcs.js"
+    },
     "./inspect": {
       "types": "./dist/inspect.d.ts",
       "default": "./dist/inspect.js"
@@ -118,6 +122,10 @@
     "./wif": {
       "types": "./dist/wif.d.ts",
       "default": "./dist/wif.js"
+    },
+    "./ws": {
+      "types": "./dist/ws.d.ts",
+      "default": "./dist/ws.js"
     },
     "./xmss": {
       "types": "./dist/xmss.d.ts",
