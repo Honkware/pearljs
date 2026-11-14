@@ -10,6 +10,7 @@ export * from './message.js';
 export * from './networks.js';
 export * from './payments.js';
 export * from './policy.js';
+export * from './rpc.js';
 export * from './script.js';
 export * from './scriptpath.js';
 export * from './scripttools.js';
