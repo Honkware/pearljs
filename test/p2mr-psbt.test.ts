@@ -194,6 +194,54 @@ describe('P2MR script paths through PSBT', () => {
     expect(() => signTaprootScriptPathInput(psbt, 0, child, leafHash)).toThrow('signP2mrScriptPathInput');
   });
 
+  it('finalizes only verified signatures of keys the leaf pushes', () => {
+    const vector = vectorNamed('p2mr-1-leaf-default');
+    const leafHash = treeOf(vector.inputs[0]!).leaves[0]!.leafHash;
+    const good = finalizePsbt(parsePsbt(vector.signedPsbt));
+    const junk = { pubkey: new Uint8Array(32).fill(2), leafHash, signature: new Uint8Array(64).fill(9) };
+
+    // A signature for a key the leaf does not push is left out of the witness.
+    const extra = parsePsbt(vector.signedPsbt);
+    extra.data.inputs[0]!.tapScriptSig!.unshift(junk);
+    expect(serializeTransaction(finalizePsbt(extra))).toBe(serializeTransaction(good));
+
+    const onlyJunk = parsePsbt(vector.signedPsbt);
+    onlyJunk.data.inputs[0]!.tapScriptSig = [junk];
+    expect(() => finalizePsbt(onlyJunk)).toThrow('PSBT input 0 has no signature for a key its leaf pushes');
+
+    // A signature that does not verify would only be rejected by the node.
+    const key = bytesToHex(account.derivePublicKey(0));
+    for (const signature of [new Uint8Array(64).fill(1), new Uint8Array(63), new Uint8Array(65)]) {
+      const corrupted = parsePsbt(vector.signedPsbt);
+      corrupted.data.inputs[0]!.tapScriptSig![0]!.signature = signature;
+      expect(() => finalizePsbt(corrupted)).toThrow(`PSBT input 0 has an invalid script-path signature for key ${key}`);
+    }
+    const flipped = parsePsbt(vector.signedPsbt);
+    const original = flipped.data.inputs[0]!.tapScriptSig![0]!.signature;
+    flipped.data.inputs[0]!.tapScriptSig![0]!.signature = Uint8Array.from(original, (byte, i) => (i === 40 ? byte ^ 1 : byte));
+    expect(() => finalizePsbt(flipped)).toThrow('invalid script-path signature');
+
+    // A valid signature under another sighash type than its last byte claims.
+    const retyped = parsePsbt(vector.signedPsbt);
+    retyped.data.inputs[0]!.tapScriptSig![0]!.signature = Uint8Array.from([...original, Transaction.SIGHASH_ALL]);
+    expect(() => finalizePsbt(retyped)).toThrow('invalid script-path signature');
+  });
+
+  it('checks multi_a signatures and the leaf commitment before finalizing', () => {
+    const vector = vectorNamed('p2mr-multi-a-2-of-3-default');
+    const corrupted = parsePsbt(vector.signedPsbt);
+    const sig = corrupted.data.inputs[0]!.tapScriptSig![1]!;
+    sig.signature = Uint8Array.from(sig.signature, (byte, i) => (i === 0 ? byte ^ 1 : byte));
+    expect(() => finalizePsbt(corrupted)).toThrow(
+      `PSBT input 0 has an invalid script-path signature for key ${bytesToHex(sig.pubkey)}`,
+    );
+
+    const wrongProof = parsePsbt(vectorNamed('p2mr-4-leaves-third-all').signedPsbt);
+    const leaf = wrongProof.data.inputs[0]!.tapLeafScript![0]!;
+    leaf.controlBlock = Uint8Array.from([...leaf.controlBlock.slice(0, 33), ...leaf.controlBlock.slice(1, 33)]);
+    expect(() => finalizePsbt(wrongProof)).toThrow('P2MR merkle proof does not match');
+  });
+
   it('refuses a sighash type the PSBT brings unless the caller allows it', () => {
     const vector = vectorNamed('p2mr-1-leaf-default');
     const leafHash = treeOf(vector.inputs[0]!).leaves[0]!.leafHash;

@@ -66,4 +66,14 @@ describe('multi_a finalization', () => {
     const { psbt } = signedPsbt(expected, [1, 3]);
     expect(() => finalizePsbt(psbt)).toThrow('2 of the 3 signatures');
   });
+
+  it('refuses to finalize a signature that does not verify', () => {
+    const expected = vectors.multiASpends.find((item) => item.name === '3-of-5-signed-by-1-3-4')!;
+    const { psbt } = signedPsbt(expected);
+    const sig = psbt.data.inputs[0]!.tapScriptSig![0]!;
+    sig.signature = Uint8Array.from(sig.signature, (byte, i) => (i === 63 ? byte ^ 1 : byte));
+    expect(() => finalizePsbt(psbt)).toThrow(
+      `PSBT input 0 has an invalid script-path signature for key ${bytesToHex(sig.pubkey)}`,
+    );
+  });
 });
