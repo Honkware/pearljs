@@ -64,5 +64,23 @@ check('mnemonic generate and parse', () => {
 });
 check('hex seed input', () => p.parseSeedInput('ab'.repeat(32)).kind === 'hex');
 
+const checkAsync = async (name, fn) => {
+  try {
+    results[name] = (await fn()) === true ? 'pass' : 'FAIL';
+  } catch (error) {
+    results[name] = `ERROR ${error.message}`;
+  }
+};
+// IndexedDB and Web Locks requests never complete under --virtual-time-budget,
+// so the IndexedDB store is only checked to bundle here.
+check('indexeddb store bundles', () => typeof p.openIndexedDbStore === 'function' && typeof p.createMemoryStore === 'function');
+await checkAsync('keystore under WebCrypto', async () => {
+  const keystore = await p.createKeystore('pass', { kdf: { N: 1024 } });
+  await keystore.addSecret('seed', 'seed', new Uint8Array(32).fill(7));
+  const reopened = p.openKeystore(keystore.toJSON());
+  await reopened.unlock('pass');
+  return reopened.useSecret('seed', (bytes) => bytes.every((b) => b === 7));
+});
+
 window.__pearljs = results;
 document.getElementById('out').textContent = JSON.stringify(results, null, 2);
