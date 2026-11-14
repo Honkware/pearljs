@@ -8,6 +8,7 @@
 // OP_CHECKSIGADD in any other shape is refused rather than guessed at.
 
 import { OP_CODES } from './opcodes.js';
+import { encodeScriptNumber, scriptPush } from './script.js';
 import { decodeScriptNumber, decompileScript } from './scripttools.js';
 import type { ScriptChunk } from './scripttools.js';
 
@@ -16,6 +17,35 @@ const isData = (chunk: ScriptChunk | undefined): chunk is Uint8Array => chunk in
 export interface MultiALeaf {
   keys: Uint8Array[];
   threshold: number;
+}
+
+// Bitcoin Core's MAX_PUBKEYS_PER_MULTI_A, which keeps a full spend under
+// tapscript's stack limit of 1000 items.
+const MAX_MULTI_A_KEYS = 999;
+
+/**
+ * A k-of-n multi_a leaf over 32-byte x-only keys, in the order given. The
+ * threshold is a small-int opcode up to 16 and a minimal push above, the
+ * forms Pearl's psbt package recognises. Duplicate keys are refused.
+ */
+export function multiAScript(keys: readonly Uint8Array[], threshold: number): Uint8Array {
+  if (keys.length === 0 || keys.length > MAX_MULTI_A_KEYS) {
+    throw new RangeError(`multi_a takes 1 to ${MAX_MULTI_A_KEYS} keys, got ${keys.length}`);
+  }
+  if (!Number.isInteger(threshold) || threshold < 1 || threshold > keys.length) {
+    throw new RangeError(`multi_a threshold must be 1 to ${keys.length}, got ${threshold}`);
+  }
+  const seen = new Set<string>();
+  const parts: number[] = [];
+  keys.forEach((key, i) => {
+    if (key.length !== 32) throw new Error(`multi_a key ${i} must be 32 bytes, got ${key.length}`);
+    const id = key.join(',');
+    if (seen.has(id)) throw new Error(`multi_a key ${i} is a duplicate`);
+    seen.add(id);
+    parts.push(...scriptPush(key), i === 0 ? OP_CODES.OP_CHECKSIG : OP_CODES.OP_CHECKSIGADD);
+  });
+  parts.push(...scriptPush(encodeScriptNumber(BigInt(threshold))), OP_CODES.OP_NUMEQUAL);
+  return Uint8Array.from(parts);
 }
 
 /** The keys and threshold of a multi_a leaf, or null for any other leaf. */

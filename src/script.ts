@@ -231,6 +231,88 @@ export function xmssLeafScript(xmssPublicKey: Uint8Array): Uint8Array {
   return Uint8Array.from([...scriptPush(xmssPublicKey), OP_CODES.OP_CHECKXMSSSIG]);
 }
 
+/** A BIP68 relative lock: a number of blocks, or seconds in 512-second units. */
+export type RelativeLock = { blocks: number } | { seconds: number };
+
+/**
+ * The input sequence for a relative lock, like blockchain.LockTimeToSequence.
+ * Seconds round down to a multiple of 512, so pass a multiple of 512 to get
+ * the lock asked for. The lock only applies to version 2 transactions.
+ */
+export function encodeSequence(lock: RelativeLock): number {
+  if ('blocks' in lock) {
+    if (!Number.isInteger(lock.blocks) || lock.blocks < 0 || lock.blocks > SEQUENCE_LOCKTIME_MASK) {
+      throw new RangeError(`a relative lock must be 0 to ${SEQUENCE_LOCKTIME_MASK} blocks, got ${lock.blocks}`);
+    }
+    return lock.blocks;
+  }
+  const units = Math.floor(lock.seconds / 2 ** SEQUENCE_LOCKTIME_GRANULARITY);
+  if (!Number.isInteger(lock.seconds) || lock.seconds < 0 || units > SEQUENCE_LOCKTIME_MASK) {
+    throw new RangeError(
+      `a relative lock must be 0 to ${SEQUENCE_LOCKTIME_MASK << SEQUENCE_LOCKTIME_GRANULARITY} seconds, got ${lock.seconds}`,
+    );
+  }
+  return (SEQUENCE_LOCKTIME_IS_SECONDS | units) >>> 0;
+}
+
+/**
+ * The relative lock an input sequence sets, the way Pearl's calcSequenceLock
+ * reads it, or null when the disable flag is set.
+ */
+export function decodeSequence(sequence: number): RelativeLock | null {
+  if (!Number.isInteger(sequence) || sequence < 0 || sequence > 0xffffffff) {
+    throw new RangeError(`sequence must be an unsigned 32-bit integer, got ${sequence}`);
+  }
+  if ((sequence & SEQUENCE_LOCKTIME_DISABLED) !== 0) return null;
+  const value = sequence & SEQUENCE_LOCKTIME_MASK;
+  if ((sequence & SEQUENCE_LOCKTIME_IS_SECONDS) !== 0) {
+    return { seconds: value * 2 ** SEQUENCE_LOCKTIME_GRANULARITY };
+  }
+  return { blocks: value };
+}
+
+function lockPrefix(value: number, opcode: number): Uint8Array {
+  return Uint8Array.from([...scriptPush(encodeScriptNumber(BigInt(value))), opcode, OP_CODES.OP_DROP]);
+}
+
+function concatScripts(prefix: Uint8Array, script: Uint8Array): Uint8Array {
+  const out = new Uint8Array(prefix.length + script.length);
+  out.set(prefix, 0);
+  out.set(script, prefix.length);
+  return out;
+}
+
+/**
+ * <locktime> OP_CHECKLOCKTIMEVERIFY OP_DROP followed by script, usually a
+ * checksigScript or multiAScript. A locktime under LOCKTIME_THRESHOLD is a
+ * block height and one at or above it a Unix time; the spending transaction
+ * needs a locktime of the same kind at least as large and an input sequence
+ * other than 0xffffffff.
+ */
+export function cltvScript(locktime: number, script: Uint8Array): Uint8Array {
+  if (!Number.isInteger(locktime) || locktime < 0 || locktime > 0xffffffff) {
+    throw new RangeError(`locktime must be an unsigned 32-bit integer, got ${locktime}`);
+  }
+  return concatScripts(lockPrefix(locktime, OP_CODES.OP_CHECKLOCKTIMEVERIFY), script);
+}
+
+/**
+ * <sequence> OP_CHECKSEQUENCEVERIFY OP_DROP followed by script, with the
+ * sequence from encodeSequence. The spending transaction must be version 2
+ * and the input's sequence a lock of the same kind at least as long.
+ */
+export function csvScript(sequence: number, script: Uint8Array): Uint8Array {
+  if (
+    !Number.isInteger(sequence) ||
+    sequence < 0 ||
+    (sequence & ~(SEQUENCE_LOCKTIME_IS_SECONDS | SEQUENCE_LOCKTIME_MASK)) !== 0
+  ) {
+    // Pearl ignores the other bits, and with the disable flag set the lock does nothing.
+    throw new RangeError(`sequence must come from encodeSequence, got ${sequence}`);
+  }
+  return concatScripts(lockPrefix(sequence, OP_CODES.OP_CHECKSEQUENCEVERIFY), script);
+}
+
 function compareBytes(a: Uint8Array, b: Uint8Array): number {
   const length = Math.min(a.length, b.length);
   for (let i = 0; i < length; i += 1) {
