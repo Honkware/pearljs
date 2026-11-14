@@ -20,6 +20,7 @@ export * from './discovery.js';
 export * from './errors.js';
 export * from './gcs.js';
 export * from './inspect.js';
+export * from './interpreter.js';
 export * from './invoice.js';
 export * from './keys.js';
 export * from './keystore.js';

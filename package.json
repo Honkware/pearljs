@@ -67,6 +67,10 @@
       "types": "./dist/inspect.d.ts",
       "default": "./dist/inspect.js"
     },
+    "./interpreter": {
+      "types": "./dist/interpreter.d.ts",
+      "default": "./dist/interpreter.js"
+    },
     "./invoice": {
       "types": "./dist/invoice.d.ts",
       "default": "./dist/invoice.js"
