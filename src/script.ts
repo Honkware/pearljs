@@ -24,6 +24,7 @@ export const OP_CODES = {
   OP_CHECKMULTISIG: 0xae,
   OP_CHECKMULTISIGVERIFY: 0xaf,
   OP_CHECKSIGADD: 0xba,
+  OP_CHECKXMSSSIG: 0xde,
 } as const;
 
 // Locktime and sequence constants from the Pearl wire format.
@@ -236,6 +237,14 @@ export function checksigScript(xOnlyPubkey: Uint8Array): Uint8Array {
     );
   }
   return Uint8Array.from([...scriptPush(xOnlyPubkey), OP_CODES.OP_CHECKSIG]);
+}
+
+/** XMSS tapscript leaf: <64-byte XMSS public key> OP_CHECKXMSSSIG (txscript.XMSSLeafScript). */
+export function xmssLeafScript(xmssPublicKey: Uint8Array): Uint8Array {
+  if (xmssPublicKey.length !== 64) {
+    throw new Error(`XMSS public key must be 64 bytes, got ${xmssPublicKey.length}`);
+  }
+  return Uint8Array.from([...scriptPush(xmssPublicKey), OP_CODES.OP_CHECKXMSSSIG]);
 }
 
 function compareBytes(a: Uint8Array, b: Uint8Array): number {

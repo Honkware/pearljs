@@ -17,14 +17,16 @@ import type { Psbt, Signer } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { MAX_GRAIN } from './amount.js';
 import { p2tr } from './payments.js';
-import { classifyOutputScript, taggedHash, tapLeafHash } from './script.js';
+import { classifyOutputScript, taggedHash, tapLeafHash, xmssLeafScript } from './script.js';
 import {
   p2mrControlBlock,
   taprootControlBlock,
   verifyP2mrLeafCommitment,
   verifyTaprootLeafCommitment,
 } from './scripttree.js';
-import type { ScriptTree } from './scripttree.js';
+import type { ScriptTree, ScriptTreeLeaf } from './scripttree.js';
+import { XMSS_SIGNATURE_LENGTH } from './xmss.js';
+import type { XmssSigner } from './xmss.js';
 
 /**
  * Anything that can make a BIP340 Schnorr signature for a tapscript key,
@@ -320,6 +322,32 @@ export function signP2mrInput(
   signer: TapscriptSigner,
   options: P2mrSignOptions,
 ): void {
+  const sighashType = options.sighashType ?? Transaction.SIGHASH_DEFAULT;
+  const { leaf, controlBlock } = prepareP2mrSpend(tx, inputIndex, options);
+  if (!scriptPushesKey(leaf.script, xOnly(signer.publicKey))) {
+    throw new Error('the leaf script does not contain the signer key');
+  }
+  checkInputValues(tx, options, sighashType);
+  const signature = signTapscript(
+    tx,
+    inputIndex,
+    options.prevouts,
+    leaf.script,
+    signer,
+    sighashType,
+  );
+  tx.setWitness(inputIndex, scriptPathWitness([signature], leaf.script, controlBlock));
+}
+
+/**
+ * Structural checks shared by the P2MR signers: the input spends a P2MR
+ * output that commits to the tree and has an empty scriptSig.
+ */
+function prepareP2mrSpend(
+  tx: Transaction,
+  inputIndex: number,
+  options: P2mrSignOptions,
+): { leaf: ScriptTreeLeaf; controlBlock: Uint8Array } {
   const prevout = options.prevouts[inputIndex];
   if (prevout === undefined) {
     throw new RangeError(`no prevout for input ${inputIndex}`);
@@ -331,9 +359,6 @@ export function signP2mrInput(
   if (leaf === undefined) {
     throw new RangeError(`script tree has no leaf ${options.leafIndex}`);
   }
-  if (!scriptPushesKey(leaf.script, xOnly(signer.publicKey))) {
-    throw new Error('the leaf script does not contain the signer key');
-  }
   const controlBlock = p2mrControlBlock(options.tree, options.leafIndex);
   verifyP2mrLeafCommitment(controlBlock, prevout.script.slice(2), leaf.script);
   const input = tx.ins[inputIndex];
@@ -343,7 +368,14 @@ export function signP2mrInput(
   if (input.script.length !== 0) {
     throw new Error('P2MR inputs must have an empty scriptSig');
   }
-  const sighashType = options.sighashType ?? Transaction.SIGHASH_DEFAULT;
+  return { leaf, controlBlock };
+}
+
+/**
+ * Checks the input values of an all-P2MR spend against the previous
+ * transactions, or refuses unless trustPrevouts is set.
+ */
+function checkInputValues(tx: Transaction, options: P2mrSignOptions, sighashType: number): void {
   if (!coversInputValues(options.prevouts, sighashType) && options.trustPrevouts !== true) {
     if (options.previousTransactions === undefined) {
       throw new Error(
@@ -353,15 +385,51 @@ export function signP2mrInput(
     }
     checkPrevouts(tx, options.prevouts, options.previousTransactions);
   }
-  const signature = signTapscript(
-    tx,
-    inputIndex,
-    options.prevouts,
-    leaf.script,
-    signer,
-    sighashType,
+}
+
+// txscript.XMSSSigChunks: OP_CHECKXMSSSIG pops the signature as five
+// 468-byte elements so each fits the 520-byte stack element limit.
+const XMSS_SIGNATURE_CHUNKS = 5;
+
+/** Witness for an XMSS leaf: the signature in five chunks, then script and control block. */
+export function xmssScriptPathWitness(
+  signature: Uint8Array,
+  script: Uint8Array,
+  controlBlock: Uint8Array,
+): Uint8Array[] {
+  if (signature.length !== XMSS_SIGNATURE_LENGTH) {
+    throw new Error(`XMSS signature must be ${XMSS_SIGNATURE_LENGTH} bytes, got ${signature.length}`);
+  }
+  const size = XMSS_SIGNATURE_LENGTH / XMSS_SIGNATURE_CHUNKS;
+  const chunks = Array.from({ length: XMSS_SIGNATURE_CHUNKS }, (_, i) =>
+    signature.slice(i * size, (i + 1) * size),
   );
-  tx.setWitness(inputIndex, scriptPathWitness([signature], leaf.script, controlBlock));
+  return scriptPathWitness(chunks, script, controlBlock);
+}
+
+export type XmssP2mrSignOptions = Omit<P2mrSignOptions, 'sighashType'>;
+
+/**
+ * Spends a P2MR input through an XMSS leaf (xmssLeafScript of the signer's
+ * key). OP_CHECKXMSSSIG only accepts SIGHASH_DEFAULT, so the
+ * previous-transaction check applies to every all-P2MR spend. The signer
+ * reserves a fresh index before it signs.
+ */
+export async function signXmssP2mrInput(
+  tx: Transaction,
+  inputIndex: number,
+  signer: XmssSigner,
+  options: XmssP2mrSignOptions,
+): Promise<void> {
+  const sighashType = Transaction.SIGHASH_DEFAULT;
+  const { leaf, controlBlock } = prepareP2mrSpend(tx, inputIndex, options);
+  if (!equalBytes(leaf.script, xmssLeafScript(signer.publicKey))) {
+    throw new Error('the leaf script is not the XMSS leaf of the signer key');
+  }
+  checkInputValues(tx, options, sighashType);
+  const hash = tapscriptSighash(tx, inputIndex, options.prevouts, leaf.leafHash, sighashType);
+  const signature = await signer.sign(hash);
+  tx.setWitness(inputIndex, xmssScriptPathWitness(signature, leaf.script, controlBlock));
 }
 
 export interface TaprootScriptPathInputOptions {
