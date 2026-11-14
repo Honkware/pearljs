@@ -238,48 +238,39 @@ function genLeaf(skSeed: Uint8Array, pubSeed: Uint8Array, ltreeAddr: Address, ot
   return lTree(wotsPkgen(skSeed, pubSeed, otsAddr), pubSeed, ltreeAddr);
 }
 
-/** Root of the tree and the authentication path for leafIdx (treehash). */
-function treehash(
-  skSeed: Uint8Array,
-  pubSeed: Uint8Array,
-  leafIdx: number,
-  subtreeAddr: Address,
-): { root: Uint8Array; authPath: Uint8Array[] } {
+/**
+ * Every node of the tree, levels[0] being the 32 leaves and levels[5] the
+ * root. Node addresses follow treehash in the reference code: a parent at
+ * level L and index j hashes with tree height L - 1 and tree index j. Keeping
+ * the levels lets a signer read authentication paths instead of rebuilding
+ * the tree, which is almost all of the work in a signature.
+ */
+function buildTree(skSeed: Uint8Array, pubSeed: Uint8Array): Uint8Array[][] {
   const otsAddr = newAddress(ADDR_TYPE_OTS);
   const ltreeAddr = newAddress(ADDR_TYPE_LTREE);
   const nodeAddr = newAddress(ADDR_TYPE_HASHTREE);
-  for (const addr of [otsAddr, ltreeAddr, nodeAddr]) {
-    addr[0] = subtreeAddr[0]!;
-    addr[1] = subtreeAddr[1]!;
-    addr[2] = subtreeAddr[2]!;
-  }
-  const stack: Uint8Array[] = [];
-  const heights: number[] = [];
-  const authPath: Uint8Array[] = new Array<Uint8Array>(TREE_HEIGHT).fill(new Uint8Array(N));
+  const leaves: Uint8Array[] = [];
   for (let idx = 0; idx < 1 << TREE_HEIGHT; idx += 1) {
     ltreeAddr[4] = idx;
     otsAddr[4] = idx;
-    stack.push(genLeaf(skSeed, pubSeed, ltreeAddr, otsAddr));
-    heights.push(0);
-    if ((leafIdx ^ 1) === idx) {
-      authPath[0] = stack[stack.length - 1]!;
-    }
-    while (stack.length >= 2 && heights[heights.length - 1] === heights[heights.length - 2]) {
-      const height = heights[heights.length - 1]!;
-      const treeIdx = idx >> (height + 1);
-      nodeAddr[5] = height;
-      nodeAddr[6] = treeIdx;
-      const right = stack.pop()!;
-      const left = stack.pop()!;
-      heights.pop();
-      stack.push(thashH(concat([left, right]), pubSeed, nodeAddr));
-      heights[heights.length - 1] = height + 1;
-      if (((leafIdx >> (height + 1)) ^ 1) === treeIdx) {
-        authPath[height + 1] = stack[stack.length - 1]!;
-      }
-    }
+    leaves.push(genLeaf(skSeed, pubSeed, ltreeAddr, otsAddr));
   }
-  return { root: stack[0]!, authPath };
+  const levels = [leaves];
+  for (let height = 1; height <= TREE_HEIGHT; height += 1) {
+    const below = levels[height - 1]!;
+    const level: Uint8Array[] = [];
+    for (let j = 0; j < below.length / 2; j += 1) {
+      nodeAddr[5] = height - 1;
+      nodeAddr[6] = j;
+      level.push(thashH(concat([below[2 * j]!, below[2 * j + 1]!]), pubSeed, nodeAddr));
+    }
+    levels.push(level);
+  }
+  return levels;
+}
+
+function authPath(levels: Uint8Array[][], leafIdx: number): Uint8Array[] {
+  return Array.from({ length: TREE_HEIGHT }, (_, height) => levels[height]![(leafIdx >> height) ^ 1]!);
 }
 
 function computeRoot(
@@ -312,13 +303,20 @@ function checkLength(bytes: Uint8Array, length: number, what: string): void {
 
 /** Derive a key pair from seeds, as Pearl's xmss.Keygen does. */
 export function xmssKeygen(privateSeed: Uint8Array, publicSeed: Uint8Array): XmssKeyPair {
+  return keyPairWithTree(privateSeed, publicSeed).pair;
+}
+
+function keyPairWithTree(
+  privateSeed: Uint8Array,
+  publicSeed: Uint8Array,
+): { pair: XmssKeyPair; levels: Uint8Array[][] } {
   checkLength(privateSeed, XMSS_PRIVATE_SEED_LENGTH, 'XMSS private seed');
   checkLength(publicSeed, XMSS_PUBLIC_SEED_LENGTH, 'XMSS public seed');
-  const skSeed = privateSeed.slice(0, N);
-  const { root } = treehash(skSeed, publicSeed, 0, newAddress(0));
+  const levels = buildTree(privateSeed.slice(0, N), publicSeed);
+  const root = levels[TREE_HEIGHT]![0]!;
   return {
-    publicKey: concat([root, publicSeed]),
-    secretKey: concat([privateSeed, root, publicSeed]),
+    pair: { publicKey: concat([root, publicSeed]), secretKey: concat([privateSeed, root, publicSeed]) },
+    levels,
   };
 }
 
@@ -328,6 +326,15 @@ export function xmssKeygen(privateSeed: Uint8Array, publicSeed: Uint8Array): Xms
  */
 export function xmssSign(secretKey: Uint8Array, msgUid: number, message: Uint8Array): Uint8Array {
   checkLength(secretKey, XMSS_SECRET_KEY_LENGTH, 'XMSS secret key');
+  return signWithTree(secretKey, buildTree(secretKey.slice(0, N), secretKey.slice(3 * N, 4 * N)), msgUid, message);
+}
+
+function signWithTree(
+  secretKey: Uint8Array,
+  levels: Uint8Array[][],
+  msgUid: number,
+  message: Uint8Array,
+): Uint8Array {
   checkLength(message, XMSS_MESSAGE_LENGTH, 'XMSS message');
   if (!Number.isInteger(msgUid) || msgUid < 0 || msgUid >= XMSS_MAX_SIGNATURES) {
     throw new RangeError(`XMSS index must be an integer from 0 to ${XMSS_MAX_SIGNATURES - 1}`);
@@ -342,8 +349,7 @@ export function xmssSign(secretKey: Uint8Array, msgUid: number, message: Uint8Ar
   setTreeAddr(otsAddr, 0);
   otsAddr[4] = msgUid;
   const wotsSig = wotsSign(mhash, skSeed, pubSeed, otsAddr);
-  const { authPath } = treehash(skSeed, pubSeed, msgUid, otsAddr);
-  return concat([toBytes(msgUid, INDEX_BYTES), r, ...wotsSig, ...authPath]);
+  return concat([toBytes(msgUid, INDEX_BYTES), r, ...wotsSig, ...authPath(levels, msgUid)]);
 }
 
 /** Verify a signature over a 32-byte message, as Pearl's xmss.Verify does. */
@@ -404,7 +410,11 @@ export function createXmssSigner(
   publicSeed: Uint8Array,
   store: XmssIndexStore,
 ): XmssSigner {
-  const { publicKey, secretKey } = xmssKeygen(privateSeed, publicSeed);
+  // The tree is kept, so each signature only computes its WOTS chains.
+  const {
+    pair: { publicKey, secretKey },
+    levels,
+  } = keyPairWithTree(privateSeed, publicSeed);
   return {
     publicKey,
     async sign(message: Uint8Array): Promise<Uint8Array> {
@@ -416,7 +426,7 @@ export function createXmssSigner(
       if (index >= XMSS_MAX_SIGNATURES) {
         throw new Error(`this XMSS key has used all ${XMSS_MAX_SIGNATURES} of its signatures`);
       }
-      const signature = xmssSign(secretKey, index, message);
+      const signature = signWithTree(secretKey, levels, index, message);
       if (!xmssVerify(publicKey, message, signature)) {
         throw new Error('XMSS signature failed verification');
       }

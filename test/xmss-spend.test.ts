@@ -16,6 +16,7 @@ import {
   transactionId,
   xmssKeygen,
   xmssLeafScript,
+  xmssVerify,
 } from '../src/index.js';
 import type { XmssIndexStore } from '../src/index.js';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
@@ -115,6 +116,16 @@ describe('XMSS signer indices', () => {
     const second = await signer.sign(message);
     expect(bytesToHex(first.slice(0, 4))).toBe('00000000');
     expect(bytesToHex(second.slice(0, 4))).toBe('00000001');
+  });
+
+  it('signs at every index from one cached tree, then refuses', async () => {
+    const signer = createXmssSigner(...seeds, createMemoryXmssIndexStore());
+    for (let index = 0; index < 31; index += 1) {
+      const signature = await signer.sign(message);
+      expect(bytesToHex(signature.slice(0, 4))).toBe(index.toString(16).padStart(8, '0'));
+      expect(xmssVerify(signer.publicKey, message, signature)).toBe(true);
+    }
+    await expect(signer.sign(message)).rejects.toThrow('used all 31 of its signatures');
   });
 
   it('refuses once the key has used its 31 signatures', async () => {
