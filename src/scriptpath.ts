@@ -13,7 +13,7 @@
 
 import { sha256 } from '@noble/hashes/sha2';
 import { Transaction } from 'bitcoinjs-lib';
-import type { Psbt, Signer } from 'bitcoinjs-lib';
+import type { Psbt } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { MAX_GRAIN } from './amount.js';
 import { p2tr } from './payments.js';
@@ -36,6 +36,12 @@ import type { XmssSigner } from './xmss.js';
 export interface TapscriptSigner {
   publicKey: Uint8Array;
   signSchnorr(hash: Uint8Array): Uint8Array;
+}
+
+/** A signer that answers asynchronously, such as a hardware wallet. */
+export interface TapscriptSignerAsync {
+  publicKey: Uint8Array;
+  signSchnorr(hash: Uint8Array): Promise<Uint8Array>;
 }
 
 /** A spent output: its script and value in grains. */
@@ -243,8 +249,30 @@ export function signTapscript(
   sighashType: number = Transaction.SIGHASH_DEFAULT,
 ): Uint8Array {
   const hash = tapscriptSighash(tx, inputIndex, prevouts, tapLeafHash(script), sighashType);
-  const signature = signer.signSchnorr(hash);
-  if (!ecc.verifySchnorr(hash, xOnly(signer.publicKey), signature)) {
+  return finishTapscriptSignature(hash, signer.publicKey, signer.signSchnorr(hash), sighashType, inputIndex);
+}
+
+/** signTapscript for a signer that answers asynchronously. */
+export async function signTapscriptAsync(
+  tx: Transaction,
+  inputIndex: number,
+  prevouts: readonly Prevout[],
+  script: Uint8Array,
+  signer: TapscriptSignerAsync,
+  sighashType: number = Transaction.SIGHASH_DEFAULT,
+): Promise<Uint8Array> {
+  const hash = tapscriptSighash(tx, inputIndex, prevouts, tapLeafHash(script), sighashType);
+  return finishTapscriptSignature(hash, signer.publicKey, await signer.signSchnorr(hash), sighashType, inputIndex);
+}
+
+function finishTapscriptSignature(
+  hash: Uint8Array,
+  publicKey: Uint8Array,
+  signature: Uint8Array,
+  sighashType: number,
+  inputIndex: number,
+): Uint8Array {
+  if (!ecc.verifySchnorr(hash, xOnly(publicKey), signature)) {
     throw new Error(`invalid tapscript signature for input ${inputIndex}`);
   }
   return sighashType === Transaction.SIGHASH_DEFAULT
@@ -322,21 +350,36 @@ export function signP2mrInput(
   signer: TapscriptSigner,
   options: P2mrSignOptions,
 ): void {
+  const { leaf, controlBlock, sighashType } = checkP2mrSchnorrSpend(tx, inputIndex, signer.publicKey, options);
+  const signature = signTapscript(tx, inputIndex, options.prevouts, leaf.script, signer, sighashType);
+  tx.setWitness(inputIndex, scriptPathWitness([signature], leaf.script, controlBlock));
+}
+
+/** signP2mrInput for a signer that answers asynchronously. */
+export async function signP2mrInputAsync(
+  tx: Transaction,
+  inputIndex: number,
+  signer: TapscriptSignerAsync,
+  options: P2mrSignOptions,
+): Promise<void> {
+  const { leaf, controlBlock, sighashType } = checkP2mrSchnorrSpend(tx, inputIndex, signer.publicKey, options);
+  const signature = await signTapscriptAsync(tx, inputIndex, options.prevouts, leaf.script, signer, sighashType);
+  tx.setWitness(inputIndex, scriptPathWitness([signature], leaf.script, controlBlock));
+}
+
+function checkP2mrSchnorrSpend(
+  tx: Transaction,
+  inputIndex: number,
+  publicKey: Uint8Array,
+  options: P2mrSignOptions,
+): { leaf: ScriptTreeLeaf; controlBlock: Uint8Array; sighashType: number } {
   const sighashType = options.sighashType ?? Transaction.SIGHASH_DEFAULT;
   const { leaf, controlBlock } = prepareP2mrSpend(tx, inputIndex, options);
-  if (!scriptPushesKey(leaf.script, xOnly(signer.publicKey))) {
+  if (!scriptPushesKey(leaf.script, xOnly(publicKey))) {
     throw new Error('the leaf script does not contain the signer key');
   }
   checkInputValues(tx, options, sighashType);
-  const signature = signTapscript(
-    tx,
-    inputIndex,
-    options.prevouts,
-    leaf.script,
-    signer,
-    sighashType,
-  );
-  tx.setWitness(inputIndex, scriptPathWitness([signature], leaf.script, controlBlock));
+  return { leaf, controlBlock, sighashType };
 }
 
 /**
@@ -492,6 +535,42 @@ export function signTaprootScriptPathInput(
   signer: TapscriptSigner,
   leafHash: Uint8Array,
 ): void {
+  const sighashType = checkTaprootScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash);
+  psbt.signTaprootInput(inputIndex, schnorrOnlySigner(signer), leafHash, [sighashType]);
+  checkSignedInput(psbt, inputIndex);
+}
+
+/** signTaprootScriptPathInput for a signer that answers asynchronously. */
+export async function signTaprootScriptPathInputAsync(
+  psbt: Psbt,
+  inputIndex: number,
+  signer: TapscriptSignerAsync,
+  leafHash: Uint8Array,
+): Promise<void> {
+  const sighashType = checkTaprootScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash);
+  await psbt.signTaprootInputAsync(inputIndex, schnorrOnlySigner(signer), leafHash, [sighashType]);
+  checkSignedInput(psbt, inputIndex);
+}
+
+// bitcoinjs signers must offer ECDSA too; tapscript never asks for it.
+function schnorrOnlySigner<T extends TapscriptSigner | TapscriptSignerAsync>(
+  signer: T,
+): { publicKey: Uint8Array; sign(): never; signSchnorr: T['signSchnorr'] } {
+  return {
+    publicKey: signer.publicKey,
+    sign(): never {
+      throw new Error('tapscript signers only produce Schnorr signatures');
+    },
+    signSchnorr: (hash: Uint8Array) => signer.signSchnorr(hash),
+  } as { publicKey: Uint8Array; sign(): never; signSchnorr: T['signSchnorr'] };
+}
+
+function checkTaprootScriptPathInput(
+  psbt: Psbt,
+  inputIndex: number,
+  publicKey: Uint8Array,
+  leafHash: Uint8Array,
+): number {
   const input = psbt.data.inputs[inputIndex];
   if (!Number.isInteger(inputIndex) || input === undefined) {
     throw new RangeError(`PSBT input index ${inputIndex} is out of range`);
@@ -514,19 +593,15 @@ export function signTaprootScriptPathInput(
     throw new Error(`PSBT input ${inputIndex} has no tap leaf with that hash`);
   }
   verifyTaprootLeafCommitment(leaf.controlBlock, prevScript.slice(2), leaf.script);
-  if (!scriptPushesKey(leaf.script, xOnly(signer.publicKey))) {
+  if (!scriptPushesKey(leaf.script, xOnly(publicKey))) {
     throw new Error('the leaf script does not contain the signer key');
   }
   const sighashType = input.sighashType ?? Transaction.SIGHASH_DEFAULT;
   assertTaprootSighashType(sighashType);
-  const bitcoinjsSigner: Signer = {
-    publicKey: signer.publicKey,
-    sign(): Uint8Array {
-      throw new Error('tapscript signers only produce Schnorr signatures');
-    },
-    signSchnorr: (hash) => signer.signSchnorr(hash),
-  };
-  psbt.signTaprootInput(inputIndex, bitcoinjsSigner, leafHash, [sighashType]);
+  return sighashType;
+}
+
+function checkSignedInput(psbt: Psbt, inputIndex: number): void {
   const valid = psbt.validateSignaturesOfInput(inputIndex, (pubkey, hash, signature) =>
     ecc.verifySchnorr(hash, pubkey, signature),
   );
