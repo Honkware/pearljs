@@ -53,7 +53,7 @@ export interface SpendableOptions {
 }
 
 /** wallet.calcConf: confirmations of an output from its block height, 0 when unconfirmed or above the tip. */
-export function confirmations(height: number | undefined, tipHeight: number): number {
+export function confirmationsFromHeight(height: number | undefined, tipHeight: number): number {
   if (height === undefined || height < 0 || height > tipHeight) return 0;
   return tipHeight - height + 1;
 }

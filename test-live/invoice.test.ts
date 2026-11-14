@@ -141,7 +141,7 @@ describeLive('invoices over pearld', () => {
     // so a client that pages through them blindly misses some now and then.
     for (let attempt = 0; attempt < 10; attempt++) {
       for (const pageSize of [1, 3, 100]) {
-        const activity = await pearldChainClient(pearld, pageSize).getAddressActivity(address(163));
+        const activity = await pearldChainClient(pearld, { pageSize }).getAddressActivity(address(163));
         expect([...activity].sort(byTxid)).toEqual([...expected].sort(byTxid));
       }
     }

@@ -28,9 +28,8 @@ import type { PearlNetwork } from './networks.js';
 import { signMessage } from './message.js';
 import { p2tr } from './payments.js';
 import { classifyOutputScript } from './script.js';
+import { assertTaprootSighashType as assertSighashType, psbtSighashType } from './internal/sighash.js';
 import {
-  assertTaprootSighashType as assertSighashType,
-  psbtSighashType,
   signP2mrInput,
   signP2mrScriptPathInput,
   signTaprootScriptPathInput,

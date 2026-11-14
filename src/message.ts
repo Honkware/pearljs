@@ -27,7 +27,7 @@ import * as ecc from 'tiny-secp256k1';
 import { decodeAddress } from './address.js';
 import type { PearlNetwork } from './networks.js';
 import { OP_CODES, scriptPush, taggedHash } from './script.js';
-import { assertTaprootSighashType } from './scriptpath.js';
+import { assertTaprootSighashType } from './internal/sighash.js';
 import { serializeWitness } from './transaction.js';
 import { fromBase64 } from './internal/bytes.js';
 import { PearlError, SigningError } from './errors.js';

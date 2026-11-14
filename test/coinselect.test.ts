@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   arrangeCoins,
   COINBASE_MATURITY,
-  confirmations,
+  confirmationsFromHeight,
   DEFAULT_RELAY_FEE_RATE,
   InsufficientFundsError,
   isDust,
@@ -259,11 +259,11 @@ describe('spendable outputs', () => {
   });
 
   it('counts confirmations as Oyster does', () => {
-    expect(confirmations(100, 100)).toBe(1);
-    expect(confirmations(90, 100)).toBe(11);
-    expect(confirmations(undefined, 100)).toBe(0);
-    expect(confirmations(-1, 100)).toBe(0);
-    expect(confirmations(101, 100)).toBe(0);
+    expect(confirmationsFromHeight(100, 100)).toBe(1);
+    expect(confirmationsFromHeight(90, 100)).toBe(11);
+    expect(confirmationsFromHeight(undefined, 100)).toBe(0);
+    expect(confirmationsFromHeight(-1, 100)).toBe(0);
+    expect(confirmationsFromHeight(101, 100)).toBe(0);
   });
 
   it('asks for one confirmation unless told otherwise', () => {

@@ -28,9 +28,9 @@ import {
   isUnknownTransaction,
   paidTo,
   pearldChainClient,
-  safeHeight,
   searchAllTransactions,
 } from './rpc.js';
+import { safeHeight } from './internal/rpc-wire.js';
 import type { OutPointParam, Rpc, SearchRawTransactionsResult, WalletTransactionEntry } from './rpc.js';
 import { PearlError } from './errors.js';
 import type { FeeRate } from './amount.js';
@@ -152,7 +152,7 @@ export interface PearldBackendOptions {
 export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletBackend {
   const { network, pageSize = 100, concurrency = 8 } = options;
   const node = new PearldRpc(rpc);
-  const chain = pearldChainClient(node, pageSize);
+  const chain = pearldChainClient(node, { pageSize });
   const search = (address: string) => indexed(() => searchAllTransactions(node, address, { pageSize }));
 
   const getUtxos = async (watched: readonly Watched[]): Promise<WalletUtxo[]> => {

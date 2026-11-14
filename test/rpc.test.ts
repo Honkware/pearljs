@@ -20,7 +20,6 @@ import {
   searchAllTransactions,
   blockHashHex,
   createInvoice,
-  decimalToGrain,
   decodeWif,
   keyPathAddress,
   networks,
@@ -31,6 +30,7 @@ import {
   verifyMessage,
 } from '../src/index.js';
 import { expected, fakeFetch, fixture, rejection, type Route } from './rpc-helpers.js';
+import { decimalToGrain } from '../src/internal/rpc-wire.js';
 
 function pearld(routes: Record<string, Route>) {
   const fake = fakeFetch(routes);
@@ -436,7 +436,7 @@ describe('pearldChainClient', () => {
         r.body.params[2] === 0 || r.body.params[3] === 10000 ? 'searchrawtransactions' : 'searchrawtransactions-none',
       getblockheader: 'getblockheader',
     });
-    const chain = pearldChainClient(client, 2);
+    const chain = pearldChainClient(client, { pageSize: 2 });
     expect(await chain.getTip()).toEqual({ height: 321, hash: genesisHash });
 
     const activity = await chain.getAddressActivity(address);
@@ -482,7 +482,7 @@ describe('pearldChainClient', () => {
       },
     });
     for (const pageSize of [1, 2, 3, 4, 7, 8, 100]) {
-      const activity = await pearldChainClient(client, pageSize).getAddressActivity(address);
+      const activity = await pearldChainClient(client, { pageSize }).getAddressActivity(address);
       expect(activity.map((payment) => Number(payment.amount / 100000000n)).sort()).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
       expect(activity.filter((payment) => payment.block === null)).toHaveLength(5);
     }
@@ -1075,7 +1075,7 @@ describe('transport options', () => {
       const name = method === 'getblockcount' ? 'getblockcount' : 'sendrawtransaction';
       return new Response(fixture(name).body.replace(/"id":\d+}/, `"id":${id}}`));
     }) as unknown as typeof fetch;
-    const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: flaky, retry: { attempts: 2, delay: 1 } });
+    const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: flaky, retry: { retries: 2, delay: 1 } });
     expect(await client.getBlockCount()).toBe(321);
     expect(attempts).toBe(3);
 
@@ -1084,7 +1084,7 @@ describe('transport options', () => {
     expect(attempts).toBe(1);
 
     attempts = 0;
-    const once = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: flaky, retry: { attempts: 1, delay: 1 } });
+    const once = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: flaky, retry: { retries: 1, delay: 1 } });
     expect(await rejection(once.getBlockCount())).toMatchObject({ kind: 'http', status: 503 });
     expect(attempts).toBe(2);
 
@@ -1173,7 +1173,7 @@ describe('address paging', () => {
     const { client } = pearld({});
     for (const pageSize of [0, -1, 1.5, 10001, Number.NaN]) {
       await expect(searchAllTransactions(client, address, { pageSize })).rejects.toThrow('pageSize must be an integer from 1 to 10000');
-      await expect(pearldChainClient(client, pageSize).getAddressActivity(address)).rejects.toThrow(RangeError);
+      await expect(pearldChainClient(client, { pageSize }).getAddressActivity(address)).rejects.toThrow(RangeError);
     }
   });
 

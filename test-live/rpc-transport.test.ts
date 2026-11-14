@@ -175,7 +175,7 @@ describeLive('typed pearld methods', () => {
     expect(values[1]).toBe(await pearld.getBlockHash(1));
     expect(values[2]).toMatchObject({ kind: 'rpc', method: 'nosuchmethod', rpcCode: -32601 });
     expect(values[3]).toEqual(await pearld.getRawTransaction(funding.getId()));
-    expect(values[4]).toMatchObject({ kind: 'rpc', method: 'getrawtransaction', rpcCode: RPC_ERROR_CODES.NO_TX_INFO });
+    expect(values[4]).toMatchObject({ kind: 'rpc', method: 'getrawtransaction', rpcCode: RPC_ERROR_CODES.INVALID_ADDRESS_OR_KEY });
     expect(values[5]).toEqual(await pearld.getTxOut(funding.getId(), 1));
   });
 
@@ -228,7 +228,7 @@ describeLive('typed pearld methods', () => {
       const [viaWs, viaHttp] = [await ws.getBlockTemplate(), await pearld.getBlockTemplate()];
       expect(viaWs.coinbasevalue).toBe(viaHttp.coinbasevalue);
       expect((await ws.getCFilter(blockHash)).filter).toEqual((await pearld.getCFilter(blockHash)).filter);
-      await expect(ws.getRawTransaction('00'.repeat(32))).rejects.toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.NO_TX_INFO });
+      await expect(ws.getRawTransaction('00'.repeat(32))).rejects.toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.INVALID_ADDRESS_OR_KEY });
     } finally {
       await ws.close();
       await agent.destroy();
@@ -290,7 +290,7 @@ describeLive('a second pearld without indexes', () => {
     while ((await second.client.getBestBlockHash()) !== (await pearld.getBestBlockHash())) await new Promise((resolve) => setTimeout(resolve, 250));
     // While both are up the first answers, and it has no transaction index. Its
     // RPC error is an answer, so the node that knows the transaction is not asked.
-    await expect(client.getRawTransaction(txid)).rejects.toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.NO_TX_INFO });
+    await expect(client.getRawTransaction(txid)).rejects.toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.INVALID_ADDRESS_OR_KEY });
 
     await second.stop();
     expect((await client.getRawTransaction(txid)).txid).toBe(txid);

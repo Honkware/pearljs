@@ -102,7 +102,7 @@ describeLive('replace-by-fee', () => {
     expect(await pearld.getRawMempool()).toEqual([transactionId(replacement)]);
     await expect(pearld.getRawTransaction(transactionId(original))).rejects.toMatchObject({
       kind: 'rpc',
-      rpcCode: RPC_ERROR_CODES.NO_TX_INFO,
+      rpcCode: RPC_ERROR_CODES.INVALID_ADDRESS_OR_KEY,
     });
 
     // So it cannot be replaced in turn, whatever the fee.

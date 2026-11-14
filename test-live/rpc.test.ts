@@ -278,7 +278,7 @@ describeLive('pearld RPC errors', () => {
     });
     expect(await failure(pearld.getRawTransaction('00'.repeat(32)))).toMatchObject({
       kind: 'rpc',
-      rpcCode: RPC_ERROR_CODES.NO_TX_INFO,
+      rpcCode: RPC_ERROR_CODES.INVALID_ADDRESS_OR_KEY,
     });
     expect(await failure(pearld.getBlockHash(1_000_000))).toMatchObject({
       kind: 'rpc',

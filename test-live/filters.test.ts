@@ -16,7 +16,6 @@ import {
   filterHeader,
   filterHeaderHex,
   filterKey,
-  getBlockFilter,
   matchAnyFilter,
   matchFilter,
   mnemonicToSeed,
@@ -78,16 +77,16 @@ describeLive('compact filters', () => {
     await fund([{ script, value: 1_000_000n }]);
     const hash = await pearld.getBestBlockHash();
 
-    const fetched = await getBlockFilter(pearld, hash, beforeHeader);
+    const fetched = await pearld.getCFilter(hash, beforeHeader);
     expect(fetched.header).toBe(filterHeaderHex(filterHeader(fetched.filter, beforeHeader)));
     expect(matchFilter(fetched.filter, fetched.key, script)).toBe(true);
     expect(matchFilter(fetched.filter, fetched.key, minerScript)).toBe(true);
     // A false positive has odds of one in 784931 per item.
     const absent = toOutputScript(account.deriveAddress(1), network);
     expect(matchFilter(fetched.filter, fetched.key, absent)).toBe(false);
-    const earlier = await getBlockFilter(pearld, before);
+    const earlier = await pearld.getCFilter(before);
     expect(matchFilter(earlier.filter, earlier.key, script)).toBe(false);
     // Checked against the wrong previous header, the same filter is refused.
-    await expect(getBlockFilter(pearld, hash, ZERO_HEADER)).rejects.toThrow('does not match its header');
+    await expect(pearld.getCFilter(hash, ZERO_HEADER)).rejects.toThrow('does not match its header');
   });
 });

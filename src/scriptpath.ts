@@ -43,6 +43,7 @@ import { concat, equalBytes, toHex, uint32le, varInt } from './internal/bytes.js
 import { PearlError, SigningError } from './errors.js';
 import type { FeeRate } from './amount.js';
 import type { TxOutput } from './transaction.js';
+import { assertTaprootSighashType, psbtSighashType } from './internal/sighash.js';
 
 /**
  * Anything that can make a BIP340 Schnorr signature for a tapscript key,
@@ -83,26 +84,6 @@ export function signerFromPrivateKey(privateKey: Uint8Array, options: { auxRand?
   };
 }
 
-const SIGHASH_TYPES = new Set([
-  Transaction.SIGHASH_DEFAULT,
-  Transaction.SIGHASH_ALL,
-  Transaction.SIGHASH_NONE,
-  Transaction.SIGHASH_SINGLE,
-  Transaction.SIGHASH_ALL | Transaction.SIGHASH_ANYONECANPAY,
-  Transaction.SIGHASH_NONE | Transaction.SIGHASH_ANYONECANPAY,
-  Transaction.SIGHASH_SINGLE | Transaction.SIGHASH_ANYONECANPAY,
-]);
-
-/**
- * Throws unless value is a Taproot sighash type: DEFAULT, ALL, NONE or SINGLE,
- * the last three also with ANYONECANPAY.
- */
-export function assertTaprootSighashType(value: number): void {
-  if (!SIGHASH_TYPES.has(value)) {
-    throw new SigningError('SIGHASH_UNSUPPORTED', `unsupported Taproot sighash type ${value}`);
-  }
-}
-
 /** Which sighash types a PSBT signer accepts from the PSBT it is handed. */
 export interface PsbtSighashOptions {
   /**
@@ -112,27 +93,6 @@ export interface PsbtSighashOptions {
    * only.
    */
   allowedSighashTypes?: readonly number[];
-}
-
-/** The sighash type a PSBT input asks for, refused unless the caller allows it. */
-export function psbtSighashType(
-  requested: number | undefined,
-  inputIndex: number,
-  options: PsbtSighashOptions = {},
-): number {
-  const sighashType = requested ?? Transaction.SIGHASH_DEFAULT;
-  const allowed = options.allowedSighashTypes ?? [Transaction.SIGHASH_DEFAULT];
-  if (!Array.isArray(allowed)) {
-    throw new TypeError('allowedSighashTypes must be an array of sighash types');
-  }
-  allowed.forEach(assertTaprootSighashType);
-  if (!allowed.includes(sighashType)) {
-    throw new SigningError('SIGHASH_NOT_ALLOWED',
-      `PSBT input ${inputIndex} asks for sighash type 0x${sighashType.toString(16).padStart(2, '0')}, ` +
-        'which is not in allowedSighashTypes',
-    );
-  }
-  return sighashType;
 }
 
 function assertValue(value: bigint, what: string): void {

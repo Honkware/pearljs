@@ -20,15 +20,12 @@
  */
 
 import { blockHashHex, parseBlockHeader, type PearlBlockHeader } from './blockheader.js';
+import { UNBOUNDED_METHODS, basicAuth, decimalToGrain, encodeJson, parseJson, rpcEndpoint, rpcError } from './internal/rpc-wire.js';
 import {
+  DEFAULT_RPC_TIMEOUT,
   PearlRpcError,
-  basicAuth,
-  decimalToGrain,
-  encodeJson,
-  parseJson,
+  oysterMethods,
   pearldMethods,
-  rpcEndpoint,
-  rpcError,
   type CallOptions,
   type Rpc,
   type RpcErrorKind,
@@ -51,11 +48,11 @@ export interface ReconnectOptions {
   readonly initialDelay?: number;
   /** Default 30000. */
   readonly maxDelay?: number;
-  /** Retries before giving up. Default unlimited. */
-  readonly attempts?: number;
+  /** Reconnection tries before giving up. Default unlimited. */
+  readonly retries?: number;
 }
 
-/** Options for PearlWsClient and JsonRpcWsClient. */
+/** Options for PearlWsClient, OysterWsClient and JsonRpcWsClient. */
 export interface PearlWsClientOptions {
   /** e.g. wss://127.0.0.1:18334/ws. http(s) URLs and a missing path become ws(s) and /ws. */
   readonly url: string | URL;
@@ -77,14 +74,18 @@ export interface PearlWsClientOptions {
   readonly webSocketInit?: Record<string, unknown>;
   /** Reconnect after a session drops, resubscribing. On by default; a first connection is never retried. */
   readonly reconnect?: boolean | ReconnectOptions;
-  /** Per-call limit in ms, including the wait for a connection. Default none. */
+  /**
+   * Per-call limit in ms, including the wait for a connection; 0 for none.
+   * Default DEFAULT_RPC_TIMEOUT, as for the fetch clients, and none for
+   * generate, importprivkey, getblocktemplate, rescan and rescanblocks.
+   */
   readonly timeout?: number;
   /**
-   * "oyster" for Oyster's /ws, which answers calls but sends no
-   * notifications and passes notification commands to its own pearld
-   * connection, so the client refuses them.
+   * False for a server that sends no notifications, which is Oyster: the
+   * subscription methods then throw instead of sending a command Oyster would
+   * pass to its own pearld connection. OysterWsClient sets it.
    */
-  readonly server?: 'pearld' | 'oyster';
+  readonly notifications?: boolean;
   /** Both logins send the password as it is, so ws:// is refused for any host but loopback unless this is set. */
   readonly allowInsecureAuth?: boolean;
 }
@@ -280,9 +281,9 @@ export class JsonRpcWsClient implements Rpc {
     this.#reconnect =
       reconnect === false
         ? null
-        : { initialDelay: 1000, maxDelay: 30000, attempts: Infinity, ...(reconnect === true ? {} : reconnect) };
+        : { initialDelay: 1000, maxDelay: 30000, retries: Infinity, ...(reconnect === true ? {} : reconnect) };
     this.#timeout = options.timeout;
-    this.#oyster = options.server === 'oyster';
+    this.#oyster = options.notifications === false;
   }
 
   /** Opens the connection now instead of on first use. */
@@ -455,7 +456,8 @@ export class JsonRpcWsClient implements Rpc {
     parse: (text: string) => unknown,
     options: WsCallOptions,
   ): Promise<unknown> {
-    const timeout = options.timeout ?? this.#timeout;
+    const limit = options.timeout ?? this.#timeout ?? (UNBOUNDED_METHODS.has(method) ? 0 : DEFAULT_RPC_TIMEOUT);
+    const timeout = limit > 0 ? limit : undefined;
     const { signal } = options;
     let abandoned: PearlRpcError | null = null;
     const run = async (): Promise<unknown> => {
@@ -660,7 +662,7 @@ export class JsonRpcWsClient implements Rpc {
       this.#emit('disconnect', { error: new PearlRpcError(failure.kind, 'websocket', failure.message) });
     }
     const policy = this.#reconnect;
-    if (policy === null || this.#attempt >= policy.attempts) {
+    if (policy === null || this.#attempt >= policy.retries) {
       const reason = policy === null ? failure : { ...failure, message: `${failure.message}; gave up after ${this.#attempt} reconnect attempts` };
       this.#stop(reason, new PearlRpcError(reason.kind, 'websocket', reason.message));
       return;
@@ -908,6 +910,21 @@ export class JsonRpcWsClient implements Rpc {
 export class PearlWsClient extends /* @__PURE__ */ pearldMethods(JsonRpcWsClient) {
   constructor(options: PearlWsClientOptions) {
     super(options);
+  }
+}
+
+/**
+ * Oyster's websocket client: every typed method of OysterClient over one
+ * connection. Oyster's /ws answers calls and sends no notifications, and it
+ * would pass a notification command on to its own pearld connection, so the
+ * subscription methods throw BACKEND_UNSUPPORTED; subscribe on a PearlWsClient
+ * to pearld. Oyster only takes Basic auth on the upgrade, so `auth` is
+ * "header" unless given, which needs a WebSocket constructor that accepts
+ * headers (undici's or the `ws` package's, not a browser's).
+ */
+export class OysterWsClient extends /* @__PURE__ */ oysterMethods(JsonRpcWsClient) {
+  constructor(options: Omit<PearlWsClientOptions, 'notifications'>) {
+    super({ auth: 'header', ...options, notifications: false });
   }
 }
 

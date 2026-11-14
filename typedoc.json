@@ -50,8 +50,5 @@
     "invalidLink": true,
     "notDocumented": false
   },
-  "githubPages": false,
-  "intentionallyNotExported": [
-    "RpcClass"
-  ]
+  "githubPages": false
 }

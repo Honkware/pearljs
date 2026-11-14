@@ -321,13 +321,7 @@ export function checkFilterHeaders(
   return prev;
 }
 
-/** Anything with a JSON-RPC call, such as PearldClient or PearlWsClient. */
-export interface FilterRpc {
-  /** Calls a method and resolves to its result. */
-  call<T = unknown>(method: string, params?: readonly unknown[]): Promise<T>;
-}
-
-/** A block's basic filter with the key to match it with, as getBlockFilter returns it. */
+/** A block's basic filter with the key to match it with, as a pearld client's getCFilter returns it. */
 export interface BlockFilter {
   /** Display hex, as RPC shows it. */
   readonly blockHash: string;
@@ -336,22 +330,6 @@ export interface BlockFilter {
   readonly filter: CompactFilter;
   /** getcfilterheader's value, set when the filter was checked against it. */
   readonly header?: string;
-}
-
-/**
- * Fetches a block's basic filter with getcfilter. With prevHeader, the
- * filter header of the block before, it also fetches getcfilterheader and
- * throws unless the filter hashes to it. Both come from the same node, so
- * this detects corruption, not a lying node; compare headers across sources
- * for that. pearld needs its CF index, which is on unless --nocfilters.
- */
-export async function getBlockFilter(client: FilterRpc, blockHashHex: string, prevHeader?: string): Promise<BlockFilter> {
-  const filter = decodeFilter(await client.call<string>('getcfilter', [blockHashHex, BASIC_FILTER_TYPE]));
-  const key = filterKey(blockHashHex);
-  if (prevHeader === undefined) return { blockHash: blockHashHex, key, filter };
-  const header = await client.call<string>('getcfilterheader', [blockHashHex, BASIC_FILTER_TYPE]);
-  checkFilterHeaders(prevHeader, [{ filter, header }]);
-  return { blockHash: blockHashHex, key, filter, header };
 }
 
 function readVarInt(bytes: Uint8Array): [number, number] {

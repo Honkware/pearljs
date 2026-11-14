@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { afterAll, afterEach, expect, it } from 'vitest';
 import { Agent, WebSocket } from 'undici';
 import {
+  OysterWsClient,
   blockHashHex,
   deriveSigningAccountFromSeed,
   mnemonicToSeed,
@@ -285,14 +286,33 @@ describeOyster("Oyster's websocket", () => {
   afterEach(closeAll);
 
   it('answers wallet and passed-through node calls with header auth', async () => {
-    const ws = client(wallet, { auth: 'header', server: 'oyster' });
+    const ws = client(wallet, { auth: 'header', notifications: false });
     expect(await ws.call<boolean>('walletislocked')).toEqual(expect.any(Boolean));
     expect(await ws.call<bigint>('getbalance', ['*', 1], { amounts: ['result'] })).toEqual(expect.any(BigInt));
     expect(await ws.call<string>('getblockhash', [1])).toBe(await pearld.getBlockHash(1));
   });
 
+  it('runs Oyster\'s typed methods over OysterWsClient', async () => {
+    const agent = new Agent({ connect: { ca: wallet.ca } });
+    const ws = new OysterWsClient({
+      url: wallet.url,
+      username: wallet.username,
+      password: wallet.password,
+      WebSocket,
+      webSocketInit: { dispatcher: agent },
+    });
+    try {
+      expect(await ws.walletIsLocked()).toEqual(expect.any(Boolean));
+      expect(await ws.getBalance()).toEqual(expect.any(BigInt));
+      expect(() => ws.watchBlocks({ onBlock: () => {} })).toThrow("Oyster's websocket sends no notifications");
+    } finally {
+      await ws.close();
+      await agent.close();
+    }
+  });
+
   it('does not accept the authenticate command', async () => {
-    const ws = client(wallet, { auth: 'command', server: 'oyster' });
+    const ws = client(wallet, { auth: 'command', notifications: false });
     await expect(ws.connect()).rejects.toBeInstanceOf(PearlRpcError);
   });
 
@@ -300,7 +320,7 @@ describeOyster("Oyster's websocket", () => {
   // (wallet/rpc/jsonrpc/server.go never closes the upgraded connection), and
   // undici reports a close only once the connection ends.
   it('closes a connection to Oyster without waiting for a close Oyster never completes', async () => {
-    const ws = client(wallet, { auth: 'header', server: 'oyster' });
+    const ws = client(wallet, { auth: 'header', notifications: false });
     await ws.connect();
     const started = Date.now();
     await ws.close();
@@ -309,7 +329,7 @@ describeOyster("Oyster's websocket", () => {
   });
 
   it('refuses notification commands before they reach Oyster', async () => {
-    const ws = client(wallet, { auth: 'header', server: 'oyster' });
+    const ws = client(wallet, { auth: 'header', notifications: false });
     await ws.connect();
     const text = "Oyster's websocket sends no notifications";
     expect(() => ws.watchBlocks({ onBlock: () => {} })).toThrow(text);

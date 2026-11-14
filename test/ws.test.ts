@@ -5,7 +5,10 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_RPC_TIMEOUT,
   OysterRpc,
+  OysterWsClient,
+  PearlError,
   PearlRpcError,
   PearlWsClient,
   pearldChainClient,
@@ -302,7 +305,7 @@ describe('pearld websocket client', () => {
     expect(transactionId(parseTransaction(found!.transactions[0]!))).toBe(expected('reply-rescanblocks').txid);
     await ws.close();
 
-    const oyster = client({ server: 'oyster', auth: 'header' });
+    const oyster = client({ notifications: false, auth: 'header' });
     expect(() => oyster.watchBlocks({ onBlock: () => {} })).toThrow(/Oyster/);
     await expect(oyster.notifyReceived(['rprl1x'])).rejects.toThrow(/Oyster/);
     expect(FakeSocket.all).toHaveLength(1);
@@ -406,7 +409,7 @@ describe('pearld websocket client', () => {
 
   it('gives up after the allowed attempts and fails waiting calls', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const ws = client({ reconnect: { initialDelay: 10, attempts: 2 } });
+    const ws = client({ reconnect: { initialDelay: 10, retries: 2 } });
     const closes = collect(ws, 'close');
     await Promise.all([ws.connect(), serve()]);
     last().drop();
@@ -601,6 +604,42 @@ describe('pearld websocket client', () => {
     const aborted = ws.call('getblockcount', [], { signal: controller.signal });
     controller.abort();
     await expect(aborted).rejects.toThrow(/aborted/);
+    await ws.close();
+  });
+
+  it('gives up on a silent server after the default timeout, except for calls that are slow by design', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const ws = client();
+    const count = ws.call('getblockcount');
+    const failed = expect(count).rejects.toThrow(`no reply from 127.0.0.1:18334 within ${DEFAULT_RPC_TIMEOUT} ms`);
+    let rescanned = false;
+    ws.call('rescan', ['00'.repeat(32)]).then(
+      () => undefined,
+      () => (rescanned = true),
+    );
+    // No limit at all when the client is told 0.
+    const patient = client({ timeout: 0 });
+    let patientFailed = false;
+    patient.call('getblockcount').catch(() => (patientFailed = true));
+    await vi.advanceTimersByTimeAsync(DEFAULT_RPC_TIMEOUT * 2);
+    await failed;
+    expect(rescanned).toBe(false);
+    expect(patientFailed).toBe(false);
+  });
+
+  it('offers Oyster\'s typed methods on its own client, with header auth and no notification commands', async () => {
+    const ws = new OysterWsClient({ url: 'wss://127.0.0.1:18332', username: 'user', password: 'pass', WebSocket: FakeSocket });
+    const locked = ws.walletIsLocked();
+    await flush();
+    const socket = last();
+    expect(socket.init).toEqual({ headers: { Authorization: `Basic ${btoa('user:pass')}` } });
+    socket.open();
+    await flush();
+    expect(socket.methods()).toEqual(['walletislocked']);
+    socket.reply('walletislocked', 'true');
+    expect(await locked).toBe(true);
+    expect(() => ws.watchBlocks({ onBlock: () => {} })).toThrow(PearlError);
+    expect(() => ws.watchBlocks({ onBlock: () => {} })).toThrow("Oyster's websocket sends no notifications");
     await ws.close();
   });
 

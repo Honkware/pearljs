@@ -16,7 +16,7 @@ import {
   filterHeader,
   filterHeaderHex,
   filterKey,
-  getBlockFilter,
+  PearldRpc,
   matchAnyFilter,
   matchFilter,
   parseBlock,
@@ -157,13 +157,13 @@ describe('Pearl compact filters', () => {
         return (method === 'getcfilter' ? v.filter : v.header) as T;
       },
     };
-    const fetched = await getBlockFilter(client, v.blockHash, prev.header);
+    const fetched = await new PearldRpc(client).getCFilter(v.blockHash, prev.header);
     expect(fetched.header).toBe(v.header);
     expect(bytesToHex(fetched.key)).toBe(v.key);
     expect(calls).toEqual([
       ['getcfilter', v.blockHash, 0],
       ['getcfilterheader', v.blockHash, 0],
     ]);
-    await expect(getBlockFilter(client, v.blockHash, v.header)).rejects.toThrow(/does not match its header/);
+    await expect(new PearldRpc(client).getCFilter(v.blockHash, v.header)).rejects.toThrow(/does not match its header/);
   });
 });
