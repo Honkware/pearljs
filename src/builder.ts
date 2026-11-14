@@ -27,6 +27,7 @@ import { createPsbt, createTransaction, finalizePsbt } from './transaction.js';
 import { p2mr } from './payments.js';
 import { equalBytes } from './internal/bytes.js';
 import { PearlError, PolicyError, SigningError } from './errors.js';
+import type { FeeRate } from './amount.js';
 
 const FINAL_SEQUENCE = 0xffffffff;
 // mempool.MaxRBFSequence: an input at or under this signals replacement.
@@ -57,7 +58,7 @@ export interface PaymentOptions<T extends Utxo = Utxo> extends SpendableOptions 
   utxos: readonly T[];
   recipients: readonly Recipient[];
   /** Grain per 1000 vbytes. */
-  feeRate: bigint;
+  feeRate: FeeRate;
   /** Needed unless a recipient takes `max`. */
   changeAddress?: string;
   /** Signal replace-by-fee. Oyster never does, so this is off unless asked for. */
@@ -70,7 +71,7 @@ export interface PaymentOptions<T extends Utxo = Utxo> extends SpendableOptions 
    */
   random?: () => number;
   /** pearld's --minrelaytxfee if it is not the default, in grain per 1000 vbytes. */
-  minRelayFee?: bigint;
+  relayFeeRate?: FeeRate;
   /** 1 unless given, as Oyster uses. */
   version?: number;
   /** The transaction's locktime. 0 unless given. */
@@ -169,7 +170,7 @@ export function buildPayment<T extends Utxo>(options: PaymentOptions<T>): Paymen
 
   const fee = selection.totalInput - outputs.reduce((sum, output) => sum + output.value, 0n);
   const vsize = estimateVsize(tx, selection.inputs.map((input) => input.spend ?? { type: 'keyPath' }));
-  checkUnsigned(tx, fee, vsize, options.minRelayFee);
+  checkUnsigned(tx, fee, vsize, options.relayFeeRate);
   return {
     transaction: tx,
     psbt,
@@ -186,14 +187,14 @@ export function buildPayment<T extends Utxo>(options: PaymentOptions<T>): Paymen
  * checkStandard wants witnesses, so the unsigned transaction is checked with
  * placeholders and its size and fee against the size it will have signed.
  */
-function checkUnsigned(tx: Transaction, fee: bigint, vsize: number, relayFee: bigint | undefined): void {
+function checkUnsigned(tx: Transaction, fee: bigint, vsize: number, relayFeeRate: bigint | undefined): void {
   const probe = tx.clone();
   probe.ins.forEach((_, i) => probe.setWitness(i, [new Uint8Array(1)]));
-  checkStandard(probe, relayFee === undefined ? {} : { minRelayFee: relayFee });
+  checkStandard(probe, relayFeeRate === undefined ? {} : { relayFeeRate: relayFeeRate });
   if (vsize > MAX_STANDARD_TX_VSIZE) {
     throw new PolicyError('POLICY_TX_TOO_LARGE', `vsize of transaction is larger than max allowed: ${vsize} > ${MAX_STANDARD_TX_VSIZE}`);
   }
-  const required = minRelayFee(vsize, relayFee);
+  const required = minRelayFee(vsize, relayFeeRate);
   if (fee < required) {
     throw new PolicyError('POLICY_FEE_TOO_LOW',
       `the fee of ${fee} grain is under the ${required} grain pearld requires to relay ${vsize} vbytes; raise the fee rate`,
@@ -233,12 +234,12 @@ export interface SignedPayment<T extends Utxo = Utxo> {
  *
  * Throws when the signed transaction is not the one the payment built, when an
  * input cannot be finalized, and with pearld's message when the result would not
- * be relayed. minRelayFee is in grain per 1000 vbytes. Signatures of a
+ * be relayed. relayFeeRate is in grain per 1000 vbytes. Signatures of a
  * transaction passed as `signed` are not verified.
  */
 export function finalizePayment<T extends Utxo>(
   payment: Payment<T>,
-  options: { signed?: Transaction; minRelayFee?: bigint } = {},
+  options: { signed?: Transaction; relayFeeRate?: FeeRate } = {},
 ): SignedPayment<T> {
   const transaction = options.signed ?? finalizePsbt(payment.psbt);
   if (transaction.getId() !== payment.transaction.getId()) {
@@ -246,7 +247,7 @@ export function finalizePayment<T extends Utxo>(
   }
   checkStandard(transaction, {
     prevouts: payment.prevouts,
-    ...(options.minRelayFee === undefined ? {} : { minRelayFee: options.minRelayFee }),
+    ...(options.relayFeeRate === undefined ? {} : { relayFeeRate: options.relayFeeRate }),
   });
   return {
     transaction,
@@ -346,7 +347,7 @@ export function payFromAccount(account: PearlSigningAccount, options: AccountPay
     });
   });
   return finalizePayment(payment, {
-    ...(options.minRelayFee === undefined ? {} : { minRelayFee: options.minRelayFee }),
+    ...(options.relayFeeRate === undefined ? {} : { relayFeeRate: options.relayFeeRate }),
   });
 }
 

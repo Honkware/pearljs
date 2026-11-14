@@ -24,6 +24,7 @@ import {
   verifyTaprootLeafCommitment,
 } from './scripttree.js';
 import { toHex } from './internal/bytes.js';
+import type { FeeRate } from './amount.js';
 
 // mempool.MaxRBFSequence.
 const MAX_RBF_SEQUENCE = 0xfffffffd;
@@ -98,7 +99,7 @@ export interface InspectedTransaction {
   /** Inputs minus outputs, in grain. */
   fee: bigint;
   /** Grain per 1000 vbytes, rounded down. */
-  feeRate: bigint;
+  feeRate: FeeRate;
   /** Whether any input signals replace-by-fee (sequence of 0xfffffffd or less). */
   rbf: boolean;
   inputs: InspectedInput[];

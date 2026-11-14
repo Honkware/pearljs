@@ -53,7 +53,7 @@ describe('checkStandard', () => {
         checkStandard(tx, {
           height: expected.height,
           medianTimePast: expected.medianTimePast,
-          minRelayFee: BigInt(expected.minRelayFee),
+          relayFeeRate: BigInt(expected.minRelayFee),
         });
       if (expected.error === '') expect(run).not.toThrow();
       else expect(run).toThrow(expected.error);

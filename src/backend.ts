@@ -33,6 +33,7 @@ import {
 } from './rpc.js';
 import type { OutPointParam, Rpc, SearchRawTransactionsResult, WalletTransactionEntry } from './rpc.js';
 import { PearlError } from './errors.js';
+import type { FeeRate } from './amount.js';
 
 /** An address, or the output script of one. */
 export type Watched = string | Uint8Array;
@@ -93,7 +94,7 @@ export interface WalletBackend extends ChainClient {
   /** Sends a signed transaction and returns its txid. */
   broadcast(tx: string | Uint8Array): Promise<string>;
   /** Grain per 1000 vbytes to confirm within `blocks`, never under the relay fee. */
-  estimateFeeRate(blocks?: number): Promise<bigint>;
+  estimateFeeRate(blocks?: number): Promise<FeeRate>;
   /**
    * Whether an output is unspent, spent (and by which transaction, when known),
    * or unknown to the backend.

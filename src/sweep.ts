@@ -22,6 +22,7 @@ import { taggedHash } from './script.js';
 import { Transaction } from './transaction.js';
 import { decodeWif, keyPathAddress } from './wif.js';
 import { PearlError, SigningError } from './errors.js';
+import type { FeeRate } from './amount.js';
 
 /** Options for sweepKey and sweepWif. */
 export interface SweepOptions extends SpendableOptions {
@@ -31,11 +32,11 @@ export interface SweepOptions extends SpendableOptions {
   /** Address that receives everything the fee leaves. */
   destination: string;
   /** Grain per 1000 vbytes. */
-  feeRate: bigint;
+  feeRate: FeeRate;
   /** Signal replace-by-fee. Off unless given. */
   rbf?: boolean;
   /** pearld's --minrelaytxfee if it is not the default, in grain per 1000 vbytes. */
-  minRelayFee?: bigint;
+  relayFeeRate?: FeeRate;
 }
 
 /**
@@ -75,7 +76,7 @@ export function sweepKey(privateKey: Uint8Array, options: SweepOptions): SignedP
     }
     signed.setWitness(i, [signature]);
   });
-  return finalizePayment(payment, { signed, ...(options.minRelayFee === undefined ? {} : { minRelayFee: options.minRelayFee }) });
+  return finalizePayment(payment, { signed, ...(options.relayFeeRate === undefined ? {} : { relayFeeRate: options.relayFeeRate }) });
 }
 
 /** sweepKey for a key in wallet import format, as dumpprivkey writes it. */

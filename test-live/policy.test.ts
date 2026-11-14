@@ -10,7 +10,7 @@ import {
   checkStandard,
   createPsbt,
   createTransaction,
-  DEFAULT_MIN_RELAY_FEE,
+  DEFAULT_RELAY_FEE_RATE,
   deriveSigningAccountFromSeed,
   embed,
   estimateVsize,
@@ -262,7 +262,7 @@ describeLive('relay policy', () => {
     tx.addOutput(changeScript, 0n);
     const vsize = estimateVsize(tx, [{ type: 'keyPath' }]);
     const fee = minRelayFee(vsize);
-    expect(fee).toBe((BigInt(vsize) * DEFAULT_MIN_RELAY_FEE) / 1000n);
+    expect(fee).toBe((BigInt(vsize) * DEFAULT_RELAY_FEE_RATE) / 1000n);
     tx.outs[0]!.value = VALUE - fee;
     const psbt = createPsbt(tx);
     account.prepareInput(psbt, 0, { index: 63, value: VALUE });

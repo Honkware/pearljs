@@ -24,9 +24,10 @@ import type { Prevout } from './scriptpath.js';
 import type { ScriptTree } from './scripttree.js';
 import { varIntSize } from './internal/bytes.js';
 import { PolicyError } from './errors.js';
+import type { FeeRate } from './amount.js';
 
-/** mempool.DefaultMinRelayTxFee, in grain per 1000 vbytes. */
-export const DEFAULT_MIN_RELAY_FEE = 1000n;
+/** pearld's default relay fee rate (mempool.DefaultMinRelayTxFee), in grain per 1000 vbytes. */
+export const DEFAULT_RELAY_FEE_RATE: FeeRate = 1000n;
 /** The largest transaction pearld relays, in vbytes. */
 export const MAX_STANDARD_TX_VSIZE = 100_000;
 /** pearld's default maximum transaction version (server.go). */
@@ -55,22 +56,22 @@ export function dustThreshold(script: Uint8Array): bigint {
   return 3n * BigInt(outputSize + 41 + inputSize);
 }
 
-/** mempool.IsDust, with minRelayFee in grain per 1000 vbytes. */
-export function isDust(output: { script: Uint8Array; value: bigint }, minRelayFee = DEFAULT_MIN_RELAY_FEE): boolean {
+/** mempool.IsDust, with relayFeeRate in grain per 1000 vbytes. */
+export function isDust(output: { script: Uint8Array; value: bigint }, relayFeeRate: FeeRate = DEFAULT_RELAY_FEE_RATE): boolean {
   if (isUnspendable(output.script)) return true;
   if (output.value > MAX_GRAIN) return true;
   if (output.value > MAX_INT64 / 1000n) return false;
-  return output.value * 1000n < dustThreshold(output.script) * minRelayFee;
+  return output.value * 1000n < dustThreshold(output.script) * relayFeeRate;
 }
 
 /**
  * calcMinRequiredTxRelayFee: the smallest fee pearld relays for a transaction of this vsize.
  *
- * Returns grain. The second argument is the relay fee rate in grain per 1000
- * vbytes, DEFAULT_MIN_RELAY_FEE unless given. Not to be confused with the
- * minRelayFee option elsewhere, which is that rate.
+ * Returns grain. relayFeeRate is in grain per 1000 vbytes,
+ * DEFAULT_RELAY_FEE_RATE unless given.
  */
-export function minRelayFee(vsize: number, feeRate = DEFAULT_MIN_RELAY_FEE): bigint {
+export function minRelayFee(vsize: number, relayFeeRate: FeeRate = DEFAULT_RELAY_FEE_RATE): bigint {
+  const feeRate = relayFeeRate;
   const size = BigInt(vsize);
   if (feeRate > 0n && size > MAX_INT64 / feeRate) return MAX_GRAIN;
   let fee = (size * feeRate) / 1000n;
@@ -80,7 +81,7 @@ export function minRelayFee(vsize: number, feeRate = DEFAULT_MIN_RELAY_FEE): big
 }
 
 /** The fee for a vsize at a rate in grain per 1000 vbytes, rounded up so it never falls under the rate. */
-export function feeForVsize(vsize: number, feeRate: bigint): bigint {
+export function feeForVsize(vsize: number, feeRate: FeeRate): bigint {
   return (BigInt(vsize) * feeRate + 999n) / 1000n;
 }
 
@@ -93,7 +94,7 @@ export interface StandardOptions {
   /** Median time past of the chain tip, in Unix seconds. */
   medianTimePast?: number;
   /** pearld's --minrelaytxfee, in grain per 1000 vbytes. */
-  minRelayFee?: bigint;
+  relayFeeRate?: FeeRate;
   /** Highest transaction version to accept. MAX_STANDARD_TX_VERSION (2) unless given. */
   maxTxVersion?: number;
 }
@@ -105,7 +106,7 @@ export interface StandardOptions {
  * are not checked.
  */
 export function checkStandard(tx: Transaction, options: StandardOptions = {}): void {
-  const feeRate = options.minRelayFee ?? DEFAULT_MIN_RELAY_FEE;
+  const feeRate = options.relayFeeRate ?? DEFAULT_RELAY_FEE_RATE;
   const maxVersion = options.maxTxVersion ?? MAX_STANDARD_TX_VERSION;
 
   if (!tx.hasWitnesses()) throw new PolicyError('POLICY_NO_WITNESS', 'transaction has no witness data');

@@ -31,6 +31,7 @@ import { PearlRpcError } from './errors.js';
 export { PearlRpcError };
 export type { RpcErrorKind } from './errors.js';
 import { PearlError } from './errors.js';
+import type { FeeRate } from './amount.js';
 
 /** pearld's default RPC port per network (node/params.go). */
 export const PEARLD_RPC_PORTS: Readonly<Record<PearlNetworkName, number>> = {
@@ -1145,7 +1146,7 @@ export function pearldMethods<Base extends RpcClass>(Base: Base) {
      * and reads 0, sent when none is given, as its default of 10000000 (0.1
      * PRL/kvB). A transaction above the rate is refused as "max-fee-exceeded".
      */
-    async testMempoolAccept(txs: readonly (string | Uint8Array)[], maxFeeRate = 0n): Promise<TestMempoolAcceptResult[]> {
+    async testMempoolAccept(txs: readonly (string | Uint8Array)[], maxFeeRate: FeeRate = 0n): Promise<TestMempoolAcceptResult[]> {
       const results = await this.call<Omit<TestMempoolAcceptResult, 'allowed'>[]>(
         'testmempoolaccept',
         [txs.map(toHex), prlAmount(maxFeeRate)],
@@ -1155,13 +1156,13 @@ export function pearldMethods<Base extends RpcClass>(Base: Base) {
     }
 
     /**
-     * estimatefee: grain per 1000 bytes, for 1 to 25 blocks. It is 0 until
+     * estimatefee: a fee rate in grain per 1000 vbytes, for 1 to 25 blocks. It is 0 until
      * pearld has seen transactions confirm, so floor it at the relay fee. A
      * node that has connected fewer than three blocks answers with an error
      * of code -1, and so does this method for a server that answers -1, as
      * Bitcoin Core's estimatefee did. pearld has no estimatesmartfee.
      */
-    async estimateFee(blocks: number): Promise<bigint> {
+    async estimateFee(blocks: number): Promise<FeeRate> {
       const rate = await this.call<bigint>('estimatefee', [blocks], { amounts: ['result'] });
       if (rate < 0n) throw new PearlRpcError('rpc', 'estimatefee', 'the server has no fee estimate', { rpcCode: RPC_ERROR_CODES.MISC });
       return rate;
@@ -1572,7 +1573,7 @@ export function oysterMethods<Base extends RpcClass>(Base: Base) {
      * Sends from the default account and returns the txid. Oyster requires a
      * fee rate, here in grain per 1000 vbytes, where Bitcoin Core has none.
      */
-    sendToAddress(address: string, amount: bigint, feeRate: bigint): Promise<string> {
+    sendToAddress(address: string, amount: bigint, feeRate: FeeRate): Promise<string> {
       return this.call('sendtoaddress', [address, prlAmount(amount), prlAmount(feeRate)]);
     }
 
@@ -1581,7 +1582,7 @@ export function oysterMethods<Base extends RpcClass>(Base: Base) {
      * is what Pearl's desktop wallet sends with. Amounts are grains by
      * address, and the fee rate is grain per 1000 vbytes.
      */
-    sendMany(amounts: Readonly<Record<string, bigint>>, feeRate: bigint, options: SendManyOptions = {}): Promise<string> {
+    sendMany(amounts: Readonly<Record<string, bigint>>, feeRate: FeeRate, options: SendManyOptions = {}): Promise<string> {
       const pairs = Object.fromEntries(Object.entries(amounts).map(([address, amount]) => [address, prlAmount(amount)]));
       return this.call('sendmany', [options.fromAccount ?? 'default', pairs, prlAmount(feeRate), options.minConf ?? 1]);
     }

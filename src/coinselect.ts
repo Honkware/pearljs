@@ -15,11 +15,12 @@
 import { Transaction } from 'bitcoinjs-lib';
 import { formatPearl, MAX_GRAIN } from './amount.js';
 import { COINBASE_MATURITY } from './consensus.js';
-import { DEFAULT_MIN_RELAY_FEE, estimateVsize, isDust, minRelayFee } from './policy.js';
+import { DEFAULT_RELAY_FEE_RATE, estimateVsize, isDust, minRelayFee } from './policy.js';
 import type { SpendEstimate } from './policy.js';
 import { classifyOutputScript } from './script.js';
 import { varIntSize } from './internal/bytes.js';
 import { PearlError } from './errors.js';
+import type { FeeRate } from './amount.js';
 
 /** An unspent output as coin selection takes it. */
 export interface Utxo {
@@ -72,7 +73,7 @@ export function spendableUtxos<T extends Utxo>(utxos: readonly T[], options: Spe
 }
 
 /** Oyster's CoinSelectionStrategy.ArrangeCoins: the order coins are offered in, and which are offered at all. */
-export type CoinArranger<T extends Utxo = Utxo> = (utxos: readonly T[], feeRate: bigint) => T[];
+export type CoinArranger<T extends Utxo = Utxo> = (utxos: readonly T[], feeRate: FeeRate) => T[];
 
 /**
  * `largest` and `random` are Oyster's two strategies; coins are added in the
@@ -90,7 +91,7 @@ export type CoinSelectionStrategy<T extends Utxo = Utxo> = 'largest' | 'random' 
 export function arrangeCoins<T extends Utxo>(
   utxos: readonly T[],
   strategy: CoinSelectionStrategy<T>,
-  feeRate: bigint,
+  feeRate: FeeRate,
   random: () => number = Math.random,
 ): T[] {
   if (typeof strategy === 'function') return strategy(utxos, feeRate);
@@ -112,7 +113,7 @@ const KEY_PATH_INPUT_VSIZE = 58;
 const BARE_INPUT_TX_SIZE = 51;
 
 /** inputYieldsPositively (createtx.go:424-431), with the real size for inputs that are not key-path spends. */
-function yieldsPositively(utxo: Utxo, feeRate: bigint): boolean {
+function yieldsPositively(utxo: Utxo, feeRate: FeeRate): boolean {
   let size = KEY_PATH_INPUT_VSIZE;
   if (utxo.spend !== undefined && utxo.spend.type !== 'keyPath') {
     const tx = new Transaction();
@@ -133,7 +134,7 @@ export interface SelectCoinsOptions<T extends Utxo = Utxo> {
   utxos: readonly T[];
   outputs: readonly TxOutput[];
   /** Grain per 1000 vbytes. */
-  feeRate: bigint;
+  feeRate: FeeRate;
   /** Where the remainder goes. The fee always pays for this output, as in Oyster. */
   changeScript: Uint8Array;
   strategy?: CoinSelectionStrategy<T>;
@@ -233,7 +234,7 @@ export function selectCoins<T extends Utxo>(options: SelectCoinsOptions<T>): Coi
     const remainder = total - target - fee;
     // Oyster tests change against the default relay fee whatever the fee
     // rate of the transaction (author.go:159-160).
-    const keep = remainder !== 0n && !isDust({ script: changeScript, value: remainder }, DEFAULT_MIN_RELAY_FEE);
+    const keep = remainder !== 0n && !isDust({ script: changeScript, value: remainder }, DEFAULT_RELAY_FEE_RATE);
     return {
       inputs: coins.slice(0, taken),
       totalInput: total,

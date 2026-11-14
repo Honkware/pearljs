@@ -72,6 +72,13 @@ export function formatPearl(grain: bigint): string {
 // pearld's relay fee and Oyster's fee arguments. Wallets show grain per
 // vbyte, and the RPC and Pearl's desktop wallet show PRL per 1000 vbytes.
 
+/**
+ * A fee rate in grain per 1000 vbytes. Every fee rate in pearljs has this
+ * unit, whatever it is called: `feeRate`, `relayFeeRate`, `maxFeeRate`.
+ * 1000n is one grain per vbyte, pearld's relay minimum.
+ */
+export type FeeRate = bigint;
+
 const VBYTE_RATE_RE = /^\d+(\.\d{1,3})?$/;
 
 /**
@@ -80,7 +87,7 @@ const VBYTE_RATE_RE = /^\d+(\.\d{1,3})?$/;
  * Returns grain per 1000 vbytes, the unit every fee rate in pearljs uses. Throws
  * for a negative rate or more than three decimals.
  */
-export function feeRateFromGrainPerVbyte(rate: bigint | string): bigint {
+export function feeRateFromGrainPerVbyte(rate: bigint | string): FeeRate {
   if (typeof rate === 'bigint') {
     if (rate < 0n) throw new PearlError('FEE_RATE_INVALID', `invalid fee rate: ${rate}`);
     return rate * 1000n;
@@ -100,7 +107,7 @@ export function feeRateFromGrainPerVbyte(rate: bigint | string): bigint {
  *
  * feeRate is in grain per 1000 vbytes.
  */
-export function feeRateToGrainPerVbyte(feeRate: bigint): string {
+export function feeRateToGrainPerVbyte(feeRate: FeeRate): string {
   if (typeof feeRate !== 'bigint' || feeRate < 0n) {
     throw new PearlError('FEE_RATE_INVALID', 'fee rate must be a non-negative bigint of grain per 1000 vbytes');
   }
@@ -113,7 +120,7 @@ export function feeRateToGrainPerVbyte(feeRate: bigint): string {
  *
  * Returns grain per 1000 vbytes.
  */
-export function feeRateFromPearlPerKvB(rate: string): bigint {
+export function feeRateFromPearlPerKvB(rate: string): FeeRate {
   return parsePearl(rate);
 }
 
@@ -122,7 +129,7 @@ export function feeRateFromPearlPerKvB(rate: string): bigint {
  *
  * feeRate is in grain per 1000 vbytes.
  */
-export function feeRateToPearlPerKvB(feeRate: bigint): string {
+export function feeRateToPearlPerKvB(feeRate: FeeRate): string {
   if (typeof feeRate !== 'bigint' || feeRate < 0n) {
     throw new PearlError('FEE_RATE_INVALID', 'fee rate must be a non-negative bigint of grain per 1000 vbytes');
   }

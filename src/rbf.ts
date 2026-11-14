@@ -21,9 +21,10 @@
  */
 
 import type { Transaction } from 'bitcoinjs-lib';
-import { DEFAULT_MIN_RELAY_FEE, feeForVsize, minRelayFee } from './policy.js';
+import { DEFAULT_RELAY_FEE_RATE, feeForVsize, minRelayFee } from './policy.js';
 import { toHex } from './internal/bytes.js';
 import { PolicyError } from './errors.js';
+import type { FeeRate } from './amount.js';
 
 /** mempool.MaxRBFSequence: an input with a sequence at or below this signals replacement. */
 export const MAX_RBF_SEQUENCE = 0xfffffffd;
@@ -54,7 +55,7 @@ export interface FeeAndVsize {
 /** Options for checkReplacement. */
 export interface ReplacementOptions {
   /** pearld's --minrelaytxfee, in grain per 1000 vbytes. */
-  minRelayFee?: bigint;
+  relayFeeRate?: FeeRate;
   /** pearld's --rejectreplacement. */
   rejectReplacement?: boolean;
   /** The replacement's vsize, for a transaction not yet signed. */
@@ -145,15 +146,15 @@ function signals(tx: Transaction, mempool: Mempool | undefined, cache: Map<strin
  * every transaction it evicts, and at least their fees plus its own relay fee.
  * Pass every evicted transaction, the conflicts' descendants included.
  *
- * Returns grain. vsize is the replacement's size in vbytes and relayFee the
- * relay fee rate in grain per 1000 vbytes, DEFAULT_MIN_RELAY_FEE unless given.
+ * Returns grain. vsize is the replacement's size in vbytes and relayFeeRate the
+ * relay fee rate in grain per 1000 vbytes, DEFAULT_RELAY_FEE_RATE unless given.
  */
 export function replacementFee(
   evicted: readonly FeeAndVsize[],
   vsize: number,
-  relayFee: bigint = DEFAULT_MIN_RELAY_FEE,
+  relayFeeRate: bigint = DEFAULT_RELAY_FEE_RATE,
 ): bigint {
-  let fee = evicted.reduce((sum, entry) => sum + entry.fee, 0n) + minRelayFee(vsize, relayFee);
+  let fee = evicted.reduce((sum, entry) => sum + entry.fee, 0n) + minRelayFee(vsize, relayFeeRate);
   for (const entry of evicted) {
     // The smallest fee whose truncated rate exceeds the evicted one.
     const rate = feePerKb(entry.fee, entry.vsize) + 1n;
@@ -239,7 +240,7 @@ export function checkReplacement(
     conflictsFee += entry.fee;
     for (const input of entry.tx.ins) conflictsParents.add(prevTxid(input));
   }
-  const needed = conflictsFee + minRelayFee(vsize, options.minRelayFee ?? DEFAULT_MIN_RELAY_FEE);
+  const needed = conflictsFee + minRelayFee(vsize, options.relayFeeRate ?? DEFAULT_RELAY_FEE_RATE);
   if (fee < needed) {
     throw new PolicyError('RBF_FEE_TOO_LOW', `${txid}: replacement transaction has an insufficient absolute fee: needs ${needed}, has ${fee}`);
   }
@@ -332,7 +333,7 @@ function checkDescendantCount(
 }
 
 /** Fee rate of a set of transactions together, in grain per 1000 vbytes, truncated. */
-export function packageFeeRate(entries: readonly FeeAndVsize[]): bigint {
+export function packageFeeRate(entries: readonly FeeAndVsize[]): FeeRate {
   const vsize = entries.reduce((sum, entry) => sum + entry.vsize, 0);
   if (vsize <= 0) throw new RangeError('a package needs a positive vsize');
   return feePerKb(
@@ -349,12 +350,12 @@ export function packageFeeRate(entries: readonly FeeAndVsize[]): bigint {
 export function cpfpChildFee(
   parents: readonly FeeAndVsize[],
   childVsize: number,
-  feeRate: bigint,
-  relayFee: bigint = DEFAULT_MIN_RELAY_FEE,
+  feeRate: FeeRate,
+  relayFeeRate: bigint = DEFAULT_RELAY_FEE_RATE,
 ): bigint {
   const parentsFee = parents.reduce((sum, entry) => sum + entry.fee, 0n);
   const parentsVsize = parents.reduce((sum, entry) => sum + entry.vsize, 0);
   const needed = feeForVsize(parentsVsize + childVsize, feeRate) - parentsFee;
-  const own = minRelayFee(childVsize, relayFee);
+  const own = minRelayFee(childVsize, relayFeeRate);
   return needed > own ? needed : own;
 }

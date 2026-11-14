@@ -41,6 +41,7 @@ import { XMSS_SIGNATURE_LENGTH } from './xmss.js';
 import type { XmssSigner } from './xmss.js';
 import { concat, equalBytes, toHex, uint32le, varInt } from './internal/bytes.js';
 import { PearlError, SigningError } from './errors.js';
+import type { FeeRate } from './amount.js';
 
 /**
  * Anything that can make a BIP340 Schnorr signature for a tapscript key,
@@ -340,7 +341,7 @@ export interface FeeGuardOptions {
    * forgotten change output. Defaults to DEFAULT_MAX_FEE_RATE; pass a higher
    * rate to sign a transaction that is meant to pay more.
    */
-  maxFeeRate?: bigint;
+  maxFeeRate?: FeeRate;
 }
 
 /**

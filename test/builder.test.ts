@@ -230,8 +230,8 @@ describe('payFromAccount', () => {
     // At 999 the fee for Oyster's 155 vbytes still covers the 154 the transaction has.
     expect(payFromAccount(account, { ...options, feeRate: 999n }).fee).toBe(154n);
     expect(() => payFromAccount(account, { ...options, feeRate: 990n })).toThrow(/the fee of 153 grain is under the 154 grain pearld requires/);
-    expect(payFromAccount(account, { ...options, feeRate: 990n, minRelayFee: 500n }).fee).toBe(153n);
-    expect(() => payFromAccount(account, { ...options, feeRate: 1000n, minRelayFee: 3000n })).toThrow(/is under the 462 grain/);
+    expect(payFromAccount(account, { ...options, feeRate: 990n, relayFeeRate: 500n }).fee).toBe(153n);
+    expect(() => payFromAccount(account, { ...options, feeRate: 1000n, relayFeeRate: 3000n })).toThrow(/is under the 462 grain/);
   });
 
   it('refuses an output that does not belong to the child named for it', () => {

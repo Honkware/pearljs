@@ -8,7 +8,7 @@ import {
   arrangeCoins,
   COINBASE_MATURITY,
   confirmations,
-  DEFAULT_MIN_RELAY_FEE,
+  DEFAULT_RELAY_FEE_RATE,
   InsufficientFundsError,
   isDust,
   minRelayFee,
@@ -228,7 +228,7 @@ describe('selection properties', () => {
       const slack = Math.ceil((selection.inputs.length + 1) / 4);
 
       if (selection.change > 0n) {
-        expect(isDust({ script: changeScript, value: selection.change }, DEFAULT_MIN_RELAY_FEE)).toBe(false);
+        expect(isDust({ script: changeScript, value: selection.change }, DEFAULT_RELAY_FEE_RATE)).toBe(false);
         expect(selection.fee).toBeLessThanOrEqual(minRelayFee(vsize + slack, feeRate));
       } else {
         dropped += 1;
