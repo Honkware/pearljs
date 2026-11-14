@@ -85,6 +85,54 @@ describe('PSBT helpers', () => {
     expect(() => parsePsbt(value)).toThrow();
   });
 
+  it('rejects bytes after the last PSBT map, as Pearl does', () => {
+    const bytes = Buffer.from(vectors.psbt.base64, 'base64');
+    for (const extra of [[0x00], [0x2a, 0x98, 0xd0], [0x01, 0xfc, 0x00, 0x00]]) {
+      const encoded = Buffer.concat([bytes, Buffer.from(extra)]).toString('base64');
+      expect(() => parsePsbt(encoded)).toThrow(`invalid PSBT: ${extra.length} bytes follow the last map`);
+    }
+    for (const signed of vectors.signing) {
+      expect(parsePsbt(signed.finalPsbt).toBase64()).toBe(signed.finalPsbt);
+    }
+  });
+
+  it('rejects a PSBT length written as a non-canonical varint, as Pearl does', () => {
+    const bytes = [...Buffer.from(vectors.psbt.base64, 'base64')];
+    // The global map starts with key length 1; write it as fd 01 00.
+    expect(bytes[5]).toBe(1);
+    const widened = Buffer.from([...bytes.slice(0, 5), 0xfd, 1, 0, ...bytes.slice(6)]).toString('base64');
+    expect(() => parsePsbt(widened)).toThrow('invalid PSBT');
+  });
+
+  it('reports every malformed PSBT as an Error with a message, never a RangeError', () => {
+    // bip174 reads a count from this tap BIP32 derivation and builds an array of that length.
+    const prepared = Buffer.from(vectors.signing[0]!.preparedPsbt, 'base64');
+    let rangeErrors = 0;
+    for (let at = 0; at < prepared.length; at += 1) {
+      for (const byte of [0xfd, 0xfe, 0xff]) {
+        const mutated = Buffer.from(prepared);
+        mutated[at] = byte;
+        try {
+          parsePsbt(mutated.toString('base64'));
+        } catch (error) {
+          expect(error).toBeInstanceOf(Error);
+          if (error instanceof RangeError) rangeErrors += 1;
+          if ((error as Error).message.includes('Invalid array length')) {
+            expect((error as Error).message).toBe('invalid PSBT: Invalid array length');
+          }
+        }
+      }
+    }
+    expect(rangeErrors).toBe(0);
+  });
+
+  it('rejects input that is not a string with a clear error', () => {
+    for (const bad of [undefined, null, 7, new Uint8Array(4), {}]) {
+      expect(() => parsePsbt(bad as unknown as string)).toThrow('PSBT must be a base64 string');
+      expect(() => parseTransaction(bad as unknown as string)).toThrow('transaction must be a hexadecimal string');
+    }
+  });
+
   it('rejects signed transactions as unsigned PSBT inputs', () => {
     const tx = unsignedTransaction();
     tx.setWitness(0, [new Uint8Array(64)]);

@@ -17,6 +17,9 @@ import type { PearlNetwork } from './networks.js';
 export { Psbt, Transaction };
 
 function checkHex(hex: string, what: string): void {
+  if (typeof hex !== 'string') {
+    throw new TypeError(`${what} must be a hexadecimal string`);
+  }
   if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) {
     throw new Error(`${what} must be non-empty, even-length hexadecimal`);
   }
@@ -57,7 +60,16 @@ export function witnessTransactionId(tx: Transaction): string {
     .join('');
 }
 
+/**
+ * Parses a base64 PSBT. Like Pearl's psbt.NewFromRawBytes, and unlike
+ * bitcoinjs alone, it refuses bytes after the last map and lengths written
+ * as non-canonical varints. Every failure is an Error with a message, also
+ * where the underlying parser would throw a RangeError.
+ */
 export function parsePsbt(base64: string): Psbt {
+  if (typeof base64 !== 'string') {
+    throw new TypeError('PSBT must be a base64 string');
+  }
   if (
     base64.length === 0 ||
     base64.length % 4 !== 0 ||
@@ -65,7 +77,55 @@ export function parsePsbt(base64: string): Psbt {
   ) {
     throw new Error('PSBT must be canonical padded base64');
   }
-  return Psbt.fromBase64(base64);
+  let psbt: Psbt;
+  try {
+    psbt = Psbt.fromBase64(base64);
+  } catch (error) {
+    throw new Error(`invalid PSBT: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
+  const end = psbtEnd(bytes, 1 + psbt.inputCount + psbt.txOutputs.length);
+  if (end !== bytes.length) {
+    throw new Error(`invalid PSBT: ${bytes.length - end} bytes follow the last map`);
+  }
+  return psbt;
+}
+
+const PSBT_MAGIC_LENGTH = 5;
+
+/**
+ * Walks the key-value maps of a PSBT that already parsed and returns the
+ * offset after the last one. bitcoinjs stops reading there without looking
+ * at what follows.
+ */
+function psbtEnd(bytes: Uint8Array, maps: number): number {
+  let offset = PSBT_MAGIC_LENGTH;
+  const malformed = (): Error => new Error('invalid PSBT: a key or value runs past the end');
+  const readLength = (): number => {
+    const first = bytes[offset];
+    if (first === undefined) throw malformed();
+    offset += 1;
+    if (first < 0xfd) return first;
+    const width = first === 0xfd ? 2 : first === 0xfe ? 4 : 8;
+    if (offset + width > bytes.length) throw malformed();
+    let value = 0;
+    for (let i = width - 1; i >= 0; i -= 1) value = value * 256 + bytes[offset + i]!;
+    offset += width;
+    if (value < (width === 2 ? 0xfd : width === 4 ? 0x10000 : 0x100000000)) {
+      throw new Error('invalid PSBT: a length is a non-canonical varint');
+    }
+    return value;
+  };
+  for (let map = 0; map < maps; map += 1) {
+    for (let keyLength = readLength(); keyLength !== 0; keyLength = readLength()) {
+      offset += keyLength;
+      // Read into a constant first: `offset += readLength()` would add to the offset from before the read.
+      const valueLength = readLength();
+      offset += valueLength;
+      if (offset > bytes.length) throw malformed();
+    }
+  }
+  return offset;
 }
 
 export function createPsbt(tx: Transaction): Psbt {
