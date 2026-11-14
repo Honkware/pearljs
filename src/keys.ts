@@ -15,11 +15,12 @@ import { p2tr } from './payments.js';
 import { classifyOutputScript } from './script.js';
 import {
   assertTaprootSighashType as assertSighashType,
+  psbtSighashType,
   signP2mrInput,
   signP2mrScriptPathInput,
   signTaprootScriptPathInput,
 } from './scriptpath.js';
-import type { P2mrPsbtSignOptions, P2mrSignOptions } from './scriptpath.js';
+import type { P2mrPsbtSignOptions, P2mrSignOptions, PsbtSighashOptions } from './scriptpath.js';
 
 export { mnemonicToSeed } from './mnemonic.js';
 
@@ -82,6 +83,9 @@ export interface PearlSignOptions {
   change?: boolean;
 }
 
+/** Options for signInput; allowedSighashTypes holds only SIGHASH_DEFAULT unless set. */
+export interface PearlPsbtSignOptions extends PearlSignOptions, PsbtSighashOptions {}
+
 /** trustPrevouts applies to P2MR inputs only. */
 export interface PearlScriptPathSignOptions extends P2mrPsbtSignOptions {
   index: number;
@@ -106,7 +110,11 @@ export interface PearlSigningAccount {
   derivePublicKey(index: number, change?: boolean): Uint8Array;
   deriveAddress(index: number, change?: boolean): string;
   prepareInput(psbt: Psbt, inputIndex: number, options: PearlInputOptions): void;
-  signInput(psbt: Psbt, inputIndex: number, options: PearlSignOptions): void;
+  /**
+   * Signs a BIP86 key-path PSBT input. The input's sighash type must be in
+   * options.allowedSighashTypes.
+   */
+  signInput(psbt: Psbt, inputIndex: number, options: PearlPsbtSignOptions): void;
   /**
    * Signs a P2TR or P2MR script-path PSBT input; see
    * signTaprootScriptPathInput and signP2mrScriptPathInput.
@@ -295,7 +303,7 @@ export function deriveSigningAccountFromSeed(
         psbt.updateInput(inputIndex, { sighashType });
       }
     },
-    signInput(psbt: Psbt, inputIndex: number, options: PearlSignOptions): void {
+    signInput(psbt: Psbt, inputIndex: number, options: PearlPsbtSignOptions): void {
       assertInputIndex(psbt, inputIndex);
       const change = options.change ?? false;
       const child = deriveChild(options.index, change);
@@ -317,8 +325,7 @@ export function deriveSigningAccountFromSeed(
       ) {
         throw new Error('PSBT witness UTXO does not match the account child');
       }
-      const sighashType = input.sighashType ?? Transaction.SIGHASH_DEFAULT;
-      assertSighashType(sighashType);
+      const sighashType = psbtSighashType(input.sighashType, inputIndex, options);
       if (input.tapInternalKey === undefined) {
         psbt.updateInput(inputIndex, { tapInternalKey: internalPubkey });
       }
@@ -342,7 +349,7 @@ export function deriveSigningAccountFromSeed(
       if (prevScript !== undefined && classifyOutputScript(prevScript) === 'p2mr') {
         signP2mrScriptPathInput(psbt, inputIndex, child, options.leafHash, options);
       } else {
-        signTaprootScriptPathInput(psbt, inputIndex, child, options.leafHash);
+        signTaprootScriptPathInput(psbt, inputIndex, child, options.leafHash, options);
       }
     },
     signP2mrInput(tx: Transaction, inputIndex: number, options: PearlP2mrSignOptions): void {

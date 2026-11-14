@@ -71,6 +71,38 @@ export function assertTaprootSighashType(value: number): void {
   }
 }
 
+/** Which sighash types a PSBT signer accepts from the PSBT it is handed. */
+export interface PsbtSighashOptions {
+  /**
+   * Sighash types the caller agrees to sign with. The type is read from the
+   * PSBT input, which anyone who handled the PSBT can set, so an input asking
+   * for a type that is not listed is refused. Defaults to SIGHASH_DEFAULT
+   * only.
+   */
+  allowedSighashTypes?: readonly number[];
+}
+
+/** The sighash type a PSBT input asks for, refused unless the caller allows it. */
+export function psbtSighashType(
+  requested: number | undefined,
+  inputIndex: number,
+  options: PsbtSighashOptions = {},
+): number {
+  const sighashType = requested ?? Transaction.SIGHASH_DEFAULT;
+  const allowed = options.allowedSighashTypes ?? [Transaction.SIGHASH_DEFAULT];
+  if (!Array.isArray(allowed)) {
+    throw new TypeError('allowedSighashTypes must be an array of sighash types');
+  }
+  allowed.forEach(assertTaprootSighashType);
+  if (!allowed.includes(sighashType)) {
+    throw new Error(
+      `PSBT input ${inputIndex} asks for sighash type 0x${sighashType.toString(16).padStart(2, '0')}, ` +
+        'which is not in allowedSighashTypes',
+    );
+  }
+  return sighashType;
+}
+
 function assertValue(value: bigint, what: string): void {
   if (typeof value !== 'bigint') {
     throw new TypeError(`${what} must be a bigint of grains`);
@@ -538,14 +570,18 @@ export function prepareTaprootScriptPathInput(
  * Signs a prepared P2TR script-path PSBT input for one leaf. The leaf must
  * be in the input's tapLeafScript, open the witness UTXO, and push the
  * signer's key. finalizePsbt then builds the witness.
+ *
+ * The input's sighash type must be in allowedSighashTypes, which holds only
+ * SIGHASH_DEFAULT unless the caller lists more.
  */
 export function signTaprootScriptPathInput(
   psbt: Psbt,
   inputIndex: number,
   signer: TapscriptSigner,
   leafHash: Uint8Array,
+  options: PsbtSighashOptions = {},
 ): void {
-  const sighashType = checkTaprootScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash);
+  const sighashType = checkTaprootScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash, options);
   psbt.signTaprootInput(inputIndex, schnorrOnlySigner(signer), leafHash, [sighashType]);
   checkSignedInput(psbt, inputIndex);
 }
@@ -556,8 +592,9 @@ export async function signTaprootScriptPathInputAsync(
   inputIndex: number,
   signer: TapscriptSignerAsync,
   leafHash: Uint8Array,
+  options: PsbtSighashOptions = {},
 ): Promise<void> {
-  const sighashType = checkTaprootScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash);
+  const sighashType = checkTaprootScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash, options);
   await psbt.signTaprootInputAsync(inputIndex, schnorrOnlySigner(signer), leafHash, [sighashType]);
   checkSignedInput(psbt, inputIndex);
 }
@@ -580,6 +617,7 @@ function checkTaprootScriptPathInput(
   inputIndex: number,
   publicKey: Uint8Array,
   leafHash: Uint8Array,
+  options: PsbtSighashOptions,
 ): number {
   const input = psbt.data.inputs[inputIndex];
   if (!Number.isInteger(inputIndex) || input === undefined) {
@@ -606,9 +644,7 @@ function checkTaprootScriptPathInput(
   if (!scriptPushesKey(leaf.script, xOnly(publicKey))) {
     throw new Error('the leaf script does not contain the signer key');
   }
-  const sighashType = input.sighashType ?? Transaction.SIGHASH_DEFAULT;
-  assertTaprootSighashType(sighashType);
-  return sighashType;
+  return psbtSighashType(input.sighashType, inputIndex, options);
 }
 
 function checkSignedInput(psbt: Psbt, inputIndex: number): void {
@@ -683,7 +719,7 @@ export function prepareP2mrScriptPathInput(
   }
 }
 
-export interface P2mrPsbtSignOptions {
+export interface P2mrPsbtSignOptions extends PsbtSighashOptions {
   /** Sign without checking input values against each input's nonWitnessUtxo. */
   trustPrevouts?: boolean;
 }
@@ -696,7 +732,8 @@ export interface P2mrPsbtSignOptions {
  *
  * When every input is P2MR, every input must carry its previous transaction
  * (nonWitnessUtxo), and the values are checked against them before signing,
- * unless trustPrevouts is set.
+ * unless trustPrevouts is set. The
+ * input's sighash type must be in allowedSighashTypes.
  */
 export function signP2mrScriptPathInput(
   psbt: Psbt,
@@ -769,8 +806,7 @@ function checkP2mrScriptPathInput(
   if (!scriptPushesKey(leaf.script, xOnly(publicKey))) {
     throw new Error('the leaf script does not contain the signer key');
   }
-  const sighashType = input.sighashType ?? Transaction.SIGHASH_DEFAULT;
-  assertTaprootSighashType(sighashType);
+  const sighashType = psbtSighashType(input.sighashType, inputIndex, options);
 
   const tx = Transaction.fromBuffer(psbt.data.globalMap.unsignedTx.toBuffer());
   const previous = psbt.data.inputs.map((item) =>

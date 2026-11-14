@@ -13,12 +13,15 @@ import {
   p2mrControlBlock,
   p2tr,
   parseP2mrControlBlock,
+  parsePsbt,
   parseTaprootControlBlock,
   parseTransaction,
   prepareTaprootScriptPathInput,
   serializeTransaction,
   signTaprootScriptPathInput,
+  signTaprootScriptPathInputAsync,
   tapscriptSighash,
+  Transaction,
   taprootControlBlock,
   taprootOutputKey,
   transactionId,
@@ -173,7 +176,11 @@ describe('P2TR script-path spends', () => {
       const sighash = tapscriptSighash(unsigned, 0, prevouts, leaf.leafHash, expected.hashType);
       expect(bytesToHex(sighash)).toBe(expected.sighash);
 
-      account.signScriptPathInput(psbt, 0, { index: expected.leafIndex, leafHash: leaf.leafHash });
+      account.signScriptPathInput(psbt, 0, {
+        index: expected.leafIndex,
+        leafHash: leaf.leafHash,
+        allowedSighashTypes: [expected.hashType],
+      });
       const tx = finalizePsbt(psbt);
       const witness = tx.ins[0]!.witness;
       const signature = witness[0]!;
@@ -197,6 +204,46 @@ describe('P2TR script-path spends', () => {
     expect(() =>
       account.signScriptPathInput(psbt, 0, { index: 0, leafHash: tree.leaves[0]!.leafHash }),
     ).toThrow('no tap leaf with that hash');
+  });
+
+  it('refuses a sighash type the PSBT brings unless the caller allows it', async () => {
+    const expected = spendVector('p2tr-3-leaves-last-default');
+    const tree = keyTree(3);
+    const leafHash = tree.leaves[2]!.leafHash;
+    const child = BIP32Factory(ecc)
+      .fromSeed(seed, {
+        wif: networks.mainnet.wif,
+        bip32: { public: networks.mainnet.hdPublicKeyId, private: networks.mainnet.hdPrivateKeyId },
+      })
+      .derivePath(expected.signerPath);
+    const prepared = createPsbt(parseTransaction(expected.unsignedTxHex));
+    prepareInput(prepared, tree, expected);
+    const tampered = parsePsbt(prepared.toBase64());
+    tampered.updateInput(0, { sighashType: Transaction.SIGHASH_NONE });
+    const returned = (): Psbt => parsePsbt(tampered.toBase64());
+
+    const psbt = returned();
+    expect(() => account.signScriptPathInput(psbt, 0, { index: 2, leafHash })).toThrow(
+      'asks for sighash type 0x02, which is not in allowedSighashTypes',
+    );
+    expect(() => signTaprootScriptPathInput(psbt, 0, child, leafHash)).toThrow('not in allowedSighashTypes');
+    let asked = false;
+    const device = {
+      publicKey: child.publicKey,
+      signSchnorr: async (hash: Uint8Array) => {
+        asked = true;
+        return child.signSchnorr(hash);
+      },
+    };
+    await expect(signTaprootScriptPathInputAsync(psbt, 0, device, leafHash)).rejects.toThrow(
+      'not in allowedSighashTypes',
+    );
+    expect(asked).toBe(false);
+    expect(psbt.data.inputs[0]!.tapScriptSig).toBeUndefined();
+
+    const allowed = returned();
+    account.signScriptPathInput(allowed, 0, { index: 2, leafHash, allowedSighashTypes: [Transaction.SIGHASH_NONE] });
+    expect(allowed.data.inputs[0]!.tapScriptSig![0]!.signature[64]).toBe(Transaction.SIGHASH_NONE);
   });
 
   it('keeps key-path signing away from script-path inputs', () => {

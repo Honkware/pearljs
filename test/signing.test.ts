@@ -12,6 +12,7 @@ import {
   Transaction,
   transactionId,
 } from '../src/index.js';
+import type { Psbt } from '../src/index.js';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
 import { bytesToHex, hexToBytes } from './vector-helpers.js';
 
@@ -56,6 +57,7 @@ describe('BIP86 signing accounts', () => {
       account.signInput(psbt, 0, {
         index: expected.index,
         change: expected.change,
+        allowedSighashTypes: [expected.hashType],
       });
       const signature = psbt.data.inputs[0]?.tapKeySig;
       if (signature === undefined) throw new Error('missing Taproot signature');
@@ -137,6 +139,39 @@ describe('BIP86 signing accounts', () => {
     account.prepareInput(psbt, 0, { index: 0, value: BigInt(expected.value) });
     psbt.updateInput(0, { tapMerkleRoot: new Uint8Array(32) });
     expect(() => account.signInput(psbt, 0, { index: 0 })).toThrow('key-path inputs only');
+  });
+
+  it('refuses a sighash type the PSBT brings unless the caller allows it', () => {
+    const expected = preparedVector('default');
+    const account = deriveSigningAccountFromSeed(seed, networks.mainnet);
+    const prepared = createPsbt(parseTransaction(expected.unsignedTxHex));
+    account.prepareInput(prepared, 0, { index: expected.index, value: BigInt(expected.value) });
+    const none = Transaction.SIGHASH_NONE | Transaction.SIGHASH_ANYONECANPAY;
+
+    // A coordinator hands the PSBT back with PSBT_IN_SIGHASH_TYPE added.
+    const tampered = parsePsbt(prepared.toBase64());
+    tampered.updateInput(0, { sighashType: none });
+    const returned = (): Psbt => parsePsbt(tampered.toBase64());
+
+    const psbt = returned();
+    expect(() => account.signInput(psbt, 0, { index: expected.index })).toThrow(
+      'asks for sighash type 0x82, which is not in allowedSighashTypes',
+    );
+    expect(() =>
+      account.signInput(psbt, 0, { index: expected.index, allowedSighashTypes: [Transaction.SIGHASH_ALL] }),
+    ).toThrow('not in allowedSighashTypes');
+    expect(psbt.data.inputs[0]?.tapKeySig).toBeUndefined();
+
+    const allowed = returned();
+    account.signInput(allowed, 0, { index: expected.index, allowedSighashTypes: [none] });
+    expect(allowed.data.inputs[0]?.tapKeySig?.[64]).toBe(none);
+
+    // Listing other types does not let an input without the field sign with them.
+    account.signInput(prepared, 0, { index: expected.index, allowedSighashTypes: [Transaction.SIGHASH_DEFAULT, none] });
+    expect(prepared.data.inputs[0]?.tapKeySig).toHaveLength(64);
+    expect(() =>
+      account.signInput(returned(), 0, { index: expected.index, allowedSighashTypes: [0x04] }),
+    ).toThrow('unsupported Taproot sighash');
   });
 
   it('rejects invalid input indices and values', () => {
