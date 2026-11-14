@@ -62,6 +62,27 @@ export interface TapscriptSignerAsync {
   signSchnorr(hash: Uint8Array): Promise<Uint8Array>;
 }
 
+/**
+ * A TapscriptSigner for a raw private key, for the script-path signers.
+ * Signatures are made with the key as it is, untweaked, and with fresh
+ * auxiliary randomness unless auxRand fixes it. The signer reads the caller's
+ * array each time it signs and keeps no copy, so overwriting the key ends it.
+ *
+ * Throws KEY_INVALID for bytes that are not a secp256k1 private key.
+ */
+export function signerFromPrivateKey(privateKey: Uint8Array, options: { auxRand?: Uint8Array } = {}): TapscriptSigner {
+  const publicKey = ecc.isPrivate(privateKey) ? ecc.xOnlyPointFromScalar(privateKey) : null;
+  if (publicKey === null) throw new PearlError('KEY_INVALID', 'invalid private key');
+  const { auxRand } = options;
+  if (auxRand !== undefined && (!(auxRand instanceof Uint8Array) || auxRand.length !== 32)) {
+    throw new Error('auxRand must be 32 bytes');
+  }
+  return {
+    publicKey: Uint8Array.from(publicKey),
+    signSchnorr: (hash: Uint8Array) => ecc.signSchnorr(hash, privateKey, auxRand ?? crypto.getRandomValues(new Uint8Array(32))),
+  };
+}
+
 const SIGHASH_TYPES = new Set([
   Transaction.SIGHASH_DEFAULT,
   Transaction.SIGHASH_ALL,

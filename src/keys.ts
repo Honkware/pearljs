@@ -41,10 +41,8 @@ import type {
   PsbtSighashOptions,
   TapscriptSigner,
 } from './scriptpath.js';
-import { equalBytes } from './internal/bytes.js';
+import { equalBytes, fromHex, toHex } from './internal/bytes.js';
 import { PearlError, SigningError } from './errors.js';
-
-export { mnemonicToSeed } from './mnemonic.js';
 
 const bip32 = BIP32Factory(ecc);
 
@@ -76,9 +74,14 @@ export interface PearlAccount {
   readonly node: BIP32Interface;
   /**
    * Account derivation path, or null when the account was imported from an
-   * extended public key whose origin path is unknown.
+   * extended public key without its origin.
    */
   readonly path: string | null;
+  /**
+   * Fingerprint of the master key the account derives from, as 8 hex
+   * characters, or null when it was imported without its origin.
+   */
+  readonly masterFingerprint: string | null;
   /** Account-level extended public key encoded with the network HD version bytes. */
   extendedPublicKey(): string;
   /**
@@ -91,6 +94,24 @@ export interface PearlAccount {
    * m/86'/coinType'/account'/{0 or 1}/{index}.
    */
   deriveAddress(index: number, change?: boolean): string;
+  /**
+   * Adds the witness UTXO, internal key and BIP32 derivation record of a child's
+   * output to a PSBT input, so a signing account elsewhere can find the key.
+   * Prepare every input before signing any. An account imported without its
+   * origin records the child under the account key's own fingerprint, as
+   * m/{0 or 1}/{index}; the signing account for the same key recognizes both.
+   *
+   * Throws when the value is not a bigint of grain within Pearl's bounds.
+   */
+  prepareInput(psbt: Psbt, inputIndex: number, options: PearlInputOptions): void;
+}
+
+/** Where an extended public key came from, as a descriptor writes it: [fingerprint/86'/coin'/account']. */
+export interface KeyOrigin {
+  /** Fingerprint of the master key: 4 bytes, or 8 hex characters. */
+  masterFingerprint: Uint8Array | string;
+  /** Path from the master key to the account, m/86'/coinType'/account'. */
+  path: string;
 }
 
 /** Options for prepareInput: the child that holds the spent output, and its value. */
@@ -120,8 +141,19 @@ export interface PearlSignOptions {
   auxRand?: Uint8Array;
 }
 
-/** Options for signInput; allowedSighashTypes holds only SIGHASH_DEFAULT unless set. */
-export interface PearlPsbtSignOptions extends PearlSignOptions, PsbtSighashOptions {}
+/**
+ * Options for signInput. Leave out `index` to have the child read from the
+ * input's tapBip32Derivation, which prepareInput writes.
+ * allowedSighashTypes holds only SIGHASH_DEFAULT unless set.
+ */
+export interface PearlPsbtSignOptions extends PsbtSighashOptions {
+  /** Address index of the child that holds the output. Read from the PSBT when left out. */
+  index?: number;
+  /** Whether the child is on the change chain. Only read together with `index`. */
+  change?: boolean;
+  /** See PearlSignOptions.auxRand. */
+  auxRand?: Uint8Array;
+}
 
 /** trustPrevouts applies to P2MR inputs only. */
 export interface PearlScriptPathSignOptions extends P2mrPsbtSignOptions {
@@ -158,17 +190,20 @@ export interface PearlSigningAccount {
   derivePublicKey(index: number, change?: boolean): Uint8Array;
   /** BIP86 P2TR address of a child; see PearlAccount.deriveAddress. */
   deriveAddress(index: number, change?: boolean): string;
-  /**
-   * Adds the witness UTXO, internal key and BIP86 derivation record of a child's
-   * output to a PSBT input. Prepare every input before signing any. Throws when
-   * the value is not a bigint of grain within Pearl's bounds.
-   */
+  /** Prepares a key-path PSBT input; see PearlAccount.prepareInput. */
   prepareInput(psbt: Psbt, inputIndex: number, options: PearlInputOptions): void;
   /**
-   * Signs a BIP86 key-path PSBT input. The input's sighash type must be in
+   * Signs a BIP86 key-path PSBT input. Without options.index the child is the
+   * one the input's tapBip32Derivation names; either way the input's witness
+   * UTXO must pay that child. The input's sighash type must be in
    * options.allowedSighashTypes.
+   *
+   * Throws a SigningError: INPUT_UNPREPARED when an input of the PSBT has no
+   * witness UTXO yet, DERIVATION_NOT_FOUND when no index is given and the
+   * input names no child of this account, INPUT_MISMATCH when the input is
+   * not that child's key-path output.
    */
-  signInput(psbt: Psbt, inputIndex: number, options: PearlPsbtSignOptions): void;
+  signInput(psbt: Psbt, inputIndex: number, options?: PearlPsbtSignOptions): void;
   /**
    * Signs a P2TR or P2MR script-path PSBT input; see
    * signTaprootScriptPathInput and signP2mrScriptPathInput.
@@ -178,6 +213,13 @@ export interface PearlSigningAccount {
   signP2mrInput(tx: Transaction, inputIndex: number, options: PearlP2mrSignOptions): void;
   /** Signs a message for the child's P2TR address; see signMessage. */
   signMessage(message: string, options: PearlSignOptions): string;
+  /**
+   * A signer for the child's untweaked key, the one derivePublicKey returns,
+   * for the standalone script-path signers and signTapscriptUnchecked. It
+   * holds no key: each signature derives the child and wipes it again, and it
+   * stops working when the account is destroyed.
+   */
+  tapscriptSigner(options: PearlSignOptions): TapscriptSigner;
   /**
    * Overwrites the master and account private keys with zeros. Every signing
    * method throws afterwards; the watch-only methods keep working. See the
@@ -230,7 +272,7 @@ export function accountPath(network: PearlNetwork, account = 0): string {
 
 function toWatchOnlyAccount(
   node: BIP32Interface,
-  path: string | null,
+  origin: { masterFingerprint: Uint8Array; path: string } | null,
   network: PearlNetwork,
 ): PearlAccount {
   const accountNode = node.neutered();
@@ -250,7 +292,8 @@ function toWatchOnlyAccount(
 
   return {
     node: accountNode,
-    path,
+    path: origin?.path ?? null,
+    masterFingerprint: origin === null ? null : toHex(origin.masterFingerprint),
     extendedPublicKey(): string {
       return accountNode.toBase58();
     },
@@ -260,6 +303,37 @@ function toWatchOnlyAccount(
     deriveAddress(index: number, change = false): string {
       const internalPubkey = internalPublicKey(deriveChild(index, change));
       return fromOutputScript(p2tr({ internalPubkey }).output, network);
+    },
+    prepareInput(psbt: Psbt, inputIndex: number, options: PearlInputOptions): void {
+      assertInputIndex(psbt, inputIndex);
+      if (typeof options.value !== 'bigint') {
+        throw new TypeError('input value must be a bigint of grains');
+      }
+      if (options.value < 0n || options.value > MAX_GRAIN) {
+        throw new PearlError('AMOUNT_OUT_OF_RANGE', 'input value is outside Pearl amount bounds');
+      }
+      const sighashType = options.sighashType ?? Transaction.SIGHASH_DEFAULT;
+      assertSighashType(sighashType);
+      const change = options.change ?? false;
+      const internalPubkey = internalPublicKey(deriveChild(options.index, change));
+      const script = p2tr({ internalPubkey }).output;
+      const child = `${change ? 1 : 0}/${options.index}`;
+      psbt.updateInput(inputIndex, {
+        witnessUtxo: { script, value: options.value },
+        tapInternalKey: Uint8Array.from(internalPubkey),
+        tapBip32Derivation: [
+          {
+            pubkey: internalPubkey,
+            // Without an origin the account key stands in as the root, as descriptors do for a bare xpub.
+            masterFingerprint: Uint8Array.from(origin?.masterFingerprint ?? accountNode.fingerprint),
+            path: `${origin?.path ?? 'm'}/${child}`,
+            leafHashes: [],
+          },
+        ],
+      });
+      if (sighashType !== Transaction.SIGHASH_DEFAULT) {
+        psbt.updateInput(inputIndex, { sighashType });
+      }
     },
   };
 }
@@ -283,7 +357,7 @@ export function deriveAccountFromSeed(
   const path = accountPath(network, account);
   const master = bip32.fromSeed(seed, toBip32Params(network));
   const accountNode = master.derivePath(path);
-  return toWatchOnlyAccount(accountNode, path, network);
+  return toWatchOnlyAccount(accountNode, { masterFingerprint: Uint8Array.from(master.fingerprint), path }, network);
 }
 
 function assertSeed(seed: Uint8Array): void {
@@ -345,8 +419,9 @@ export function deriveSigningAccountFromSeed(
   const path = accountPath(network, account);
   const master = bip32.fromSeed(seed, toBip32Params(network));
   const accountNode = master.derivePath(path);
-  const watchOnly = toWatchOnlyAccount(accountNode, path, network);
   const masterFingerprint = Uint8Array.from(master.fingerprint);
+  const accountFingerprint = Uint8Array.from(accountNode.fingerprint);
+  const watchOnly = toWatchOnlyAccount(accountNode, { masterFingerprint, path }, network);
 
   let destroyed = false;
 
@@ -364,6 +439,32 @@ export function deriveSigningAccountFromSeed(
     }
   };
 
+  /**
+   * The child a prepared input names. The record is only a hint from whoever
+   * wrote the PSBT: signInput still checks the witness UTXO against the key.
+   */
+  const childFromDerivation = (
+    input: Psbt['data']['inputs'][number],
+    inputIndex: number,
+  ): { index: number; change: boolean } => {
+    for (const record of input.tapBip32Derivation ?? []) {
+      const prefix = equalBytes(record.masterFingerprint, masterFingerprint)
+        ? `${path}/`
+        : equalBytes(record.masterFingerprint, accountFingerprint)
+          ? 'm/'
+          : null;
+      if (prefix === null || !record.path.startsWith(prefix)) continue;
+      const child = /^([01])\/(0|[1-9]\d{0,9})$/.exec(record.path.slice(prefix.length));
+      if (child === null || Number(child[2]) > MAX_NON_HARDENED_INDEX) continue;
+      const found = { index: Number(child[2]), change: child[1] === '1' };
+      if (equalBytes(watchOnly.derivePublicKey(found.index, found.change), record.pubkey)) return found;
+    }
+    throw new SigningError(
+      'DERIVATION_NOT_FOUND',
+      `PSBT input ${inputIndex} names no child of this account in its tapBip32Derivation; pass index and change`,
+    );
+  };
+
   return {
     path,
     watchOnlyAccount(): PearlAccount {
@@ -376,42 +477,23 @@ export function deriveSigningAccountFromSeed(
       return watchOnly.deriveAddress(index, change);
     },
     prepareInput(psbt: Psbt, inputIndex: number, options: PearlInputOptions): void {
-      assertInputIndex(psbt, inputIndex);
-      if (typeof options.value !== 'bigint') {
-        throw new TypeError('input value must be a bigint of grains');
-      }
-      if (options.value < 0n || options.value > MAX_GRAIN) {
-        throw new PearlError('AMOUNT_OUT_OF_RANGE', 'input value is outside Pearl amount bounds');
-      }
-      const sighashType = options.sighashType ?? Transaction.SIGHASH_DEFAULT;
-      assertSighashType(sighashType);
-      const change = options.change ?? false;
-      const internalPubkey = watchOnly.derivePublicKey(options.index, change);
-      const script = p2tr({ internalPubkey }).output;
-      psbt.updateInput(inputIndex, {
-        witnessUtxo: { script, value: options.value },
-        tapInternalKey: Uint8Array.from(internalPubkey),
-        tapBip32Derivation: [
-          {
-            pubkey: internalPubkey,
-            masterFingerprint: Uint8Array.from(masterFingerprint),
-            path: `${path}/${change ? 1 : 0}/${options.index}`,
-            leafHashes: [],
-          },
-        ],
-      });
-      if (sighashType !== Transaction.SIGHASH_DEFAULT) {
-        psbt.updateInput(inputIndex, { sighashType });
-      }
+      watchOnly.prepareInput(psbt, inputIndex, options);
     },
-    signInput(psbt: Psbt, inputIndex: number, options: PearlPsbtSignOptions): void {
+    signInput(psbt: Psbt, inputIndex: number, options: PearlPsbtSignOptions = {}): void {
       assertInputIndex(psbt, inputIndex);
-      const change = options.change ?? false;
-      const internalPubkey = watchOnly.derivePublicKey(options.index, change);
-      const input = psbt.data.inputs[inputIndex];
-      if (input === undefined) {
-        throw new RangeError(`PSBT input index ${inputIndex} is out of range`);
-      }
+      const input = psbt.data.inputs[inputIndex]!;
+      // The signature covers every spent output, so all of them have to be there.
+      psbt.data.inputs.forEach((other, i) => {
+        if (other.witnessUtxo === undefined && other.nonWitnessUtxo === undefined) {
+          throw new SigningError(
+            'INPUT_UNPREPARED',
+            `PSBT input ${i} is not prepared: it has no witness UTXO. Prepare every input before signing any`,
+          );
+        }
+      });
+      const { index, change } =
+        options.index === undefined ? childFromDerivation(input, inputIndex) : { index: options.index, change: options.change ?? false };
+      const internalPubkey = watchOnly.derivePublicKey(index, change);
       if (input.tapLeafScript !== undefined || input.tapMerkleRoot !== undefined) {
         throw new SigningError('INPUT_MISMATCH', 'BIP86 accounts sign Taproot key-path inputs only');
       }
@@ -429,7 +511,7 @@ export function deriveSigningAccountFromSeed(
       if (input.tapInternalKey === undefined) {
         psbt.updateInput(inputIndex, { tapInternalKey: internalPubkey });
       }
-      withChild(options.index, change, (child) => {
+      withChild(index, change, (child) => {
         // The BIP86 tweak, done here so the tweaked key can be overwritten after use.
         const privateKey = child.privateKey!;
         const evenKey = child.publicKey[0] === 0x03 ? ecc.privateNegate(privateKey) : privateKey;
@@ -478,6 +560,16 @@ export function deriveSigningAccountFromSeed(
         signMessage(child.privateKey!, message, options.auxRand === undefined ? {} : { auxRand: options.auxRand }),
       );
     },
+    tapscriptSigner(options: PearlSignOptions): TapscriptSigner {
+      const change = options.change ?? false;
+      return {
+        publicKey: watchOnly.derivePublicKey(options.index, change),
+        signSchnorr: (hash: Uint8Array) =>
+          withChild(options.index, change, (child) =>
+            schnorrSigner(child.privateKey!, child.publicKey, options.auxRand).signSchnorr(hash),
+          ),
+      };
+    },
     destroy(): void {
       destroyed = true;
       master.privateKey?.fill(0);
@@ -492,12 +584,19 @@ export function deriveSigningAccountFromSeed(
  * The key must carry the network's HD public version bytes, sit at depth 3,
  * and must not contain private key material.
  *
+ * Pass the key's origin, the master fingerprint and account path a descriptor
+ * shows in brackets, to have prepareInput write the same derivation records
+ * the signing account does. Without it `path` and `masterFingerprint` are
+ * null.
+ *
  * Throws for an extended private key, a key whose version bytes belong to
- * another network, and a key at any other depth.
+ * another network, a key at any other depth, and an origin that does not
+ * fit the key.
  */
 export function importWatchOnlyAccount(
   extendedKey: string,
   network: PearlNetwork,
+  origin?: KeyOrigin,
 ): PearlAccount {
   assertNetwork(network);
   let node: BIP32Interface;
@@ -513,5 +612,17 @@ export function importWatchOnlyAccount(
       'watch-only accounts cannot be imported from an extended private key',
     );
   }
-  return toWatchOnlyAccount(node, null, network);
+  if (origin === undefined) return toWatchOnlyAccount(node, null, network);
+  const fingerprint = origin.masterFingerprint;
+  const masterFingerprint =
+    typeof fingerprint !== 'string' ? Uint8Array.from(fingerprint) : /^[0-9a-f]{8}$/i.test(fingerprint) ? fromHex(fingerprint) : new Uint8Array(0);
+  const account = /^m\/86'\/(\d+)'\/(\d+)'$/.exec(origin.path);
+  // The key records its own child number, so a path for another account is caught here.
+  if (masterFingerprint.length !== 4 || account === null || Number(account[2]) + 0x80000000 !== node.index) {
+    throw new PearlError(
+      'EXTENDED_KEY_INVALID',
+      "key origin must be a 4-byte master fingerprint and the path m/86'/coinType'/account' this key sits at",
+    );
+  }
+  return toWatchOnlyAccount(node, { masterFingerprint, path: origin.path }, network);
 }

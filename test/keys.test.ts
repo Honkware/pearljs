@@ -9,8 +9,8 @@ import {
   accountPath,
   deriveAccountFromSeed,
   importWatchOnlyAccount,
-  mnemonicToSeed,
 } from '../src/keys.js';
+import { mnemonicToSeed } from '../src/mnemonic.js';
 
 const bip32 = BIP32Factory(ecc);
 initEccLib(ecc);
@@ -21,7 +21,6 @@ initEccLib(ecc);
 // are derived from the official vectors by re-encoding.
 const vectorNetwork: PearlNetwork = {
   ...networks.regtest,
-  name: 'regtest-coin0',
   coinType: 0,
 };
 

@@ -10,7 +10,8 @@
 
 import { initEccLib, payments } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
-import { WITNESS_PROGRAM_LENGTH } from './address.js';
+import { fromOutputScript, WITNESS_PROGRAM_LENGTH } from './address.js';
+import type { PearlNetwork } from './networks.js';
 import { scriptPush } from './script.js';
 import { PearlError } from './errors.js';
 
@@ -89,6 +90,16 @@ export function p2mr(args: { merkleRoot: Uint8Array }): P2mrPayment {
     merkleRoot: Uint8Array.from(args.merkleRoot),
     output: Uint8Array.from([OP_2, WITNESS_PROGRAM_LENGTH, ...args.merkleRoot]),
   };
+}
+
+/** The address of a P2TR output; takes what p2tr takes. */
+export function p2trAddress(args: { internalPubkey: Uint8Array; merkleRoot?: Uint8Array }, network: PearlNetwork): string {
+  return fromOutputScript(p2tr(args).output, network);
+}
+
+/** The address of a P2MR output; takes what p2mr takes, so `p2mrAddress({ merkleRoot: tree.root }, network)`. */
+export function p2mrAddress(args: { merkleRoot: Uint8Array }, network: PearlNetwork): string {
+  return fromOutputScript(p2mr(args).output, network);
 }
 
 /**

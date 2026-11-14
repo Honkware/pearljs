@@ -9,10 +9,13 @@
  * @module
  */
 
+/** The name of a Pearl network, a key of `networks`. */
+export type PearlNetworkName = 'mainnet' | 'testnet' | 'testnet2' | 'regtest' | 'simnet';
+
 /** Parameters of one Pearl network, from Pearl's chaincfg. Not a bitcoinjs Network object. */
 export interface PearlNetwork {
   /** Lowercase canonical name, e.g. "mainnet". */
-  name: string;
+  name: PearlNetworkName;
   /** P2P message magic, wire.PearlNet. */
   magic: number;
   /** Default peer-to-peer port. */
@@ -218,13 +221,12 @@ export const simnet: PearlNetwork = {
 };
 
 /** The five Pearl networks by name. */
-export const networks = {
+export const networks: Readonly<Record<PearlNetworkName, PearlNetwork>> = {
   mainnet,
   testnet,
   testnet2,
   regtest,
   simnet,
-} as const;
+};
 
-/** A key of networks: mainnet, testnet, testnet2, regtest or simnet. */
-export type PearlNetworkName = keyof typeof networks;
+

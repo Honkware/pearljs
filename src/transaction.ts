@@ -11,7 +11,7 @@
 import { Psbt, Transaction } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { MAX_GRAIN } from './amount.js';
-import { toOutputScript } from './address.js';
+import { fromOutputScript, toOutputScript } from './address.js';
 import { multiAStack, parseMultiA } from './multia.js';
 import { classifyOutputScript, tapLeafHash } from './script.js';
 import { tapscriptSighash } from './scriptpath.js';
@@ -300,6 +300,25 @@ export function serializeWitness(witness: readonly Uint8Array[]): Uint8Array {
     ...varInt(witness.length),
     ...witness.flatMap((item) => [...varInt(item.length), ...item]),
   ]);
+}
+
+/** One output of a PSBT as psbtOutputs reports it. */
+export interface PsbtOutput extends TxOutput {
+  /** The Pearl address the script pays, or null for an OP_RETURN or any other script. */
+  address: string | null;
+}
+
+/**
+ * The outputs of a PSBT with their Pearl addresses. `psbt.txOutputs` reports
+ * addresses for Bitcoin mainnet (`bc1p...`), since the Psbt class knows no
+ * other network; read them here.
+ */
+export function psbtOutputs(psbt: Psbt, network: PearlNetwork): PsbtOutput[] {
+  return psbt.txOutputs.map((output) => {
+    const script = Uint8Array.from(output.script);
+    const kind = classifyOutputScript(script);
+    return { script, value: output.value, address: kind === 'p2tr' || kind === 'p2mr' ? fromOutputScript(script, network) : null };
+  });
 }
 
 /**
