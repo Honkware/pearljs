@@ -724,7 +724,7 @@ export class PearlWallet {
     });
   }
 
-  /** The last receive address handed out if nothing has paid it yet, else a new one, as Oyster's getaccountaddress does. */
+  /** The last receive address handed out if nothing has paid it yet, else a new one, as Oyster's CurrentAddress does (wallet/wallet/wallet.go:1810). */
   async currentAddress(options: { account?: string } = {}): Promise<string> {
     const record = this.#account(options.account);
     if (record.receive > 0) {
