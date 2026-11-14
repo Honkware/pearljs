@@ -5,6 +5,7 @@ export * from './blockheader.js';
 export * from './client.js';
 export * from './invoice.js';
 export * from './keys.js';
+export * from './message.js';
 export * from './networks.js';
 export * from './payments.js';
 export * from './script.js';

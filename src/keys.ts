@@ -11,6 +11,7 @@ import * as ecc from 'tiny-secp256k1';
 import { MAX_GRAIN } from './amount.js';
 import { fromOutputScript } from './address.js';
 import type { PearlNetwork } from './networks.js';
+import { signMessage } from './message.js';
 import { p2tr } from './payments.js';
 import {
   assertTaprootSighashType as assertSighashType,
@@ -106,6 +107,8 @@ export interface PearlSigningAccount {
   signScriptPathInput(psbt: Psbt, inputIndex: number, options: PearlScriptPathSignOptions): void;
   /** Signs a P2MR input and sets its witness; see signP2mrInput. */
   signP2mrInput(tx: Transaction, inputIndex: number, options: PearlP2mrSignOptions): void;
+  /** Signs a message for the child's P2TR address; see signMessage. */
+  signMessage(message: string, options: PearlSignOptions): string;
 }
 
 function assertNonHardenedIndex(value: number, label: string): void {
@@ -333,6 +336,10 @@ export function deriveSigningAccountFromSeed(
     signP2mrInput(tx: Transaction, inputIndex: number, options: PearlP2mrSignOptions): void {
       const child = deriveChild(options.index, options.change ?? false);
       signP2mrInput(tx, inputIndex, child, options);
+    },
+    signMessage(message: string, options: PearlSignOptions): string {
+      const child = deriveChild(options.index, options.change ?? false);
+      return signMessage(child.privateKey!, message);
     },
   };
 }

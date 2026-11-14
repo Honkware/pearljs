@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/pearl-research-labs/pearl/node/blockchain"
@@ -24,6 +25,7 @@ import (
 	"github.com/pearl-research-labs/pearl/node/chaincfg/chainhash"
 	"github.com/pearl-research-labs/pearl/node/txscript"
 	"github.com/pearl-research-labs/pearl/node/wire"
+	"github.com/pearl-research-labs/pearl/wallet/rpc/jsonrpc"
 	"github.com/pearl-research-labs/pearl/xmss"
 )
 
@@ -209,7 +211,21 @@ type Vectors struct {
 	ScriptPathSpends []ScriptPathSpendVector `json:"scriptPathSpends"`
 	Blocks           []BlockVector           `json:"blocks"`
 	XMSS             XMSSVectors             `json:"xmss"`
+	Messages         []MessageVector         `json:"messages"`
 	BadBlocks        []BadBlockVector        `json:"badBlocks"`
+}
+
+// MessageVector is a signmessage case from Oyster's BIP322SignMessageSimple
+// and BIP322VerifyMessageSimple. SignError is set when Oyster refuses to
+// sign; Valid is what its verifier returns for Signature against Address.
+type MessageVector struct {
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	Address   string `json:"address"`
+	Message   string `json:"message"`
+	Signature string `json:"signature"`
+	SignError string `json:"signError"`
+	Valid     bool   `json:"valid"`
 }
 
 type XMSSKeyVector struct {
@@ -943,6 +959,58 @@ func main() {
 		}
 		sealBlock(block, item.cert)
 		vectors.Blocks = append(vectors.Blocks, makeBlockVector(item.name, block))
+	}
+
+	// Message signing as Oyster does it, with BIP86 mainnet keys.
+	messageKey := func(index uint32) (*btcec.PrivateKey, *btcutil.AddressTaproot) {
+		priv, err := derive(account, 0, index).ECPrivKey()
+		check(err)
+		addr, err := btcutil.NewAddressTaproot(
+			schnorr.SerializePubKey(txscript.ComputeTaprootKeyNoScript(priv.PubKey())), &chaincfg.MainNetParams,
+		)
+		check(err)
+		return priv, addr
+	}
+	privM0, addrM0 := messageKey(0)
+	_, addrM1 := messageKey(1)
+	for _, item := range []struct {
+		name    string
+		message string
+	}{
+		{"empty", ""},
+		{"ascii", "Hello, Pearl"},
+		{"utf8", "h\u00e9llo w\u00f6rld \u2713"},
+		{"eighty-bytes", strings.Repeat("a", 80)},
+		{"eighty-one-bytes", strings.Repeat("a", 81)},
+	} {
+		vector := MessageVector{
+			Name: item.name, Path: accountPath + "/0/0", Address: addrM0.String(), Message: item.message,
+		}
+		sig, err := jsonrpc.BIP322SignMessageSimple(privM0, addrM0, item.message)
+		if err != nil {
+			vector.SignError = err.Error()
+		} else {
+			vector.Signature = sig
+			vector.Valid, err = jsonrpc.BIP322VerifyMessageSimple(addrM0, sig, item.message)
+			check(err)
+		}
+		vectors.Messages = append(vectors.Messages, vector)
+	}
+	asciiSignature := vectors.Messages[1].Signature
+	for _, item := range []struct {
+		name    string
+		addr    *btcutil.AddressTaproot
+		message string
+	}{
+		{"other-message", addrM0, "Hello, Pearl!"},
+		{"other-address", addrM1, "Hello, Pearl"},
+	} {
+		valid, err := jsonrpc.BIP322VerifyMessageSimple(item.addr, asciiSignature, item.message)
+		check(err)
+		vectors.Messages = append(vectors.Messages, MessageVector{
+			Name: item.name, Path: accountPath + "/0/0", Address: item.addr.String(), Message: item.message,
+			Signature: asciiSignature, Valid: valid,
+		})
 	}
 
 	// XMSS: keys from fixed seeds (key "a" uses the seeds published in

@@ -1327,6 +1327,71 @@
       }
     ]
   },
+  "messages": [
+    {
+      "name": "empty",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "",
+      "signature": "AUByq8gAnixDKUdEanB11Dv3ZdzBB264fUnCvdT2pJXdf/ROGwpFfkH/HRHKiaJcgA4Yxo/jvJGyt05cek8l6In0",
+      "signError": "",
+      "valid": true
+    },
+    {
+      "name": "ascii",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "Hello, Pearl",
+      "signature": "AUA2KBw4ERWXbXbd7dUzHcZ+MgNphEKz6hnPxsaVtJs7qzsmXS6HUw5eUzHR0P18kqwiHpBHOh06s6hhfGTQPlk0",
+      "signError": "",
+      "valid": true
+    },
+    {
+      "name": "utf8",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "héllo wörld ✓",
+      "signature": "AUDR5iFI5d9CCMuP1x5aQ1RKBecdxRghrpAybzZ5yLXL9hqIXGYwlmylW2F/SjbL8aUVvwVgzxPI8TQyERfjOp4B",
+      "signError": "",
+      "valid": true
+    },
+    {
+      "name": "eighty-bytes",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "signature": "AUBidju5Qx3Ala6kojujTOjOHNSlSlgupx2XmGbLspNGZaa/el+ENVfq5QPkWL53vRY2sbVqKtKcyHUGw9aAV3Vz",
+      "signError": "",
+      "valid": true
+    },
+    {
+      "name": "eighty-one-bytes",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "signature": "",
+      "signError": "failed to create message script: data size 81 is larger than max allowed size 80",
+      "valid": false
+    },
+    {
+      "name": "other-message",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "Hello, Pearl!",
+      "signature": "AUA2KBw4ERWXbXbd7dUzHcZ+MgNphEKz6hnPxsaVtJs7qzsmXS6HUw5eUzHR0P18kqwiHpBHOh06s6hhfGTQPlk0",
+      "signError": "",
+      "valid": false
+    },
+    {
+      "name": "other-address",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pyx3nlscz8rvsxqhcjtyqt2g5szuk9ss7m5saszu3afwwhvn9zp2sz62rhm",
+      "message": "Hello, Pearl",
+      "signature": "AUA2KBw4ERWXbXbd7dUzHcZ+MgNphEKz6hnPxsaVtJs7qzsmXS6HUw5eUzHR0P18kqwiHpBHOh06s6hhfGTQPlk0",
+      "signError": "",
+      "valid": false
+    }
+  ],
   "badBlocks": [
     {
       "name": "unknown-certificate-version",
