@@ -98,7 +98,7 @@ describeLive('websocket', () => {
       expect(await ws.call<number>('getblockcount')).toBe(await pearld.getBlockCount());
       expect(await ws.call<string>('getbestblockhash')).toBe(await pearld.getBestBlockHash());
       expect(typeof (await ws.session())).toBe('bigint');
-      await expect(ws.call('nosuchmethod')).rejects.toMatchObject({ kind: 'rpc', code: -32601 });
+      await expect(ws.call('nosuchmethod')).rejects.toMatchObject({ kind: 'rpc', rpcCode: -32601 });
     }
   });
 

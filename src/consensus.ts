@@ -19,6 +19,7 @@ import { GRAIN_PER_PEARL } from './amount.js';
 import { isMoECertificate } from './block.js';
 import type { CertificateVersion, PearlCertificate } from './block.js';
 import type { PearlNetwork } from './networks.js';
+import { PearlError } from './errors.js';
 
 /** chaincfg CoinbaseMaturity, the same on every network: blocks before a coinbase output can be spent. */
 export const COINBASE_MATURITY = 100;
@@ -52,15 +53,15 @@ export function requiredCertVersion(network: PearlNetwork, height: number): Cert
  * rank-penalty rule reads the proof's public data and is not checked here.
  */
 export function checkCertificateRules(certificate: PearlCertificate | null, network: PearlNetwork, height: number): void {
-  if (certificate === null) throw new Error('block has no certificate');
+  if (certificate === null) throw new PearlError('BLOCK_CERTIFICATE_INVALID', 'block has no certificate');
   const want = requiredCertVersion(network, height);
   if (certificate.version !== want) {
-    throw new Error(
+    throw new PearlError('BLOCK_CERTIFICATE_INVALID',
       `certificate version ${certificate.version} is not allowed at height ${height} (require version ${want})`,
     );
   }
   if (isMoECertificate(certificate) && active(network.forkHeights.denseOnly, height)) {
-    throw new Error(
+    throw new PearlError('BLOCK_CERTIFICATE_INVALID',
       `MoE certificate is not allowed at height ${height} (dense-only fork active from height ${network.forkHeights.denseOnly})`,
     );
   }

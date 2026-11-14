@@ -35,6 +35,7 @@ import {
   type TxRawResult,
 } from './rpc.js';
 import { fromHex } from './internal/bytes.js';
+import { PearlError } from './errors.js';
 
 /** Websocket path of pearld and Oyster. */
 export const PEARLD_WS_PATH = '/ws';
@@ -792,7 +793,7 @@ export class JsonRpcWsClient implements Rpc {
 
   #notifications(method: string): void {
     if (this.#oyster) {
-      throw new Error(`${method}: Oyster's websocket sends no notifications and would pass ${method} to its own pearld connection`);
+      throw new PearlError('BACKEND_UNSUPPORTED', `${method}: Oyster's websocket sends no notifications and would pass ${method} to its own pearld connection`);
     }
   }
 

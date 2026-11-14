@@ -53,7 +53,7 @@ describeLive('reorganization', () => {
     // A node at genesis has no estimate at all.
     await expect(other.estimateFee(1)).rejects.toMatchObject({
       kind: 'rpc',
-      code: RPC_ERROR_CODES.MISC,
+      rpcCode: RPC_ERROR_CODES.MISC,
       message: 'estimatefee: not enough blocks have been observed (code -1)',
     });
 

@@ -20,6 +20,7 @@ import { decompileScript } from './scripttools.js';
 import { verifyP2mrLeafCommitment, verifyTaprootLeafCommitment } from './scripttree.js';
 import type { PearlNetwork } from './networks.js';
 import { fromBase64, toHex, varInt } from './internal/bytes.js';
+import { PearlError, SigningError } from './errors.js';
 
 export { Psbt, Transaction };
 
@@ -28,7 +29,7 @@ function checkHex(hex: string, what: string): void {
     throw new TypeError(`${what} must be a hexadecimal string`);
   }
   if (hex.length === 0 || hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) {
-    throw new Error(`${what} must be non-empty, even-length hexadecimal`);
+    throw new PearlError('TX_MALFORMED', `${what} must be non-empty, even-length hexadecimal`);
   }
 }
 
@@ -85,7 +86,7 @@ export function parsePsbt(base64: string): Psbt {
     base64.length % 4 !== 0 ||
     !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/][AEIMQUYcgkosw048]==|[A-Za-z0-9+/]{2}[AQgw]=)?$/.test(base64)
   ) {
-    throw new Error('PSBT must be canonical padded base64');
+    throw new PearlError('PSBT_MALFORMED', 'PSBT must be canonical padded base64');
   }
   let psbt: Psbt;
   try {
@@ -97,12 +98,12 @@ export function parsePsbt(base64: string): Psbt {
       error instanceof RangeError || error instanceof TypeError || !(error instanceof Error)
         ? 'a field is malformed'
         : error.message;
-    throw new Error(`invalid PSBT: ${reason}`);
+    throw new PearlError('PSBT_MALFORMED', `invalid PSBT: ${reason}`);
   }
   const bytes = fromBase64(base64);
   const end = psbtEnd(bytes, psbt.inputCount, psbt.txOutputs.length);
   if (end !== bytes.length) {
-    throw new Error(`invalid PSBT: ${bytes.length - end} bytes follow the last map`);
+    throw new PearlError('PSBT_MALFORMED', `invalid PSBT: ${bytes.length - end} bytes follow the last map`);
   }
   return psbt;
 }
@@ -120,7 +121,7 @@ const PSBT_IN_SIGHASH_TYPE = 0x03;
  */
 function psbtEnd(bytes: Uint8Array, inputs: number, outputs: number): number {
   let offset = PSBT_MAGIC_LENGTH;
-  const malformed = (): Error => new Error('invalid PSBT: a key or value runs past the end');
+  const malformed = (): Error => new PearlError('PSBT_MALFORMED', 'invalid PSBT: a key or value runs past the end');
   const readLength = (): number => {
     const first = bytes[offset];
     if (first === undefined) throw malformed();
@@ -132,7 +133,7 @@ function psbtEnd(bytes: Uint8Array, inputs: number, outputs: number): number {
     for (let i = width - 1; i >= 0; i -= 1) value = value * 256 + bytes[offset + i]!;
     offset += width;
     if (value < (width === 2 ? 0xfd : width === 4 ? 0x10000 : 0x100000000)) {
-      throw new Error('invalid PSBT: a length is a non-canonical varint');
+      throw new PearlError('PSBT_MALFORMED', 'invalid PSBT: a length is a non-canonical varint');
     }
     return value;
   };
@@ -146,7 +147,7 @@ function psbtEnd(bytes: Uint8Array, inputs: number, outputs: number): number {
       offset += valueLength;
       if (offset > bytes.length) throw malformed();
       if (sighashType && valueLength !== 4) {
-        throw new Error(`invalid PSBT: input ${map - 1} has a sighash type of ${valueLength} bytes, not 4`);
+        throw new PearlError('PSBT_MALFORMED', `invalid PSBT: input ${map - 1} has a sighash type of ${valueLength} bytes, not 4`);
       }
     }
   }
@@ -164,7 +165,7 @@ export function createPsbt(tx: Transaction): Psbt {
   psbt.setLocktime(tx.locktime);
   for (const input of tx.ins) {
     if (input.script.length !== 0 || input.witness.length !== 0) {
-      throw new Error('PSBT unsigned transactions cannot contain signatures or witnesses');
+      throw new PearlError('PSBT_MALFORMED', 'PSBT unsigned transactions cannot contain signatures or witnesses');
     }
     psbt.addInput({
       hash: input.hash,
@@ -219,11 +220,11 @@ function pearlScriptPathWitness(psbt: Psbt, inputIndex: number): Uint8Array[] | 
   if (input.tapKeySig !== undefined || signatures.length === 0) return null;
   const target = toHex(signatures[0]!.leafHash);
   if (signatures.some((sig) => toHex(sig.leafHash) !== target)) {
-    throw new Error('script-path signatures reference different leaves; only one script path is supported');
+    throw new SigningError('INPUT_MISMATCH', 'script-path signatures reference different leaves; only one script path is supported');
   }
   const leaf = (input.tapLeafScript ?? []).find((item) => toHex(tapLeafHash(item.script, item.leafVersion)) === target);
   if (leaf === undefined) {
-    throw new Error('no tap leaf script matches the script-path signatures');
+    throw new SigningError('INPUT_MISMATCH', 'no tap leaf script matches the script-path signatures');
   }
   const multiA = parseMultiA(leaf.script);
   const prevScript = input.witnessUtxo?.script;
@@ -249,7 +250,7 @@ function pearlScriptPathWitness(psbt: Psbt, inputIndex: number): Uint8Array[] | 
         ? undefined
         : Transaction.fromBuffer(other.nonWitnessUtxo).outs[txInput.index]);
     if (utxo === undefined) {
-      throw new Error(`PSBT input ${index} has no UTXO to check script-path signatures against`);
+      throw new SigningError('INPUT_UNPREPARED', `PSBT input ${index} has no UTXO to check script-path signatures against`);
     }
     return { script: utxo.script, value: utxo.value };
   });
@@ -268,14 +269,14 @@ function pearlScriptPathWitness(psbt: Psbt, inputIndex: number): Uint8Array[] | 
         signature.subarray(0, 64),
       )
     ) {
-      throw new Error(`PSBT input ${inputIndex} has an invalid script-path signature for key ${key}`);
+      throw new SigningError('SIGNATURE_INVALID', `PSBT input ${inputIndex} has an invalid script-path signature for key ${key}`);
     }
     return true;
   });
 
   if (multiA === null) {
     if (forLeaf.length === 0) {
-      throw new Error(`PSBT input ${inputIndex} has no signature for a key its leaf pushes`);
+      throw new SigningError('SIGNATURES_MISSING', `PSBT input ${inputIndex} has no signature for a key its leaf pushes`);
     }
     return [...forLeaf.map((sig) => sig.signature), leaf.script, leaf.controlBlock];
   }
@@ -307,7 +308,7 @@ export function addPearlOutput(
     throw new TypeError('output value must be a bigint of grains');
   }
   if (value < 0n || value > MAX_GRAIN) {
-    throw new Error('output value is outside Pearl amount bounds');
+    throw new PearlError('AMOUNT_OUT_OF_RANGE', 'output value is outside Pearl amount bounds');
   }
   psbt.addOutput({ script: toOutputScript(address, network), value });
 }

@@ -18,6 +18,7 @@ import { encodeScriptNumber, scriptPush } from './script.js';
 import { decodeScriptNumber, decompileScript } from './scripttools.js';
 import type { ScriptChunk } from './scripttools.js';
 import { toHex } from './internal/bytes.js';
+import { PearlError, SigningError } from './errors.js';
 
 const isData = (chunk: ScriptChunk | undefined): chunk is Uint8Array => chunk instanceof Uint8Array;
 
@@ -49,9 +50,9 @@ export function multiAScript(keys: readonly Uint8Array[], threshold: number): Ui
   const seen = new Set<string>();
   const parts: number[] = [];
   keys.forEach((key, i) => {
-    if (key.length !== 32) throw new Error(`multi_a key ${i} must be 32 bytes, got ${key.length}`);
+    if (key.length !== 32) throw new PearlError('SCRIPT_INVALID', `multi_a key ${i} must be 32 bytes, got ${key.length}`);
     const id = key.join(',');
-    if (seen.has(id)) throw new Error(`multi_a key ${i} is a duplicate`);
+    if (seen.has(id)) throw new PearlError('SCRIPT_INVALID', `multi_a key ${i} is a duplicate`);
     seen.add(id);
     parts.push(...scriptPush(key), i === 0 ? OP_CODES.OP_CHECKSIG : OP_CODES.OP_CHECKSIGADD);
   });
@@ -64,7 +65,7 @@ export function parseMultiA(script: Uint8Array): MultiALeaf | null {
   // Pearl refuses any leaf its tokenizer cannot parse, multi_a or not.
   const chunks = decompileScript(script);
   const unsupported = (): null => {
-    if (chunks.includes(OP_CODES.OP_CHECKSIGADD)) throw new Error('unsupported OP_CHECKSIGADD script');
+    if (chunks.includes(OP_CODES.OP_CHECKSIGADD)) throw new PearlError('SCRIPT_INVALID', 'unsupported OP_CHECKSIGADD script');
     return null;
   };
   const first = chunks[0];
@@ -96,7 +97,7 @@ export function parseMultiA(script: Uint8Array): MultiALeaf | null {
     threshold = null;
   }
   if (threshold === null || threshold < 1 || threshold > keys.length) {
-    throw new Error('unsupported OP_CHECKSIGADD script');
+    throw new PearlError('SCRIPT_INVALID', 'unsupported OP_CHECKSIGADD script');
   }
   return { keys, threshold };
 }
@@ -114,11 +115,11 @@ export function parseMultiA(script: Uint8Array): MultiALeaf | null {
 export function multiAStack(leaf: MultiALeaf, signatures: ReadonlyMap<string, Uint8Array>): Uint8Array[] {
   const keyHexes = leaf.keys.map(toHex);
   for (const key of signatures.keys()) {
-    if (!keyHexes.includes(key)) throw new Error('a script-path signature does not match a multi_a key');
+    if (!keyHexes.includes(key)) throw new SigningError('INPUT_MISMATCH', 'a script-path signature does not match a multi_a key');
   }
   const available = keyHexes.filter((key) => signatures.has(key)).length;
   if (available < leaf.threshold) {
-    throw new Error(`multi_a leaf has ${available} of the ${leaf.threshold} signatures it needs`);
+    throw new SigningError('SIGNATURES_MISSING', `multi_a leaf has ${available} of the ${leaf.threshold} signatures it needs`);
   }
   let remaining = leaf.threshold;
   const selected = keyHexes.map((key) => {

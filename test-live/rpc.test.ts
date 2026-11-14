@@ -189,7 +189,7 @@ describeLive('pearld RPC over TLS', () => {
 
     expect(await pearld.sendRawTransaction(Buffer.from(hex, 'hex'))).toBe(txid);
     const again = await failure(pearld.sendRawTransaction(hex));
-    expect(again).toMatchObject({ kind: 'rpc', code: RPC_ERROR_CODES.TX_REJECTED });
+    expect(again).toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.TX_REJECTED });
     expect(again.message).toBe(`sendrawtransaction: TX rejected: already have transaction in mempool ${txid} (code -26)`);
 
     expect(await pearld.getMempoolInfo()).toEqual({ size: 1, bytes: spend.byteLength(), cap: 300_000_000 });
@@ -210,7 +210,7 @@ describeLive('pearld RPC over TLS', () => {
     expect(await pearld.getMempoolInfo()).toMatchObject({ size: 0, bytes: 0 });
     expect(parseTransaction(await pearld.getRawTransactionHex(txid)).getId()).toBe(txid);
     const chained = await failure(pearld.sendRawTransaction(hex));
-    expect(chained).toMatchObject({ kind: 'rpc', code: RPC_ERROR_CODES.TX_ALREADY_IN_CHAIN });
+    expect(chained).toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.TX_ALREADY_IN_CHAIN });
   });
 
   it('estimates a fee in grain per 1000 bytes once transactions have confirmed', async () => {
@@ -237,7 +237,7 @@ describeLive('pearld RPC errors', () => {
   it('reports a wrong password as HTTP 401', async () => {
     const client = new PearldClient(clientOptions(endpoint, { username: endpoint.username, password: 'wrong' }));
     const error = await failure(client.getBlockCount());
-    expect(error).toMatchObject({ kind: 'http', status: 401, code: undefined, method: 'getblockcount' });
+    expect(error).toMatchObject({ kind: 'http', status: 401, rpcCode: undefined, method: 'getblockcount' });
     expect(error.message).toBe(`getblockcount: ${new URL(endpoint.url).host} rejected the RPC username or password (HTTP 401)`);
     // No credentials at all get the same answer.
     const anonymous = new PearldClient({ url: endpoint.url, init: clientOptions(endpoint).init! });
@@ -273,19 +273,19 @@ describeLive('pearld RPC errors', () => {
   it('reports an unknown method, an unknown transaction and a bad parameter with pearld codes', async () => {
     expect(await failure(pearld.call('nosuchmethod'))).toMatchObject({
       kind: 'rpc',
-      code: RPC_ERROR_CODES.METHOD_NOT_FOUND,
+      rpcCode: RPC_ERROR_CODES.METHOD_NOT_FOUND,
       message: 'nosuchmethod: Method not found (code -32601)',
     });
     expect(await failure(pearld.getRawTransaction('00'.repeat(32)))).toMatchObject({
       kind: 'rpc',
-      code: RPC_ERROR_CODES.NO_TX_INFO,
+      rpcCode: RPC_ERROR_CODES.NO_TX_INFO,
     });
     expect(await failure(pearld.getBlockHash(1_000_000))).toMatchObject({
       kind: 'rpc',
-      code: RPC_ERROR_CODES.MISC,
+      rpcCode: RPC_ERROR_CODES.MISC,
       message: 'getblockhash: Block number out of range (code -1)',
     });
-    expect(await failure(pearld.sendRawTransaction('zz'))).toMatchObject({ kind: 'rpc', code: RPC_ERROR_CODES.DESERIALIZATION });
+    expect(await failure(pearld.sendRawTransaction('zz'))).toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.DESERIALIZATION });
   });
 
   it('lets the limited user read the chain but not call admin methods', async () => {
@@ -299,7 +299,7 @@ describeLive('pearld RPC errors', () => {
     ];
     for (const call of refused) {
       const error = await failure(call());
-      expect(error).toMatchObject({ kind: 'rpc', code: RPC_ERROR_CODES.INTERNAL });
+      expect(error).toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.INTERNAL });
       expect(error.message).toContain('limited user not authorized for this method');
     }
   });
@@ -343,6 +343,6 @@ describeOyster('Oyster RPC errors', () => {
   it('passes methods it does not handle to pearld, and reports ones nobody knows', async () => {
     expect(await oyster.call('getblockcount')).toBe(await pearld.getBlockCount());
     expect(await oyster.call('getbestblockhash')).toBe(await pearld.getBestBlockHash());
-    expect(await failure(oyster.call('nosuchmethod'))).toMatchObject({ kind: 'rpc', code: RPC_ERROR_CODES.METHOD_NOT_FOUND });
+    expect(await failure(oyster.call('nosuchmethod'))).toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.METHOD_NOT_FOUND });
   });
 });

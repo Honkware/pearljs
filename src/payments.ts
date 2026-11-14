@@ -12,6 +12,7 @@ import { initEccLib, payments } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { WITNESS_PROGRAM_LENGTH } from './address.js';
 import { scriptPush } from './script.js';
+import { PearlError } from './errors.js';
 
 initEccLib(ecc);
 
@@ -70,7 +71,7 @@ export function p2tr(args: { internalPubkey: Uint8Array; merkleRoot?: Uint8Array
   // invalid internal key here instead of at the call site later.
   const output = payment.output;
   if (output === undefined) {
-    throw new Error('p2tr: could not derive output script');
+    throw new PearlError('KEY_INVALID', 'p2tr: could not derive output script');
   }
   return {
     name: 'p2tr',
@@ -97,7 +98,7 @@ export function p2mr(args: { merkleRoot: Uint8Array }): P2mrPayment {
  */
 export function embed(args: { data: Uint8Array }): EmbedPayment {
   if (args.data.length > MAX_EMBED_DATA_SIZE) {
-    throw new Error(
+    throw new PearlError('SCRIPT_INVALID',
       `embed data of ${args.data.length} bytes exceeds ${MAX_EMBED_DATA_SIZE}`,
     );
   }

@@ -19,6 +19,7 @@ import { hash256 } from './crypto.js';
 import { blockHash } from './blockheader.js';
 import type { PearlBlock } from './block.js';
 import { fromHex, toHex, varInt } from './internal/bytes.js';
+import { PearlError } from './errors.js';
 
 /** Golomb-Rice parameter of Pearl's basic filter (builder.DefaultP). */
 export const BASIC_FILTER_P = 19;
@@ -311,7 +312,7 @@ export function checkFilterHeaders(
     const computed = filterHeader(filter, prev);
     const expected = toInternal(header, 'filter header');
     if (toHex(computed) !== toHex(expected)) {
-      throw new Error(
+      throw new PearlError('FILTER_HEADER_MISMATCH',
         `filter ${i} does not match its header: computed ${filterHeaderHex(computed)}, expected ${filterHeaderHex(expected)}`,
       );
     }
@@ -354,16 +355,16 @@ export async function getBlockFilter(client: FilterRpc, blockHashHex: string, pr
 }
 
 function readVarInt(bytes: Uint8Array): [number, number] {
-  if (bytes.length < 1) throw new Error('filter is empty');
+  if (bytes.length < 1) throw new PearlError('FILTER_MALFORMED', 'filter is empty');
   const first = bytes[0]!;
   const width = first < 0xfd ? 0 : first === 0xfd ? 2 : first === 0xfe ? 4 : 8;
-  if (bytes.length < 1 + width) throw new Error('filter ends inside its item count');
+  if (bytes.length < 1 + width) throw new PearlError('FILTER_MALFORMED', 'filter ends inside its item count');
   if (width === 0) return [first, 1];
   let value = 0;
   for (let i = width; i >= 1; i--) value = value * 256 + bytes[i]!;
   // wire.ReadVarInt refuses encodings longer than needed.
   const min = width === 2 ? 0xfd : width === 4 ? 0x10000 : TWO_32;
-  if (value < min) throw new Error(`non-canonical varint ${value} for filter item count`);
+  if (value < min) throw new PearlError('FILTER_MALFORMED', `non-canonical varint ${value} for filter item count`);
   if (value >= TWO_32) throw new RangeError('filter item count does not fit in 32 bits');
   return [value, 1 + width];
 }

@@ -23,6 +23,7 @@ import { XMSS_SIGNATURE_LENGTH } from './xmss.js';
 import type { Prevout } from './scriptpath.js';
 import type { ScriptTree } from './scripttree.js';
 import { varIntSize } from './internal/bytes.js';
+import { PolicyError } from './errors.js';
 
 /** mempool.DefaultMinRelayTxFee, in grain per 1000 vbytes. */
 export const DEFAULT_MIN_RELAY_FEE = 1000n;
@@ -107,8 +108,8 @@ export function checkStandard(tx: Transaction, options: StandardOptions = {}): v
   const feeRate = options.minRelayFee ?? DEFAULT_MIN_RELAY_FEE;
   const maxVersion = options.maxTxVersion ?? MAX_STANDARD_TX_VERSION;
 
-  if (!tx.hasWitnesses()) throw new Error('transaction has no witness data');
-  if (tx.byteLength(false) < MIN_STANDARD_TX_NON_WITNESS_SIZE) throw new Error(`tx ${tx.getId()} is too small`);
+  if (!tx.hasWitnesses()) throw new PolicyError('POLICY_NO_WITNESS', 'transaction has no witness data');
+  if (tx.byteLength(false) < MIN_STANDARD_TX_NON_WITNESS_SIZE) throw new PolicyError('POLICY_TX_TOO_SMALL', `tx ${tx.getId()} is too small`);
 
   checkSanity(tx);
 
@@ -121,35 +122,35 @@ export function checkStandard(tx: Transaction, options: StandardOptions = {}): v
 
   // CheckTransactionStandard, in its order.
   if (tx.version > maxVersion || tx.version < 1) {
-    throw new Error(`transaction version ${tx.version} is not in the valid range of 1-${maxVersion}`);
+    throw new PolicyError('POLICY_VERSION', `transaction version ${tx.version} is not in the valid range of 1-${maxVersion}`);
   }
   if (options.height !== undefined && !isFinal(tx, options.height, options.medianTimePast ?? 0)) {
-    throw new Error('transaction is not finalized');
+    throw new PolicyError('POLICY_NOT_FINAL', 'transaction is not finalized');
   }
   const vsize = tx.virtualSize();
   if (vsize > MAX_STANDARD_TX_VSIZE) {
-    throw new Error(`vsize of transaction is larger than max allowed: ${vsize} > ${MAX_STANDARD_TX_VSIZE}`);
+    throw new PolicyError('POLICY_TX_TOO_LARGE', `vsize of transaction is larger than max allowed: ${vsize} > ${MAX_STANDARD_TX_VSIZE}`);
   }
   tx.ins.forEach((input, i) => {
     if (input.script.length > MAX_STANDARD_SIG_SCRIPT_SIZE) {
-      throw new Error(
+      throw new PolicyError('POLICY_SIGSCRIPT_SIZE',
         `transaction input ${i}: signature script size is larger than max allowed: ${input.script.length} > ${MAX_STANDARD_SIG_SCRIPT_SIZE} bytes`,
       );
     }
-    if (!isPushOnlyScript(input.script)) throw new Error(`transaction input ${i}: signature script is not push only`);
+    if (!isPushOnlyScript(input.script)) throw new PolicyError('POLICY_SIGSCRIPT_NOT_PUSH_ONLY', `transaction input ${i}: signature script is not push only`);
   });
   let nullData = 0;
   tx.outs.forEach((output, i) => {
     if (classifyOutputScript(output.script) === 'nulldata') nullData += 1;
-    else if (isDust(output, feeRate)) throw new Error(`transaction output ${i}: payment is dust: ${output.value}`);
+    else if (isDust(output, feeRate)) throw new PolicyError('POLICY_DUST', `transaction output ${i}: payment is dust: ${output.value}`);
   });
-  if (nullData > 1) throw new Error('more than one transaction output in a nulldata script');
+  if (nullData > 1) throw new PolicyError('POLICY_MULTIPLE_NULLDATA', 'more than one transaction output in a nulldata script');
 
   if (prevouts === undefined) return;
   // Unreachable on a real chain: sanity keeps every other script class out of the UTXO set.
   prevouts.forEach((prevout, i) => {
     if (classifyOutputScript(prevout.script) === 'nonstandard') {
-      throw new Error(`transaction input #${i} has a non-standard script form`);
+      throw new PolicyError('POLICY_NONSTANDARD_INPUT', `transaction input #${i} has a non-standard script form`);
     }
   });
   const inputValue = prevouts.reduce((sum, prevout) => sum + prevout.value, 0n);
@@ -157,7 +158,7 @@ export function checkStandard(tx: Transaction, options: StandardOptions = {}): v
   const fee = inputValue - outputValue;
   const required = minRelayFee(vsize, feeRate);
   if (fee < required) {
-    throw new Error(`transaction ${tx.getId()} has ${fee} fees which is under the required amount of ${required}`);
+    throw new PolicyError('POLICY_FEE_TOO_LOW', `transaction ${tx.getId()} has ${fee} fees which is under the required amount of ${required}`);
   }
 }
 
@@ -169,28 +170,28 @@ const MAX_GRAIN_TEXT = '2.1e+18';
  * runs before anything else, with its messages. checkStandard calls it.
  */
 export function checkSanity(tx: Transaction): void {
-  if (tx.ins.length === 0) throw new Error('transaction has no inputs');
-  if (tx.outs.length === 0) throw new Error('transaction has no outputs');
+  if (tx.ins.length === 0) throw new PolicyError('SANITY_NO_INPUTS', 'transaction has no inputs');
+  if (tx.outs.length === 0) throw new PolicyError('SANITY_NO_OUTPUTS', 'transaction has no outputs');
   const vsize = tx.virtualSize();
   if (vsize > MAX_BLOCK_VSIZE) {
-    throw new Error(`transaction vsize is too big - got ${vsize}, max ${MAX_BLOCK_VSIZE}`);
+    throw new PolicyError('SANITY_TX_TOO_LARGE', `transaction vsize is too big - got ${vsize}, max ${MAX_BLOCK_VSIZE}`);
   }
   let total = 0n;
   tx.outs.forEach((output, i) => {
     // Pearl has no other output class; this is a consensus rule, not policy.
     if (classifyOutputScript(output.script) === 'nonstandard') {
-      throw new Error(`transaction output ${i} has unsupported script type nonstandard`);
+      throw new PolicyError('SANITY_OUTPUT_SCRIPT', `transaction output ${i} has unsupported script type nonstandard`);
     }
-    if (output.value < 0n) throw new Error(`transaction output has negative value of ${output.value}`);
+    if (output.value < 0n) throw new PolicyError('SANITY_OUTPUT_NEGATIVE', `transaction output has negative value of ${output.value}`);
     if (output.value > MAX_GRAIN) {
       // The trailing space is pearld's.
-      throw new Error(
+      throw new PolicyError('SANITY_OUTPUT_TOO_LARGE',
         `transaction output value is higher than max allowed value: ${output.value} > ${MAX_GRAIN_TEXT} `,
       );
     }
     total += output.value;
     if (total > MAX_GRAIN) {
-      throw new Error(
+      throw new PolicyError('SANITY_TOTAL_TOO_LARGE',
         `total value of all transaction outputs is ${total} which is higher than max allowed value of ${MAX_GRAIN_TEXT}`,
       );
     }
@@ -198,7 +199,7 @@ export function checkSanity(tx: Transaction): void {
   const seen = new Set<string>();
   for (const input of tx.ins) {
     const outpoint = `${input.hash.join(',')}:${input.index}`;
-    if (seen.has(outpoint)) throw new Error('transaction contains duplicate inputs');
+    if (seen.has(outpoint)) throw new PolicyError('SANITY_DUPLICATE_INPUTS', 'transaction contains duplicate inputs');
     seen.add(outpoint);
   }
   const isNull = (input: { hash: Uint8Array; index: number }): boolean =>
@@ -206,13 +207,13 @@ export function checkSanity(tx: Transaction): void {
   if (tx.ins.length === 1 && isNull(tx.ins[0]!)) {
     const length = tx.ins[0]!.script.length;
     if (length < MIN_COINBASE_SCRIPT_LEN || length > MAX_COINBASE_SCRIPT_LEN) {
-      throw new Error(
+      throw new PolicyError('SANITY_COINBASE_SCRIPT',
         `coinbase transaction script length of ${length} is out of range (min: ${MIN_COINBASE_SCRIPT_LEN}, max: ${MAX_COINBASE_SCRIPT_LEN})`,
       );
     }
-    throw new Error(`transaction is an individual coinbase ${tx.getId()}`);
+    throw new PolicyError('SANITY_COINBASE', `transaction is an individual coinbase ${tx.getId()}`);
   }
-  if (tx.ins.some(isNull)) throw new Error('transaction input refers to previous output that is null');
+  if (tx.ins.some(isNull)) throw new PolicyError('SANITY_NULL_INPUT', 'transaction input refers to previous output that is null');
 }
 
 /**
@@ -224,7 +225,7 @@ function checkInputValues(tx: Transaction, prevouts: readonly Prevout[]): void {
   const inputValue = prevouts.reduce((sum, prevout) => sum + prevout.value, 0n);
   const outputValue = tx.outs.reduce((sum, output) => sum + output.value, 0n);
   if (inputValue < outputValue) {
-    throw new Error(
+    throw new PolicyError('SANITY_INPUTS_BELOW_OUTPUTS',
       `total value of all transaction inputs for transaction ${tx.getId()} is ${inputValue} which is less than the amount spent of ${outputValue}`,
     );
   }

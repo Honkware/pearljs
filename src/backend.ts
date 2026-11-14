@@ -32,6 +32,7 @@ import {
   searchAllTransactions,
 } from './rpc.js';
 import type { OutPointParam, Rpc, SearchRawTransactionsResult, WalletTransactionEntry } from './rpc.js';
+import { PearlError } from './errors.js';
 
 /** An address, or the output script of one. */
 export type Watched = string | Uint8Array;
@@ -103,12 +104,13 @@ export interface WalletBackend extends ChainClient {
 }
 
 /** pearld was asked for something only an index it runs without can answer. */
-export class MissingIndexError extends Error {
-  override readonly name = 'MissingIndexError';
+export class MissingIndexError extends PearlError {
+  override name = 'MissingIndexError';
   readonly index: 'addrindex' | 'txindex';
 
   constructor(index: 'addrindex' | 'txindex', cause: PearlRpcError) {
     super(
+      'BACKEND_MISSING_INDEX',
       index === 'addrindex'
         ? `this backend needs pearld's address index; start pearld with --addrindex (${cause.message})`
         : `this backend needs pearld's transaction index; start pearld with --txindex or --addrindex (${cause.message})`,
@@ -386,7 +388,7 @@ export function oysterBackend(rpc: Rpc, options: OysterBackendOptions): WalletBa
         return await node.sendRawTransaction(tx);
       } catch (err) {
         if (!isChainInactive(err)) throw err;
-        throw new Error('Oyster has no RPC connection to a pearld (SPV mode), so it cannot broadcast a raw transaction; send with sendMany instead', {
+        throw new PearlError('BACKEND_UNSUPPORTED', 'Oyster has no RPC connection to a pearld (SPV mode), so it cannot broadcast a raw transaction; send with sendMany instead', {
           cause: err,
         });
       }
@@ -457,7 +459,7 @@ async function estimateOrZero(node: PearldRpc, blocks: number): Promise<bigint> 
   try {
     return await node.estimateFee(blocks);
   } catch (err) {
-    if (err instanceof PearlRpcError && err.kind === 'rpc' && err.code === RPC_ERROR_CODES.MISC && !isChainInactive(err)) return 0n;
+    if (err instanceof PearlRpcError && err.kind === 'rpc' && err.rpcCode === RPC_ERROR_CODES.MISC && !isChainInactive(err)) return 0n;
     throw err;
   }
 }

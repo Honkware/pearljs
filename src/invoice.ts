@@ -34,6 +34,7 @@ import { decodeAddress } from './address.js';
 import { MAX_GRAIN } from './amount.js';
 import type { BlockRef, ChainClient } from './client.js';
 import type { PearlNetwork } from './networks.js';
+import { PearlError } from './errors.js';
 
 /** Lifecycle states of a watch-only invoice. */
 export type InvoiceState =
@@ -81,10 +82,10 @@ export interface Invoice extends CreateInvoiceConfig {
 
 function assertValidConfig(config: CreateInvoiceConfig, network: PearlNetwork): void {
   if (typeof config.id !== 'string' || config.id.length === 0) {
-    throw new Error('invoice id must be a non-empty string');
+    throw new PearlError('INVOICE_INVALID', 'invoice id must be a non-empty string');
   }
   if (typeof config.address !== 'string' || config.address.length === 0) {
-    throw new Error('invoice address must be a non-empty string');
+    throw new PearlError('INVOICE_INVALID', 'invoice address must be a non-empty string');
   }
   if (network === null || typeof network !== 'object' || typeof network.bech32Hrp !== 'string') {
     throw new TypeError('createInvoice needs the PearlNetwork the invoice address belongs to');
@@ -92,22 +93,22 @@ function assertValidConfig(config: CreateInvoiceConfig, network: PearlNetwork): 
   try {
     decodeAddress(config.address, network);
   } catch (error) {
-    throw new Error(`invoice address is not valid on ${network.name}: ${(error as Error).message}`);
+    throw new PearlError('INVOICE_INVALID', `invoice address is not valid on ${network.name}: ${(error as Error).message}`);
   }
   if (typeof config.amount !== 'bigint' || config.amount <= 0n) {
-    throw new Error('invoice amount must be a positive bigint');
+    throw new PearlError('INVOICE_INVALID', 'invoice amount must be a positive bigint');
   }
   if (config.amount > MAX_GRAIN) {
-    throw new Error('invoice amount is above the largest Pearl amount');
+    throw new PearlError('INVOICE_INVALID', 'invoice amount is above the largest Pearl amount');
   }
   if (!Number.isSafeInteger(config.createdAt) || config.createdAt < 0) {
-    throw new Error('invoice createdAt must be a non-negative integer of epoch seconds');
+    throw new PearlError('INVOICE_INVALID', 'invoice createdAt must be a non-negative integer of epoch seconds');
   }
   if (!Number.isSafeInteger(config.expiresAt) || config.expiresAt <= config.createdAt) {
-    throw new Error('invoice expiresAt must be an integer of epoch seconds after createdAt');
+    throw new PearlError('INVOICE_INVALID', 'invoice expiresAt must be an integer of epoch seconds after createdAt');
   }
   if (!Number.isSafeInteger(config.requiredConfirmations) || config.requiredConfirmations < 1) {
-    throw new Error('invoice requiredConfirmations must be a positive integer');
+    throw new PearlError('INVOICE_INVALID', 'invoice requiredConfirmations must be a positive integer');
   }
 }
 
@@ -126,7 +127,7 @@ export function createInvoice(config: CreateInvoiceConfig, network: PearlNetwork
 function blockHeight(block: BlockRef, what: string): number {
   const height = (block as BlockRef | null | undefined)?.height;
   if (!Number.isSafeInteger(height) || height! < 0) {
-    throw new Error(`chain backend returned ${what} without a valid height`);
+    throw new PearlError('BACKEND_RESPONSE', `chain backend returned ${what} without a valid height`);
   }
   return height!;
 }
@@ -163,13 +164,13 @@ export async function refreshInvoice(
   >();
   for (const payment of activity) {
     if (typeof payment.txid !== 'string' || payment.txid.length === 0) {
-      throw new Error('chain backend returned a payment without a txid');
+      throw new PearlError('BACKEND_RESPONSE', 'chain backend returned a payment without a txid');
     }
     if (typeof payment.amount !== 'bigint' || payment.amount < 0n || payment.amount > MAX_GRAIN) {
-      throw new Error(`chain backend returned an invalid amount for ${payment.txid}`);
+      throw new PearlError('BACKEND_RESPONSE', `chain backend returned an invalid amount for ${payment.txid}`);
     }
     if (payment.block === undefined) {
-      throw new Error(`chain backend returned no block field for ${payment.txid}; unconfirmed is null`);
+      throw new PearlError('BACKEND_RESPONSE', `chain backend returned no block field for ${payment.txid}; unconfirmed is null`);
     }
     const height = payment.block === null ? null : blockHeight(payment.block, `a block for ${payment.txid}`);
     const blockHash = payment.block === null ? null : payment.block.hash;
@@ -180,7 +181,7 @@ export async function refreshInvoice(
         previous.blockHeight !== height ||
         previous.blockHash !== blockHash
       ) {
-        throw new Error(`chain backend returned conflicting entries for ${payment.txid}`);
+        throw new PearlError('BACKEND_RESPONSE', `chain backend returned conflicting entries for ${payment.txid}`);
       }
       continue;
     }

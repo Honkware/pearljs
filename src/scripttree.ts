@@ -19,6 +19,7 @@
 import * as ecc from 'tiny-secp256k1';
 import { BASE_LEAF_VERSION, tapBranchHash, tapLeafHash, taggedHash } from './script.js';
 import { concat, equalBytes, toHex } from './internal/bytes.js';
+import { PearlError } from './errors.js';
 
 const HASH_SIZE = 32;
 const MAX_PROOF_NODES = 128;
@@ -60,14 +61,14 @@ interface TreeNode {
  */
 export function assembleScriptTree(scripts: readonly Uint8Array[]): ScriptTree {
   if (scripts.length === 0) {
-    throw new Error('a script tree needs at least one leaf');
+    throw new PearlError('SCRIPT_TREE_INVALID', 'a script tree needs at least one leaf');
   }
   const leafHashes = scripts.map((script) => tapLeafHash(script));
   const seen = new Set<string>();
   for (const hash of leafHashes) {
     const key = toHex(hash);
     if (seen.has(key)) {
-      throw new Error('script tree leaves must be distinct');
+      throw new PearlError('SCRIPT_TREE_INVALID', 'script tree leaves must be distinct');
     }
     seen.add(key);
   }
@@ -119,7 +120,7 @@ export function assembleScriptTree(scripts: readonly Uint8Array[]): ScriptTree {
     leaves: scripts.map((script, index) => {
       const proof = concat(proofs[index]!);
       if (proof.length > MAX_PROOF_NODES * HASH_SIZE) {
-        throw new Error(`script tree is deeper than ${MAX_PROOF_NODES} levels`);
+        throw new PearlError('SCRIPT_TREE_INVALID', `script tree is deeper than ${MAX_PROOF_NODES} levels`);
       }
       return {
         script: Uint8Array.from(script),
@@ -149,7 +150,7 @@ export function taprootOutputKey(
   merkleRoot?: Uint8Array,
 ): { outputKey: Uint8Array; parity: 0 | 1 } {
   if (internalPubkey.length !== HASH_SIZE || !ecc.isXOnlyPoint(internalPubkey)) {
-    throw new Error('internal pubkey must be a valid 32-byte x-only key');
+    throw new PearlError('KEY_INVALID', 'internal pubkey must be a valid 32-byte x-only key');
   }
   if (merkleRoot !== undefined && merkleRoot.length !== HASH_SIZE) {
     throw new Error(`merkle root must be ${HASH_SIZE} bytes, got ${merkleRoot.length}`);
@@ -160,7 +161,7 @@ export function taprootOutputKey(
   );
   const tweaked = ecc.xOnlyPointAddTweak(internalPubkey, tweak);
   if (tweaked === null) {
-    throw new Error('taproot tweak produced an invalid output key');
+    throw new PearlError('KEY_INVALID', 'taproot tweak produced an invalid output key');
   }
   return { outputKey: Uint8Array.from(tweaked.xOnlyPubkey), parity: tweaked.parity };
 }
@@ -202,13 +203,13 @@ function checkControlBlockSize(bytes: Uint8Array, baseSize: number, what: string
   }
   const maxSize = baseSize + MAX_PROOF_NODES * HASH_SIZE;
   if (bytes.length < baseSize) {
-    throw new Error(`${what} control block is ${bytes.length} bytes, min is ${baseSize}`);
+    throw new PearlError('CONTROL_BLOCK_INVALID', `${what} control block is ${bytes.length} bytes, min is ${baseSize}`);
   }
   if (bytes.length > maxSize) {
-    throw new Error(`${what} control block is ${bytes.length} bytes, max is ${maxSize}`);
+    throw new PearlError('CONTROL_BLOCK_INVALID', `${what} control block is ${bytes.length} bytes, max is ${maxSize}`);
   }
   if ((bytes.length - baseSize) % HASH_SIZE !== 0) {
-    throw new Error(`${what} control block proof is not a multiple of ${HASH_SIZE} bytes`);
+    throw new PearlError('CONTROL_BLOCK_INVALID', `${what} control block proof is not a multiple of ${HASH_SIZE} bytes`);
   }
 }
 
@@ -220,7 +221,7 @@ export function parseTaprootControlBlock(bytes: Uint8Array): TaprootControlBlock
   checkControlBlockSize(bytes, TAPROOT_CONTROL_BLOCK_BASE_SIZE, 'taproot');
   const internalPubkey = Uint8Array.from(bytes.subarray(1, TAPROOT_CONTROL_BLOCK_BASE_SIZE));
   if (!ecc.isXOnlyPoint(internalPubkey)) {
-    throw new Error('taproot control block internal key is not a valid x-only key');
+    throw new PearlError('CONTROL_BLOCK_INVALID', 'taproot control block internal key is not a valid x-only key');
   }
   return {
     leafVersion: bytes[0]! & LEAF_VERSION_MASK,
@@ -238,7 +239,7 @@ export function parseTaprootControlBlock(bytes: Uint8Array): TaprootControlBlock
 export function parseP2mrControlBlock(bytes: Uint8Array): P2mrControlBlock {
   checkControlBlockSize(bytes, P2MR_CONTROL_BLOCK_BASE_SIZE, 'P2MR');
   if ((bytes[0]! & 1) !== 1) {
-    throw new Error('P2MR control block parity bit must be 1');
+    throw new PearlError('CONTROL_BLOCK_INVALID', 'P2MR control block parity bit must be 1');
   }
   return {
     leafVersion: bytes[0]! & LEAF_VERSION_MASK,
@@ -253,7 +254,7 @@ export function rootFromProof(
   script: Uint8Array,
 ): Uint8Array {
   if (proof.length % HASH_SIZE !== 0) {
-    throw new Error(`proof length must be a multiple of ${HASH_SIZE} bytes`);
+    throw new PearlError('CONTROL_BLOCK_INVALID', `proof length must be a multiple of ${HASH_SIZE} bytes`);
   }
   let node = tapLeafHash(script, leafVersion);
   for (let offset = 0; offset < proof.length; offset += HASH_SIZE) {
@@ -276,10 +277,10 @@ export function verifyTaprootLeafCommitment(
   const root = rootFromProof(parsed.leafVersion, parsed.proof, script);
   const { outputKey, parity } = taprootOutputKey(parsed.internalPubkey, root);
   if (!equalBytes(outputKey, witnessProgram)) {
-    throw new Error('taproot merkle proof does not match the witness program');
+    throw new PearlError('LEAF_COMMITMENT_MISMATCH', 'taproot merkle proof does not match the witness program');
   }
   if (parsed.outputKeyYIsOdd !== (parity === 1)) {
-    throw new Error('taproot control block output key parity does not match');
+    throw new PearlError('LEAF_COMMITMENT_MISMATCH', 'taproot control block output key parity does not match');
   }
 }
 
@@ -296,6 +297,6 @@ export function verifyP2mrLeafCommitment(
   const parsed = parseP2mrControlBlock(controlBlock);
   const root = rootFromProof(parsed.leafVersion, parsed.proof, script);
   if (!equalBytes(root, witnessProgram)) {
-    throw new Error('P2MR merkle proof does not match the witness program');
+    throw new PearlError('LEAF_COMMITMENT_MISMATCH', 'P2MR merkle proof does not match the witness program');
   }
 }

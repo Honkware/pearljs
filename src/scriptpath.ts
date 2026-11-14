@@ -40,6 +40,7 @@ import type { ScriptTree, ScriptTreeLeaf } from './scripttree.js';
 import { XMSS_SIGNATURE_LENGTH } from './xmss.js';
 import type { XmssSigner } from './xmss.js';
 import { concat, equalBytes, toHex, uint32le, varInt } from './internal/bytes.js';
+import { PearlError, SigningError } from './errors.js';
 
 /**
  * Anything that can make a BIP340 Schnorr signature for a tapscript key,
@@ -81,7 +82,7 @@ const SIGHASH_TYPES = new Set([
  */
 export function assertTaprootSighashType(value: number): void {
   if (!SIGHASH_TYPES.has(value)) {
-    throw new Error(`unsupported Taproot sighash type ${value}`);
+    throw new SigningError('SIGHASH_UNSUPPORTED', `unsupported Taproot sighash type ${value}`);
   }
 }
 
@@ -109,7 +110,7 @@ export function psbtSighashType(
   }
   allowed.forEach(assertTaprootSighashType);
   if (!allowed.includes(sighashType)) {
-    throw new Error(
+    throw new SigningError('SIGHASH_NOT_ALLOWED',
       `PSBT input ${inputIndex} asks for sighash type 0x${sighashType.toString(16).padStart(2, '0')}, ` +
         'which is not in allowedSighashTypes',
     );
@@ -122,7 +123,7 @@ function assertValue(value: bigint, what: string): void {
     throw new TypeError(`${what} must be a bigint of grains`);
   }
   if (value < 0n || value > MAX_GRAIN) {
-    throw new Error(`${what} is outside Pearl amount bounds`);
+    throw new PearlError('AMOUNT_OUT_OF_RANGE', `${what} is outside Pearl amount bounds`);
   }
 }
 
@@ -256,7 +257,7 @@ export function tapscriptSighash(
   }
   assertTaprootSighashType(sighashType);
   if ((sighashType & 0x03) === Transaction.SIGHASH_SINGLE && inputIndex >= tx.outs.length) {
-    throw new Error('SIGHASH_SINGLE needs an output at the same index as the input');
+    throw new SigningError('SIGHASH_UNSUPPORTED', 'SIGHASH_SINGLE needs an output at the same index as the input');
   }
   return pearlTapscriptSighash(tx, inputIndex, prevouts, leafHash, sighashType);
 }
@@ -302,7 +303,7 @@ function finishTapscriptSignature(
   inputIndex: number,
 ): Uint8Array {
   if (!ecc.verifySchnorr(hash, xOnly(publicKey), signature)) {
-    throw new Error(`invalid tapscript signature for input ${inputIndex}`);
+    throw new SigningError('SIGNATURE_INVALID', `invalid tapscript signature for input ${inputIndex}`);
   }
   return sighashType === Transaction.SIGHASH_DEFAULT
     ? Uint8Array.from(signature)
@@ -376,7 +377,7 @@ function checkFee(
   if (outputValue > inputValue) {
     // With ANYONECANPAY the inputs that cover the outputs may come later.
     if ((sighashType & SIGHASH_ANYONECANPAY) !== 0) return;
-    throw new Error(`transaction outputs (${outputValue} grain) exceed its inputs (${inputValue} grain)`);
+    throw new SigningError('OUTPUTS_EXCEED_INPUTS', `transaction outputs (${outputValue} grain) exceed its inputs (${inputValue} grain)`);
   }
   const sized = tx.clone();
   sized.setWitness(inputIndex, witness);
@@ -384,7 +385,7 @@ function checkFee(
   const fee = inputValue - outputValue;
   const limit = (vsize * maxFeeRate + 999n) / 1000n;
   if (fee > limit) {
-    throw new Error(
+    throw new SigningError('FEE_TOO_HIGH',
       `transaction pays a fee of ${fee} grain, above the ${limit} grain that maxFeeRate ` +
         `(${maxFeeRate} grain per 1000 vbytes) allows for ${vsize} vbytes; ` +
         'check for a missing change output, or raise maxFeeRate to sign it',
@@ -424,7 +425,7 @@ function checkPrevouts(
   tx.ins.forEach((input, index) => {
     const previous = byHash.get(toHex(input.hash));
     if (previous === undefined) {
-      throw new Error(`input ${index} is missing the previous transaction it spends`);
+      throw new SigningError('PREVIOUS_TRANSACTIONS_MISSING', `input ${index} is missing the previous transaction it spends`);
     }
     const output = previous.outs[input.index];
     const prevout = prevouts[index];
@@ -434,7 +435,7 @@ function checkPrevouts(
       output.value !== prevout.value ||
       !equalBytes(output.script, prevout.script)
     ) {
-      throw new Error(`prevout ${index} does not match its previous transaction`);
+      throw new SigningError('PREVOUT_MISMATCH', `prevout ${index} does not match its previous transaction`);
     }
   });
 }
@@ -487,7 +488,7 @@ function checkP2mrSchnorrSpend(
   const sighashType = options.sighashType ?? Transaction.SIGHASH_DEFAULT;
   const { leaf, controlBlock } = prepareP2mrSpend(tx, inputIndex, options);
   if (!scriptPushesKey(leaf.script, xOnly(publicKey))) {
-    throw new Error('the leaf script does not contain the signer key');
+    throw new SigningError('INPUT_MISMATCH', 'the leaf script does not contain the signer key');
   }
   checkInputValues(tx, options, sighashType);
   const signature = new Uint8Array(sighashType === Transaction.SIGHASH_DEFAULT ? 64 : 65);
@@ -509,7 +510,7 @@ function prepareP2mrSpend(
     throw new RangeError(`no prevout for input ${inputIndex}`);
   }
   if (classifyOutputScript(prevout.script) !== 'p2mr') {
-    throw new Error(`input ${inputIndex} does not spend a P2MR output`);
+    throw new SigningError('INPUT_MISMATCH', `input ${inputIndex} does not spend a P2MR output`);
   }
   const leaf = options.tree.leaves[options.leafIndex];
   if (leaf === undefined) {
@@ -522,7 +523,7 @@ function prepareP2mrSpend(
     throw new RangeError(`input index ${inputIndex} is out of range`);
   }
   if (input.script.length !== 0) {
-    throw new Error('P2MR inputs must have an empty scriptSig');
+    throw new SigningError('INPUT_MISMATCH', 'P2MR inputs must have an empty scriptSig');
   }
   return { leaf, controlBlock };
 }
@@ -539,7 +540,7 @@ type InputValueOptions = Pick<
 function checkInputValues(tx: Transaction, options: InputValueOptions, sighashType: number): void {
   if (!coversInputValues(options.prevouts, sighashType) && options.trustPrevouts !== true) {
     if (options.previousTransactions === undefined) {
-      throw new Error(
+      throw new SigningError('PREVIOUS_TRANSACTIONS_MISSING',
         'this spend needs the previous transactions (previousTransactions) to check ' +
           'input values before signing; set trustPrevouts to skip the check',
       );
@@ -590,7 +591,7 @@ export async function signXmssP2mrInput(
   const sighashType = Transaction.SIGHASH_DEFAULT;
   const { leaf, controlBlock } = prepareP2mrSpend(tx, inputIndex, options);
   if (!equalBytes(leaf.script, xmssLeafScript(signer.publicKey))) {
-    throw new Error('the leaf script is not the XMSS leaf of the signer key');
+    throw new SigningError('INPUT_MISMATCH', 'the leaf script is not the XMSS leaf of the signer key');
   }
   checkInputValues(tx, options, sighashType);
   const placeholder = xmssScriptPathWitness(new Uint8Array(XMSS_SIGNATURE_LENGTH), leaf.script, controlBlock);
@@ -711,24 +712,24 @@ function checkTaprootScriptPathInput(
   }
   const prevScript = input.witnessUtxo?.script;
   if (prevScript === undefined) {
-    throw new Error(`PSBT input ${inputIndex} has no witness UTXO`);
+    throw new SigningError('INPUT_UNPREPARED', `PSBT input ${inputIndex} has no witness UTXO`);
   }
   const kind = classifyOutputScript(prevScript);
   if (kind === 'p2mr') {
-    throw new Error('P2MR PSBT inputs are signed with signP2mrScriptPathInput');
+    throw new SigningError('INPUT_MISMATCH', 'P2MR PSBT inputs are signed with signP2mrScriptPathInput');
   }
   if (kind !== 'p2tr') {
-    throw new Error(`PSBT input ${inputIndex} does not spend a P2TR output`);
+    throw new SigningError('INPUT_MISMATCH', `PSBT input ${inputIndex} does not spend a P2TR output`);
   }
   const leaf = (input.tapLeafScript ?? []).find((item) =>
     equalBytes(tapLeafHash(item.script, item.leafVersion), leafHash),
   );
   if (leaf === undefined) {
-    throw new Error(`PSBT input ${inputIndex} has no tap leaf with that hash`);
+    throw new SigningError('INPUT_MISMATCH', `PSBT input ${inputIndex} has no tap leaf with that hash`);
   }
   verifyTaprootLeafCommitment(leaf.controlBlock, prevScript.slice(2), leaf.script);
   if (!scriptPushesKey(leaf.script, xOnly(publicKey))) {
-    throw new Error('the leaf script does not contain the signer key');
+    throw new SigningError('INPUT_MISMATCH', 'the leaf script does not contain the signer key');
   }
   return psbtSighashType(input.sighashType, inputIndex, options);
 }
@@ -738,7 +739,7 @@ function checkSignedInput(psbt: Psbt, inputIndex: number): void {
     ecc.verifySchnorr(hash, pubkey, signature),
   );
   if (!valid) {
-    throw new Error(`invalid tapscript signature for PSBT input ${inputIndex}`);
+    throw new SigningError('SIGNATURE_INVALID', `invalid tapscript signature for PSBT input ${inputIndex}`);
   }
 }
 
@@ -785,10 +786,10 @@ export function prepareP2mrScriptPathInput(
   if (previous !== undefined) {
     const spent = previous.outs[txInput.index];
     if (!equalBytes(previous.getHash(), txInput.hash)) {
-      throw new Error(`the previous transaction is not the one PSBT input ${inputIndex} spends`);
+      throw new SigningError('PREVOUT_MISMATCH', `the previous transaction is not the one PSBT input ${inputIndex} spends`);
     }
     if (spent === undefined || spent.value !== options.value || !equalBytes(spent.script, output)) {
-      throw new Error(`the previous transaction does not pay this P2MR output and value`);
+      throw new SigningError('PREVOUT_MISMATCH', `the previous transaction does not pay this P2MR output and value`);
     }
     psbt.updateInput(inputIndex, { nonWitnessUtxo: previous.toBuffer() });
   }
@@ -880,20 +881,20 @@ function checkP2mrScriptPathInput(
   }
   const prevScript = input.witnessUtxo?.script;
   if (prevScript === undefined) {
-    throw new Error(`PSBT input ${inputIndex} has no witness UTXO`);
+    throw new SigningError('INPUT_UNPREPARED', `PSBT input ${inputIndex} has no witness UTXO`);
   }
   if (classifyOutputScript(prevScript) !== 'p2mr') {
-    throw new Error(`PSBT input ${inputIndex} does not spend a P2MR output`);
+    throw new SigningError('INPUT_MISMATCH', `PSBT input ${inputIndex} does not spend a P2MR output`);
   }
   const leaf = (input.tapLeafScript ?? []).find((item) =>
     equalBytes(tapLeafHash(item.script, item.leafVersion), leafHash),
   );
   if (leaf === undefined) {
-    throw new Error(`PSBT input ${inputIndex} has no tap leaf with that hash`);
+    throw new SigningError('INPUT_MISMATCH', `PSBT input ${inputIndex} has no tap leaf with that hash`);
   }
   verifyP2mrLeafCommitment(leaf.controlBlock, prevScript.slice(2), leaf.script);
   if (!scriptPushesKey(leaf.script, xOnly(publicKey))) {
-    throw new Error('the leaf script does not contain the signer key');
+    throw new SigningError('INPUT_MISMATCH', 'the leaf script does not contain the signer key');
   }
   const sighashType = psbtSighashType(input.sighashType, inputIndex, options);
 
@@ -904,7 +905,7 @@ function checkP2mrScriptPathInput(
   const prevouts = tx.ins.map((txInput, index): Prevout => {
     const utxo = psbt.data.inputs[index]!.witnessUtxo ?? previous[index]?.outs[txInput.index];
     if (utxo === undefined) {
-      throw new Error(`PSBT input ${index} has no UTXO to sign against`);
+      throw new SigningError('INPUT_UNPREPARED', `PSBT input ${index} has no UTXO to sign against`);
     }
     return { script: utxo.script, value: utxo.value };
   });
@@ -912,7 +913,7 @@ function checkP2mrScriptPathInput(
   if (previous.every((item): item is Transaction => item !== undefined)) {
     values.previousTransactions = previous;
   } else if (!coversInputValues(prevouts, sighashType) && options.trustPrevouts !== true) {
-    throw new Error(
+    throw new SigningError('PREVIOUS_TRANSACTIONS_MISSING',
       'this spend needs the previous transaction (nonWitnessUtxo) of every input to check ' +
         'input values before signing; set trustPrevouts to skip the check',
     );

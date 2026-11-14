@@ -26,6 +26,7 @@ import {
 } from './blockheader.js';
 import type { PearlBlockHeader } from './blockheader.js';
 import { concat, equalBytes, uint32le, varInt } from './internal/bytes.js';
+import { PearlError } from './errors.js';
 
 // wire.CertificateMaxSize, wire.MaxZKProofSize and the public data sizes.
 /** wire.CertificateMaxSize: the most bytes a serialized certificate may have. */
@@ -96,7 +97,7 @@ class Reader {
 
   take(length: number): Uint8Array {
     if (this.offset + length > this.bytes.length) {
-      throw new Error('unexpected end of block data');
+      throw new PearlError('BLOCK_MALFORMED', 'unexpected end of block data');
     }
     const out = this.bytes.slice(this.offset, this.offset + length);
     this.offset += length;
@@ -114,7 +115,7 @@ class Reader {
     if (first === 0xfe) return this.uint32();
     const wide = new DataView(this.take(8).buffer).getBigUint64(0, true);
     if (wide > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new Error('transaction count does not fit in a number');
+      throw new PearlError('BLOCK_MALFORMED', 'transaction count does not fit in a number');
     }
     return Number(wide);
   }
@@ -128,7 +129,7 @@ function readCertificate(reader: Reader): PearlCertificate | null {
   const version = reader.uint32();
   if (version === 0) return null;
   if (version !== 1 && version !== 2 && version !== 3) {
-    throw new Error(`unsupported certificate version: ${version}`);
+    throw new PearlError('CERTIFICATE_MALFORMED', `unsupported certificate version: ${version}`);
   }
   const start = reader.offset;
   const hash = reader.take(HASH_SIZE);
@@ -138,18 +139,18 @@ function readCertificate(reader: Reader): PearlCertificate | null {
   } else {
     const length = reader.uint32();
     if (length > PUBLIC_DATA_MAX_SIZE_V2) {
-      throw new Error(`public_data_len ${length} exceeds max ${PUBLIC_DATA_MAX_SIZE_V2}`);
+      throw new PearlError('CERTIFICATE_MALFORMED', `public_data_len ${length} exceeds max ${PUBLIC_DATA_MAX_SIZE_V2}`);
     }
     publicData = reader.take(length);
   }
   const proofLength = reader.uint32();
   if (proofLength > MAX_ZK_PROOF_SIZE) {
-    throw new Error(`proof data too large: ${proofLength} bytes (max ${MAX_ZK_PROOF_SIZE})`);
+    throw new PearlError('CERTIFICATE_MALFORMED', `proof data too large: ${proofLength} bytes (max ${MAX_ZK_PROOF_SIZE})`);
   }
   const proof = reader.take(proofLength);
   // Pearl reads the certificate body through a CertificateMaxSize limit.
   if (reader.offset - start > CERTIFICATE_MAX_SIZE) {
-    throw new Error(`certificate body exceeds ${CERTIFICATE_MAX_SIZE} bytes`);
+    throw new PearlError('CERTIFICATE_MALFORMED', `certificate body exceeds ${CERTIFICATE_MAX_SIZE} bytes`);
   }
   return { version, hash, publicData, proof };
 }
@@ -159,25 +160,25 @@ export function serializeCertificate(certificate: PearlCertificate | null): Uint
   if (certificate === null) return uint32le(0);
   const { version, hash, publicData, proof } = certificate;
   if (hash.length !== HASH_SIZE) {
-    throw new Error(`certificate hash must be ${HASH_SIZE} bytes, got ${hash.length}`);
+    throw new PearlError('CERTIFICATE_MALFORMED', `certificate hash must be ${HASH_SIZE} bytes, got ${hash.length}`);
   }
   let body: Uint8Array[];
   if (version === 1) {
     if (publicData.length !== PUBLIC_DATA_SIZE_V1) {
-      throw new Error(`V1 public data must be ${PUBLIC_DATA_SIZE_V1} bytes, got ${publicData.length}`);
+      throw new PearlError('CERTIFICATE_MALFORMED', `V1 public data must be ${PUBLIC_DATA_SIZE_V1} bytes, got ${publicData.length}`);
     }
     body = [hash, publicData];
   } else if (version === 2 || version === 3) {
     if (publicData.length > PUBLIC_DATA_MAX_SIZE_V2) {
-      throw new Error(`public data of ${publicData.length} bytes exceeds max ${PUBLIC_DATA_MAX_SIZE_V2}`);
+      throw new PearlError('CERTIFICATE_MALFORMED', `public data of ${publicData.length} bytes exceeds max ${PUBLIC_DATA_MAX_SIZE_V2}`);
     }
     body = [hash, uint32le(publicData.length), publicData];
   } else {
-    throw new Error(`unsupported certificate version: ${String(version)}`);
+    throw new PearlError('CERTIFICATE_MALFORMED', `unsupported certificate version: ${String(version)}`);
   }
   const out = concat([uint32le(version), ...body, uint32le(proof.length), proof]);
   if (out.length > CERTIFICATE_MAX_SIZE) {
-    throw new Error(`certificate too large: ${out.length} bytes (max ${CERTIFICATE_MAX_SIZE})`);
+    throw new PearlError('CERTIFICATE_MALFORMED', `certificate too large: ${out.length} bytes (max ${CERTIFICATE_MAX_SIZE})`);
   }
   return out;
 }
@@ -195,7 +196,7 @@ export function parseBlock(bytes: Uint8Array): PearlBlock {
   const header = parseBlockHeader(reader.take(BLOCK_HEADER_SIZE));
   const count = reader.varInt();
   if (count > MAX_TX_PER_BLOCK) {
-    throw new Error(`too many transactions to fit into a block [count ${count}, max ${MAX_TX_PER_BLOCK}]`);
+    throw new PearlError('BLOCK_MALFORMED', `too many transactions to fit into a block [count ${count}, max ${MAX_TX_PER_BLOCK}]`);
   }
   const transactions: Transaction[] = [];
   for (let i = 0; i < count; i += 1) {
@@ -204,19 +205,19 @@ export function parseBlock(bytes: Uint8Array): PearlBlock {
     try {
       tx = Transaction.fromBuffer(rest, true);
     } catch {
-      throw new Error(`transaction ${i} could not be decoded`);
+      throw new PearlError('BLOCK_MALFORMED', `transaction ${i} could not be decoded`);
     }
     const encoded = tx.toBuffer();
     // bitcoinjs re-encodes from the parsed fields, so comparing catches any
     // input it would have read differently from Pearl.
     if (!equalBytes(encoded, rest.subarray(0, encoded.length))) {
-      throw new Error(`transaction ${i} is not canonically encoded`);
+      throw new PearlError('BLOCK_MALFORMED', `transaction ${i} is not canonically encoded`);
     }
     reader.take(encoded.length);
     transactions.push(tx);
   }
   if (reader.remaining().length !== 0) {
-    throw new Error(`${reader.remaining().length} unexpected bytes after the last transaction`);
+    throw new PearlError('BLOCK_MALFORMED', `${reader.remaining().length} unexpected bytes after the last transaction`);
   }
   return { certificate, header, transactions };
 }
@@ -250,16 +251,16 @@ export function isMoECertificate(certificate: PearlCertificate): boolean {
 export function checkCertificateBinding(block: PearlBlock): void {
   const { certificate, header } = block;
   if (certificate === null) {
-    throw new Error('block has no certificate');
+    throw new PearlError('BLOCK_CERTIFICATE_INVALID', 'block has no certificate');
   }
   if (!equalBytes(certificate.hash, blockHash(header))) {
-    throw new Error('block hash mismatch between certificate and header');
+    throw new PearlError('BLOCK_CERTIFICATE_INVALID', 'block hash mismatch between certificate and header');
   }
   if (!equalBytes(header.proofCommitment, certificateProofCommitment(certificate))) {
-    throw new Error('proof commitment mismatch between header and certificate');
+    throw new PearlError('BLOCK_CERTIFICATE_INVALID', 'proof commitment mismatch between header and certificate');
   }
   if (certificate.proof.length === 0) {
-    throw new Error('empty proof data');
+    throw new PearlError('BLOCK_CERTIFICATE_INVALID', 'empty proof data');
   }
 }
 
@@ -327,29 +328,29 @@ export function witnessCommitment(block: PearlBlock): Uint8Array | null {
 export function checkWitnessCommitment(block: PearlBlock): void {
   const coinbase = block.transactions[0];
   if (coinbase === undefined) {
-    throw new Error('cannot validate witness commitment of block without transactions');
+    throw new PearlError('BLOCK_WITNESS_COMMITMENT_INVALID', 'cannot validate witness commitment of block without transactions');
   }
   if (coinbase.ins.length === 0) {
-    throw new Error('transaction has no inputs');
+    throw new PearlError('BLOCK_WITNESS_COMMITMENT_INVALID', 'transaction has no inputs');
   }
   const commitment = witnessCommitment(block);
   if (commitment === null) {
     if (block.transactions.some((tx) => tx.hasWitnesses())) {
-      throw new Error('block contains transaction with witness data, yet no witness commitment present');
+      throw new PearlError('BLOCK_WITNESS_COMMITMENT_INVALID', 'block contains transaction with witness data, yet no witness commitment present');
     }
     return;
   }
   const witness = coinbase.ins[0]!.witness;
   if (witness.length !== 1) {
-    throw new Error(`the coinbase transaction has ${witness.length} items in its witness stack when only one is allowed`);
+    throw new PearlError('BLOCK_WITNESS_COMMITMENT_INVALID', `the coinbase transaction has ${witness.length} items in its witness stack when only one is allowed`);
   }
   const nonce = witness[0]!;
   if (nonce.length !== COINBASE_WITNESS_NONCE_LENGTH) {
-    throw new Error(`the coinbase transaction witness nonce has ${nonce.length} bytes when it must be ${COINBASE_WITNESS_NONCE_LENGTH} bytes`);
+    throw new PearlError('BLOCK_WITNESS_COMMITMENT_INVALID', `the coinbase transaction witness nonce has ${nonce.length} bytes when it must be ${COINBASE_WITNESS_NONCE_LENGTH} bytes`);
   }
   const computed = doubleSha256(concat([calculateMerkleRoot(block.transactions, true), nonce]));
   if (!equalBytes(computed, commitment)) {
-    throw new Error('witness commitment does not match');
+    throw new PearlError('BLOCK_WITNESS_COMMITMENT_INVALID', 'witness commitment does not match');
   }
 }
 

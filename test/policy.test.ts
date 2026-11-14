@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  PolicyError,
   assembleScriptTree,
   checkSanity,
   checkStandard,
@@ -125,9 +126,9 @@ describe('checkSanity', () => {
     const tx = fresh();
     tx.outs[0]!.value = MAX_GRAIN + 1n;
     const message = 'transaction output value is higher than max allowed value: 2100000000000000001 > 2.1e+18 ';
-    expect(() => checkSanity(tx)).toThrow(new Error(message));
+    expect(() => checkSanity(tx)).toThrow(new PolicyError('SANITY_OUTPUT_TOO_LARGE', message));
     // checkStandard used to call this output dust.
-    expect(() => checkStandard(tx)).toThrow(new Error(message));
+    expect(() => checkStandard(tx)).toThrow(new PolicyError('SANITY_OUTPUT_TOO_LARGE', message));
   });
 
   it('refuses a negative output and outputs that sum above the maximum', () => {

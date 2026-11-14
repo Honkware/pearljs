@@ -23,6 +23,7 @@
 import type { Transaction } from 'bitcoinjs-lib';
 import { DEFAULT_MIN_RELAY_FEE, feeForVsize, minRelayFee } from './policy.js';
 import { toHex } from './internal/bytes.js';
+import { PolicyError } from './errors.js';
 
 /** mempool.MaxRBFSequence: an input with a sequence at or below this signals replacement. */
 export const MAX_RBF_SEQUENCE = 0xfffffffd;
@@ -186,12 +187,12 @@ export function checkReplacement(
     if (conflict === undefined || checked.has(conflict)) continue;
     checked.add(conflict);
     if (checked.size > MAX_REPLACEMENT_EVICTIONS) {
-      throw new Error(
+      throw new PolicyError('RBF_TOO_MANY_EVICTIONS',
         `${txid}: replacement transaction evicts more transactions than permitted: max is ${MAX_REPLACEMENT_EVICTIONS}`,
       );
     }
     if (options.rejectReplacement === true || !signals(mempool.get(conflict)!.tx, mempool, cache)) {
-      throw new Error(`output already spent in mempool: output=${outpoint}, tx=${conflict}`);
+      throw new PolicyError('RBF_NOT_REPLACEABLE', `output already spent in mempool: output=${outpoint}, tx=${conflict}`);
     }
   }
   if (checked.size === 0) return [];
@@ -214,13 +215,13 @@ export function checkReplacement(
     addDescendants(conflict);
   }
   if (conflicts.size > MAX_REPLACEMENT_EVICTIONS) {
-    throw new Error(
+    throw new PolicyError('RBF_TOO_MANY_EVICTIONS',
       `${txid}: replacement transaction evicts more transactions than permitted: max is ${MAX_REPLACEMENT_EVICTIONS}, evicts ${conflicts.size}`,
     );
   }
   for (const input of tx.ins) {
     const parent = prevTxid(input);
-    if (conflicts.has(parent)) throw new Error(`${txid}: replacement transaction spends parent transaction ${parent}`);
+    if (conflicts.has(parent)) throw new PolicyError('RBF_SPENDS_CONFLICT', `${txid}: replacement transaction spends parent transaction ${parent}`);
   }
 
   const vsize = options.vsize ?? tx.virtualSize();
@@ -231,7 +232,7 @@ export function checkReplacement(
     const entry = mempool.get(conflict)!;
     const conflictRate = feePerKb(entry.fee, entry.tx.virtualSize());
     if (rate <= conflictRate) {
-      throw new Error(
+      throw new PolicyError('RBF_FEE_RATE_TOO_LOW',
         `${txid}: replacement transaction has an insufficient fee rate: needs more than ${conflictRate}, has ${rate}`,
       );
     }
@@ -240,12 +241,12 @@ export function checkReplacement(
   }
   const needed = conflictsFee + minRelayFee(vsize, options.minRelayFee ?? DEFAULT_MIN_RELAY_FEE);
   if (fee < needed) {
-    throw new Error(`${txid}: replacement transaction has an insufficient absolute fee: needs ${needed}, has ${fee}`);
+    throw new PolicyError('RBF_FEE_TOO_LOW', `${txid}: replacement transaction has an insufficient absolute fee: needs ${needed}, has ${fee}`);
   }
   for (const input of tx.ins) {
     const parent = prevTxid(input);
     if (conflictsParents.has(parent) || !mempool.has(parent)) continue;
-    throw new Error(
+    throw new PolicyError('RBF_NEW_UNCONFIRMED_INPUT',
       `replacement transaction spends new unconfirmed input ${parent}:${input.index} not found in conflicting transactions`,
     );
   }
@@ -264,7 +265,7 @@ export function checkPackageLimits(tx: Transaction, mempool: Mempool, options: P
   if (ancestorCount <= 0 && ancestorSize <= 0 && descendantCount <= 0) return;
   const replaced = new Set(options.replaced ?? []);
   const { spenders } = indexMempool(mempool);
-  const tooLong = (reason: string): Error => new Error(`too-long-mempool-chain: ${reason}`);
+  const tooLong = (reason: string): Error => new PolicyError('PACKAGE_TOO_LONG', `too-long-mempool-chain: ${reason}`);
 
   const ancestors = new Set<string>();
   const enqueued = new Set<string>();

@@ -30,6 +30,7 @@ import { dirname } from 'node:path';
 import { XMSS_PUBLIC_KEY_LENGTH } from './xmss.js';
 import type { XmssIndexStore } from './xmss.js';
 import { toHex } from './internal/bytes.js';
+import { XmssError } from './errors.js';
 
 const STATE_VERSION = 1;
 
@@ -102,7 +103,7 @@ function readState(path: string): State {
     state.next! < 0 ||
     !(state.publicKey === null || (typeof state.publicKey === 'string' && /^[0-9a-f]{128}$/.test(state.publicKey)))
   ) {
-    throw new Error(`XMSS index state file ${path} is not valid; refusing to guess the next index`);
+    throw new XmssError('XMSS_STORE_INVALID', `XMSS index state file ${path} is not valid; refusing to guess the next index`);
   }
   return state as State;
 }
@@ -131,7 +132,7 @@ export function createFileXmssIndexStore(path: string, options: FileXmssIndexSto
     } catch {
       // The lock may vanish or be unreadable; the message stays generic.
     }
-    throw new Error(
+    throw new XmssError('XMSS_STORE_LOCKED',
       `XMSS index state file ${path} is locked by ${owner}. Two signers must never share a key; ` +
         `if that process is gone, delete ${lockPath}`,
     );
@@ -163,10 +164,10 @@ export function createFileXmssIndexStore(path: string, options: FileXmssIndexSto
     release();
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'EEXIST') {
-      throw new Error(`XMSS index state file ${path} already exists; open it without create`);
+      throw new XmssError('XMSS_STORE_INVALID', `XMSS index state file ${path} already exists; open it without create`);
     }
     if (isMissing(error)) {
-      throw new Error(
+      throw new XmssError('XMSS_STORE_INVALID',
         `XMSS index state file ${path} does not exist; pass create: true only for a key that has never signed`,
       );
     }
@@ -176,13 +177,13 @@ export function createFileXmssIndexStore(path: string, options: FileXmssIndexSto
 
   return {
     reserve(publicKey: Uint8Array): number {
-      if (!open) throw new Error('this XMSS index store is closed');
+      if (!open) throw new XmssError('XMSS_STORE_INVALID', 'this XMSS index store is closed');
       if (!(publicKey instanceof Uint8Array) || publicKey.length !== XMSS_PUBLIC_KEY_LENGTH) {
         throw new Error(`XMSS public key must be ${XMSS_PUBLIC_KEY_LENGTH} bytes`);
       }
       const key = toHex(publicKey);
       if (state.publicKey !== null && state.publicKey !== key) {
-        throw new Error(`XMSS index state file ${path} belongs to a different key`);
+        throw new XmssError('XMSS_STORE_INVALID', `XMSS index state file ${path} belongs to a different key`);
       }
       const index = state.next;
       const advanced: State = { version: STATE_VERSION, publicKey: key, next: index + 1 };

@@ -14,6 +14,7 @@
 import { sha256 } from '@noble/hashes/sha2';
 
 import { OP_CODES } from './opcodes.js';
+import { PearlError } from './errors.js';
 
 export { OP_CODES, OPCODE_NAMES } from './opcodes.js';
 export type { OpcodeName } from './opcodes.js';
@@ -142,7 +143,7 @@ export function encodeScriptNumber(value: bigint): Uint8Array {
  */
 export function scriptPush(data: Uint8Array): Uint8Array {
   if (data.length > MAX_SCRIPT_ELEMENT_SIZE) {
-    throw new Error(
+    throw new PearlError('SCRIPT_INVALID',
       `push of ${data.length} bytes exceeds MAX_SCRIPT_ELEMENT_SIZE ${MAX_SCRIPT_ELEMENT_SIZE}`,
     );
   }

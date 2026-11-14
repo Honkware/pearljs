@@ -196,7 +196,7 @@ describe('pearld websocket client', () => {
     last().push(replyFrame('reply-limited', last().sent.at(-1)!.id));
     const err = await call.catch((e: unknown) => e);
     expect(err).toBeInstanceOf(PearlRpcError);
-    expect(err).toMatchObject({ kind: 'rpc', method: 'stopnotifyblocks', code: expected('reply-limited').code });
+    expect(err).toMatchObject({ kind: 'rpc', method: 'stopnotifyblocks', rpcCode: expected('reply-limited').code });
     expect((err as Error).message).toBe('stopnotifyblocks: limited user not authorized for this method (code -32602)');
     await ws.close();
   });
@@ -619,7 +619,7 @@ describe('pearld websocket client', () => {
 
     const rejected = ws.submitBlock('00').catch((e: unknown) => e);
     await answer('submitblock-rejected');
-    expect(await rejected).toMatchObject({ kind: 'rpc', code: -25, method: 'submitblock' });
+    expect(await rejected).toMatchObject({ kind: 'rpc', rpcCode: -25, method: 'submitblock' });
 
     const template = ws.getBlockTemplate();
     await answer('getblocktemplate');

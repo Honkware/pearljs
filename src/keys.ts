@@ -42,6 +42,7 @@ import type {
   TapscriptSigner,
 } from './scriptpath.js';
 import { equalBytes } from './internal/bytes.js';
+import { PearlError, SigningError } from './errors.js';
 
 export { mnemonicToSeed } from './mnemonic.js';
 
@@ -234,7 +235,7 @@ function toWatchOnlyAccount(
 ): PearlAccount {
   const accountNode = node.neutered();
   if (accountNode.depth !== 3) {
-    throw new Error(
+    throw new PearlError('EXTENDED_KEY_INVALID',
       `account node must sit at depth 3 (m/86'/coinType'/account'), got depth ${accountNode.depth}`,
     );
   }
@@ -351,7 +352,7 @@ export function deriveSigningAccountFromSeed(
 
   /** Runs use with the private child node, then overwrites the keys derived for it. */
   const withChild = <T>(index: number, change: boolean, use: (child: BIP32Interface) => T): T => {
-    if (destroyed) throw new Error('this signing account has been destroyed');
+    if (destroyed) throw new SigningError('SIGNER_DESTROYED', 'this signing account has been destroyed');
     assertNonHardenedIndex(index, 'Address index');
     const branch = accountNode.derive(change ? 1 : 0);
     const child = branch.derive(index);
@@ -380,7 +381,7 @@ export function deriveSigningAccountFromSeed(
         throw new TypeError('input value must be a bigint of grains');
       }
       if (options.value < 0n || options.value > MAX_GRAIN) {
-        throw new Error('input value is outside Pearl amount bounds');
+        throw new PearlError('AMOUNT_OUT_OF_RANGE', 'input value is outside Pearl amount bounds');
       }
       const sighashType = options.sighashType ?? Transaction.SIGHASH_DEFAULT;
       assertSighashType(sighashType);
@@ -412,17 +413,17 @@ export function deriveSigningAccountFromSeed(
         throw new RangeError(`PSBT input index ${inputIndex} is out of range`);
       }
       if (input.tapLeafScript !== undefined || input.tapMerkleRoot !== undefined) {
-        throw new Error('BIP86 accounts sign Taproot key-path inputs only');
+        throw new SigningError('INPUT_MISMATCH', 'BIP86 accounts sign Taproot key-path inputs only');
       }
       if (input.tapInternalKey !== undefined && !equalBytes(input.tapInternalKey, internalPubkey)) {
-        throw new Error('PSBT Taproot internal key does not match the account child');
+        throw new SigningError('INPUT_MISMATCH', 'PSBT Taproot internal key does not match the account child');
       }
       const expectedScript = p2tr({ internalPubkey }).output;
       if (
         input.witnessUtxo === undefined ||
         !equalBytes(input.witnessUtxo.script, expectedScript)
       ) {
-        throw new Error('PSBT witness UTXO does not match the account child');
+        throw new SigningError('INPUT_MISMATCH', 'PSBT witness UTXO does not match the account child');
       }
       const sighashType = psbtSighashType(input.sighashType, inputIndex, options);
       if (input.tapInternalKey === undefined) {
@@ -434,7 +435,7 @@ export function deriveSigningAccountFromSeed(
         const evenKey = child.publicKey[0] === 0x03 ? ecc.privateNegate(privateKey) : privateKey;
         const tweakedKey = ecc.privateAdd(evenKey, bitcoinCrypto.taggedHash('TapTweak', internalPubkey));
         if (tweakedKey === null) {
-          throw new Error('taproot tweak produced an invalid key');
+          throw new PearlError('KEY_INVALID', 'taproot tweak produced an invalid key');
         }
         try {
           const signer = schnorrSigner(tweakedKey, expectedScript.slice(2), options.auxRand);
@@ -448,7 +449,7 @@ export function deriveSigningAccountFromSeed(
         ecc.verifySchnorr(hash, pubkey, signature),
       );
       if (!valid) {
-        throw new Error(`invalid Taproot signature for PSBT input ${inputIndex}`);
+        throw new SigningError('SIGNATURE_INVALID', `invalid Taproot signature for PSBT input ${inputIndex}`);
       }
     },
     signScriptPathInput(
@@ -503,12 +504,12 @@ export function importWatchOnlyAccount(
   try {
     node = bip32.fromBase58(extendedKey, toBip32Params(network));
   } catch {
-    throw new Error(
+    throw new PearlError('EXTENDED_KEY_INVALID',
       `extended key is invalid or its version bytes do not match network "${network.name}"`,
     );
   }
   if (!node.isNeutered()) {
-    throw new Error(
+    throw new PearlError('EXTENDED_KEY_INVALID',
       'watch-only accounts cannot be imported from an extended private key',
     );
   }

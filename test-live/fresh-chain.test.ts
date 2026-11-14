@@ -21,12 +21,12 @@ describeLive('fresh chain', () => {
   it('refuses estimates for no blocks and for more than 25', async () => {
     await expect(pearld.estimateFee(0)).rejects.toMatchObject({
       kind: 'rpc',
-      code: RPC_ERROR_CODES.INVALID_PARAMETER,
+      rpcCode: RPC_ERROR_CODES.INVALID_PARAMETER,
       message: 'estimatefee: Parameter NumBlocks must be positive (code -8)',
     });
     await expect(pearld.estimateFee(26)).rejects.toMatchObject({
       kind: 'rpc',
-      code: RPC_ERROR_CODES.MISC,
+      rpcCode: RPC_ERROR_CODES.MISC,
       message: 'estimatefee: can only estimate fees for up to 25 blocks from now (code -1)',
     });
   });

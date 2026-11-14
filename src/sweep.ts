@@ -21,6 +21,7 @@ import type { PearlNetwork } from './networks.js';
 import { taggedHash } from './script.js';
 import { Transaction } from './transaction.js';
 import { decodeWif, keyPathAddress } from './wif.js';
+import { PearlError, SigningError } from './errors.js';
 
 /** Options for sweepKey and sweepWif. */
 export interface SweepOptions extends SpendableOptions {
@@ -50,7 +51,7 @@ export function sweepKey(privateKey: Uint8Array, options: SweepOptions): SignedP
   const script = toOutputScript(address, network);
   for (const utxo of options.utxos) {
     if (utxo.script.length !== script.length || !utxo.script.every((byte, i) => byte === script[i])) {
-      throw new Error(`unspent output ${utxo.txid}:${utxo.vout} does not pay ${address}`);
+      throw new PearlError('UTXO_INVALID', `unspent output ${utxo.txid}:${utxo.vout} does not pay ${address}`);
     }
   }
   const { destination, ...rest } = options;
@@ -61,7 +62,7 @@ export function sweepKey(privateKey: Uint8Array, options: SweepOptions): SignedP
   const publicKey = ecc.pointFromScalar(privateKey, true)!;
   const even = publicKey[0] === 0x03 ? ecc.privateNegate(privateKey) : privateKey;
   const tweaked = ecc.privateAdd(even, taggedHash('TapTweak', publicKey.slice(1)));
-  if (tweaked === null) throw new Error('taproot tweak produced an invalid key');
+  if (tweaked === null) throw new PearlError('KEY_INVALID', 'taproot tweak produced an invalid key');
   const signed = payment.transaction.clone();
   const scripts = payment.prevouts.map((prevout) => prevout.script);
   const values = payment.prevouts.map((prevout) => prevout.value);
@@ -70,7 +71,7 @@ export function sweepKey(privateKey: Uint8Array, options: SweepOptions): SignedP
     // Fresh BIP340 auxiliary randomness, as the signing accounts use.
     const signature = ecc.signSchnorr(hash, tweaked, crypto.getRandomValues(new Uint8Array(32)));
     if (!ecc.verifySchnorr(hash, script.subarray(2), signature)) {
-      throw new Error(`invalid Taproot signature for input ${i}`);
+      throw new SigningError('SIGNATURE_INVALID', `invalid Taproot signature for input ${i}`);
     }
     signed.setWitness(i, [signature]);
   });

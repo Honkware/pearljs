@@ -26,6 +26,11 @@ import { getBlockFilter } from './gcs.js';
 import type { BlockFilter } from './gcs.js';
 import type { PearlNetworkName } from './networks.js';
 import { fromHex, toHex as bytesToHex } from './internal/bytes.js';
+import { PearlRpcError } from './errors.js';
+
+export { PearlRpcError };
+export type { RpcErrorKind } from './errors.js';
+import { PearlError } from './errors.js';
 
 /** pearld's default RPC port per network (node/params.go). */
 export const PEARLD_RPC_PORTS: Readonly<Record<PearlNetworkName, number>> = {
@@ -142,37 +147,6 @@ export interface Rpc {
   call<T = unknown>(method: string, params?: readonly unknown[], options?: CallOptions): Promise<T>;
 }
 
-/**
- * Where a call failed: `rpc` is an error reply from the server, `http` an HTTP
- * error status, `network` an unreachable server or a timeout, `response` a reply
- * that is not JSON-RPC.
- */
-export type RpcErrorKind = 'rpc' | 'http' | 'network' | 'response';
-
-/** Any failed call: an RPC error reply, an HTTP failure, an unreachable server or a malformed reply. */
-export class PearlRpcError extends Error {
-  override readonly name = 'PearlRpcError';
-  readonly kind: RpcErrorKind;
-  readonly method: string;
-  /** JSON-RPC error code, for kind "rpc". */
-  readonly code: number | undefined;
-  /** HTTP status, for kind "http". */
-  readonly status: number | undefined;
-
-  constructor(
-    kind: RpcErrorKind,
-    method: string,
-    message: string,
-    extra: { code?: number; status?: number; cause?: unknown } = {},
-  ) {
-    super(`${method}: ${message}`, extra.cause === undefined ? undefined : { cause: extra.cause });
-    this.kind = kind;
-    this.method = method;
-    this.code = extra.code;
-    this.status = extra.status;
-  }
-}
-
 /** Codes from node/btcjson/jsonrpcerr.go that callers commonly branch on. */
 export const RPC_ERROR_CODES = {
   MISC: -1,
@@ -230,7 +204,7 @@ export function rpcError(method: string, error: { code?: unknown; message?: unkn
   // btcjson.RPCError tags both fields omitempty, so either can be missing.
   const code = typeof error.code === 'number' ? error.code : 0;
   const message = typeof error.message === 'string' && error.message !== '' ? error.message : 'unknown error';
-  return new PearlRpcError('rpc', method, `${message} (code ${code})`, { code });
+  return new PearlRpcError('rpc', method, `${message} (code ${code})`, { rpcCode: code });
 }
 
 /**
@@ -599,7 +573,7 @@ function isTransient(err: unknown): boolean {
 // The same failure under another method's name, for the calls of a batch.
 function renamed(err: PearlRpcError, method: string): PearlRpcError {
   return new PearlRpcError(err.kind, method, err.message.slice(err.method.length + 2), {
-    ...(err.code === undefined ? {} : { code: err.code }),
+    ...(err.rpcCode === undefined ? {} : { rpcCode: err.rpcCode }),
     ...(err.status === undefined ? {} : { status: err.status }),
     cause: err.cause,
   });
@@ -1121,7 +1095,7 @@ export function pearldMethods<Base extends RpcClass>(Base: Base) {
      */
     async submitBlock(block: string | Uint8Array): Promise<void> {
       const result = await this.call<string | null>('submitblock', [toHex(block)]);
-      if (typeof result === 'string') throw new PearlRpcError('rpc', 'submitblock', result, { code: RPC_ERROR_CODES.VERIFY });
+      if (typeof result === 'string') throw new PearlRpcError('rpc', 'submitblock', result, { rpcCode: RPC_ERROR_CODES.VERIFY });
     }
 
     /**
@@ -1189,7 +1163,7 @@ export function pearldMethods<Base extends RpcClass>(Base: Base) {
      */
     async estimateFee(blocks: number): Promise<bigint> {
       const rate = await this.call<bigint>('estimatefee', [blocks], { amounts: ['result'] });
-      if (rate < 0n) throw new PearlRpcError('rpc', 'estimatefee', 'the server has no fee estimate', { code: RPC_ERROR_CODES.MISC });
+      if (rate < 0n) throw new PearlRpcError('rpc', 'estimatefee', 'the server has no fee estimate', { rpcCode: RPC_ERROR_CODES.MISC });
       return rate;
     }
 
@@ -1883,7 +1857,7 @@ export function paidTo(tx: { readonly vout: readonly RpcVout[] }, address: strin
 export function isUnknownTransaction(err: unknown): boolean {
   return (
     err instanceof PearlRpcError &&
-    err.code === RPC_ERROR_CODES.NO_TX_INFO &&
+    err.rpcCode === RPC_ERROR_CODES.NO_TX_INFO &&
     (err.message.includes('No information available about transaction') || err.message.includes('No information for transaction'))
   );
 }
@@ -1894,7 +1868,7 @@ export function isUnknownTransaction(err: unknown): boolean {
 function isUnusedAddress(err: unknown): boolean {
   return (
     err instanceof PearlRpcError &&
-    err.code === RPC_ERROR_CODES.NO_TX_INFO &&
+    err.rpcCode === RPC_ERROR_CODES.NO_TX_INFO &&
     err.message.includes('No information available about address')
   );
 }
@@ -2024,10 +1998,10 @@ const DECIMAL_RE = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/;
  */
 export function decimalToGrain(text: string): bigint {
   const m = DECIMAL_RE.exec(text);
-  if (m === null) throw new Error(`invalid PRL amount: ${JSON.stringify(text)}`);
+  if (m === null) throw new PearlError('AMOUNT_INVALID', `invalid PRL amount: ${JSON.stringify(text)}`);
   const [, sign, whole, frac = '', exp = '0'] = m;
   const shift = Number(exp);
-  if (Math.abs(shift) > 40) throw new Error(`PRL amount out of range: ${text}`);
+  if (Math.abs(shift) > 40) throw new PearlError('AMOUNT_OUT_OF_RANGE', `PRL amount out of range: ${text}`);
   const digits = whole! + frac;
   const point = whole!.length + shift;
   const padded = point < 0 ? '0'.repeat(-point) + digits : digits.padEnd(point, '0');

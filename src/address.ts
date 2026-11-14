@@ -13,6 +13,7 @@
 import { bech32m } from 'bech32';
 import { networks } from './networks.js';
 import type { PearlNetwork, PearlNetworkName } from './networks.js';
+import { AddressError } from './errors.js';
 
 /** A decoded address: the witness version (1 for P2TR, 2 for P2MR) and its 32-byte program. */
 export interface WitnessAddress {
@@ -37,10 +38,10 @@ export function encodeAddress(
 ): string {
   const { version, program } = address;
   if (!Number.isInteger(version) || version < MIN_WITNESS_VERSION || version > MAX_WITNESS_VERSION) {
-    throw new Error(`unsupported witness version: ${version}`);
+    throw new AddressError('ADDRESS_UNSUPPORTED_VERSION', `unsupported witness version: ${version}`);
   }
   if (program.length !== WITNESS_PROGRAM_LENGTH) {
-    throw new Error(
+    throw new AddressError('ADDRESS_WRONG_LENGTH',
       `witness program must be ${WITNESS_PROGRAM_LENGTH} bytes, got ${program.length}`,
     );
   }
@@ -60,29 +61,32 @@ export function decodeAddress(
   try {
     decoded = bech32m.decode(address);
   } catch (err) {
-    throw new Error(
-      `invalid pearl address: ${err instanceof Error ? err.message : err}`,
+    const reason = err instanceof Error ? err.message : String(err);
+    // bech32 addresses (witness v0) fail here too: their checksum is not bech32m.
+    throw new AddressError(
+      reason.startsWith('Invalid checksum') ? 'ADDRESS_BAD_CHECKSUM' : 'ADDRESS_MALFORMED',
+      `invalid pearl address: ${reason}`,
     );
   }
   if (decoded.prefix !== network.bech32Hrp) {
-    throw new Error(
+    throw new AddressError('ADDRESS_WRONG_NETWORK',
       `address prefix ${decoded.prefix} is not for ${network.name}`,
     );
   }
   const version = decoded.words[0];
   if (version === undefined || version < MIN_WITNESS_VERSION || version > MAX_WITNESS_VERSION) {
-    throw new Error(`unsupported witness version: ${version}`);
+    throw new AddressError('ADDRESS_UNSUPPORTED_VERSION', `unsupported witness version: ${version}`);
   }
   let program;
   try {
     program = bech32m.fromWords(decoded.words.slice(1));
   } catch (err) {
-    throw new Error(
+    throw new AddressError('ADDRESS_MALFORMED',
       `invalid witness program: ${err instanceof Error ? err.message : err}`,
     );
   }
   if (program.length !== WITNESS_PROGRAM_LENGTH) {
-    throw new Error(
+    throw new AddressError('ADDRESS_WRONG_LENGTH',
       `witness program must be ${WITNESS_PROGRAM_LENGTH} bytes, got ${program.length}`,
     );
   }
@@ -160,7 +164,7 @@ export function fromOutputScript(
     (opcode !== 0x50 + MIN_WITNESS_VERSION && opcode !== 0x50 + MAX_WITNESS_VERSION) ||
     script[1] !== WITNESS_PROGRAM_LENGTH
   ) {
-    throw new Error('output script is not a pearl witness program');
+    throw new AddressError('ADDRESS_UNSUPPORTED_SCRIPT', 'output script is not a pearl witness program');
   }
   const program = Uint8Array.from(script.subarray(2));
   return encodeAddress({ version: opcode - 0x50, program }, network);

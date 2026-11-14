@@ -68,7 +68,7 @@ describeOyster('Oyster wallet methods', () => {
     const mined = (await oyster.listAllTransactions()).filter((entry) => entry.txid === txid);
     expect(mined.length).toBe(entries.length);
     for (const entry of mined) expect(entry).toMatchObject({ confirmations: 1, blockhash: info.blockhash });
-    await expect(oyster.getTransaction('00'.repeat(32))).rejects.toMatchObject({ kind: 'rpc', code: -5 });
+    await expect(oyster.getTransaction('00'.repeat(32))).rejects.toMatchObject({ kind: 'rpc', rpcCode: -5 });
   });
 
   it('keeps a locked output out of listUnspent and out of a send until it is unlocked', async () => {
@@ -99,7 +99,7 @@ describeOyster('Oyster wallet methods', () => {
     expect(await pearld.getRawMempool()).toEqual([txid]);
 
     expect(await oyster.removeTransaction(txid)).toEqual([txid]);
-    await expect(oyster.getTransaction(txid)).rejects.toMatchObject({ kind: 'rpc', code: -5 });
+    await expect(oyster.getTransaction(txid)).rejects.toMatchObject({ kind: 'rpc', rpcCode: -5 });
     // Its inputs are the wallet's to spend again, though pearld still holds the transaction.
     const key = (entry: { txid: string; vout: number }): string => `${entry.txid}:${entry.vout}`;
     expect((await oyster.listUnspent()).map(key).sort()).toEqual(before.map(key).sort());
@@ -116,7 +116,7 @@ describeOyster('Oyster wallet methods', () => {
   it('has no sync progress to report while it follows pearld over RPC', async () => {
     await expect(oyster.getSyncProgress()).rejects.toMatchObject({
       kind: 'rpc',
-      code: -4,
+      rpcCode: -4,
       message: 'getsyncprogress: sync progress tracking is only available in SPV mode (code -4)',
     });
     const tip = await pearld.getBlockCount();

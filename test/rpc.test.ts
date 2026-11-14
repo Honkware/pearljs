@@ -329,9 +329,9 @@ describe('errors', () => {
   it('carries the RPC code and message from an error reply', async () => {
     const { client } = pearld({ getrawtransaction: 'getrawtransaction-missing', frobnicate: 'method-not-found' });
     const missing = await rejection(client.getRawTransaction(txid));
-    expect(missing).toMatchObject({ kind: 'rpc', code: -5, method: 'getrawtransaction', status: undefined });
+    expect(missing).toMatchObject({ kind: 'rpc', rpcCode: -5, method: 'getrawtransaction', status: undefined });
     expect(missing.message).toBe(`getrawtransaction: No information available about transaction ${txid} (code -5)`);
-    expect(await rejection(client.call('frobnicate'))).toMatchObject({ kind: 'rpc', code: -32601 });
+    expect(await rejection(client.call('frobnicate'))).toMatchObject({ kind: 'rpc', rpcCode: -32601 });
   });
 
   it('maps pearld and Oyster refusals to their codes', async () => {
@@ -341,15 +341,15 @@ describe('errors', () => {
       stop: 'limited-user',
     });
     const rejected = await rejection(node.client.sendRawTransaction('00'));
-    expect(rejected.code).toBe(-26);
+    expect(rejected.rpcCode).toBe(-26);
     expect(rejected.message).toContain('TX rejected: transaction version 3 is not standard');
-    expect((await rejection(node.client.estimateFee(6))).code).toBe(-1);
-    expect((await rejection(node.client.call('stop'))).code).toBe(-32603);
+    expect((await rejection(node.client.estimateFee(6))).rpcCode).toBe(-1);
+    expect((await rejection(node.client.call('stop'))).rpcCode).toBe(-32603);
 
     const wallet = oyster({ sendtoaddress: 'wallet-locked', walletlock: 'wallet-unsupported', getbalance: 'wallet-error' });
-    expect((await rejection(wallet.client.sendToAddress(address, 1n, 1000n))).code).toBe(-13);
-    expect((await rejection(wallet.client.walletLock())).code).toBe(-1);
-    expect((await rejection(wallet.client.getBalance())).code).toBe(-4);
+    expect((await rejection(wallet.client.sendToAddress(address, 1n, 1000n))).rpcCode).toBe(-13);
+    expect((await rejection(wallet.client.walletLock())).rpcCode).toBe(-1);
+    expect((await rejection(wallet.client.getBalance())).rpcCode).toBe(-4);
   });
 
   it('names a 401 as rejected credentials', async () => {
@@ -357,7 +357,7 @@ describe('errors', () => {
       getblockcount: () => new Response('401 Unauthorized.\n', { status: 401, headers: { 'WWW-Authenticate': 'Basic realm="pearld RPC"' } }),
     });
     const err = await rejection(client.getBlockCount());
-    expect(err).toMatchObject({ kind: 'http', status: 401, code: undefined });
+    expect(err).toMatchObject({ kind: 'http', status: 401, rpcCode: undefined });
     expect(err.message).toBe('getblockcount: 127.0.0.1:18334 rejected the RPC username or password (HTTP 401)');
     expect(err.message).not.toContain('sécret');
   });
@@ -377,7 +377,7 @@ describe('errors', () => {
       }) as typeof fetch;
     const refused = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: failing('ECONNREFUSED') });
     const err = await rejection(refused.getBlockCount());
-    expect(err).toMatchObject({ kind: 'network', code: undefined, status: undefined });
+    expect(err).toMatchObject({ kind: 'network', rpcCode: undefined, status: undefined });
     expect(err.message).toContain('connection refused by 127.0.0.1:18334');
     expect(err.cause).toBeInstanceOf(TypeError);
 
@@ -476,7 +476,7 @@ describe('pearldChainClient', () => {
         const listed = [...confirmed, ...mempool.slice(turn), ...mempool.slice(0, turn)].slice(skip, skip + count);
         const reply =
           listed.length === 0
-            ? { result: null, error: { code: -5, message: 'No information available about address' } }
+            ? { result: null, error: { rpcCode: -5, message: 'No information available about address' } }
             : { result: listed, error: null };
         return new Response(JSON.stringify({ ...reply, id: r.body.id }));
       },
@@ -703,11 +703,11 @@ describe('more pearld methods', () => {
 
     const rejected = pearld({ submitblock: 'submitblock-rejected' });
     const err = await rejection(rejected.client.submitBlock('00'));
-    expect(err).toMatchObject({ kind: 'rpc', method: 'submitblock', code: -25 });
+    expect(err).toMatchObject({ kind: 'rpc', method: 'submitblock', rpcCode: -25 });
     expect(err.message).toBe(`submitblock: rejected: already have block ${genesisHash}`);
 
     const undecodable = pearld({ submitblock: 'submitblock-undecodable' });
-    expect(await rejection(undecodable.client.submitBlock('00'))).toMatchObject({ kind: 'rpc', code: -22 });
+    expect(await rejection(undecodable.client.submitBlock('00'))).toMatchObject({ kind: 'rpc', rpcCode: -22 });
   });
 
   it('returns the hashes generate mined and its error without a mining address', async () => {
@@ -718,7 +718,7 @@ describe('more pearld methods', () => {
 
   it('throws when the server answers estimatefee with -1 instead of returning a negative rate', async () => {
     const { client } = pearld({ estimatefee: 'estimatefee-negative' });
-    expect(await rejection(client.estimateFee(6))).toMatchObject({ kind: 'rpc', code: -1, method: 'estimatefee' });
+    expect(await rejection(client.estimateFee(6))).toMatchObject({ kind: 'rpc', rpcCode: -1, method: 'estimatefee' });
   });
 });
 
@@ -844,7 +844,7 @@ describe('more Oyster methods', () => {
     expect(tx.fee).toBe(want('fee'));
     expect(tx.details[0]).toMatchObject({ category: 'send', amount: want('debit'), fee: want('fee') });
     expect(tx.details[1]).toMatchObject({ category: 'receive', amount: want('amount'), vout: 1, address });
-    expect(await rejection(client.getTransaction('00'.repeat(32)))).toMatchObject({ kind: 'rpc', code: -5 });
+    expect(await rejection(client.getTransaction('00'.repeat(32)))).toMatchObject({ kind: 'rpc', rpcCode: -5 });
   });
 
   it('reads balances by account, whatever the accounts are called', async () => {
@@ -1024,10 +1024,10 @@ describe('transport options', () => {
     ]);
     expect(results[0]).toEqual({ status: 'fulfilled', value: 0 });
     expect(results[1]).toEqual({ status: 'fulfilled', value: expected('batch', 'hash') });
-    expect((results[2] as PromiseRejectedResult).reason).toMatchObject({ kind: 'rpc', code: -5, method: 'getblock' });
+    expect((results[2] as PromiseRejectedResult).reason).toMatchObject({ kind: 'rpc', rpcCode: -5, method: 'getblock' });
     // The amount conversion asked for by one call does not touch the others.
     expect((results[3] as PromiseFulfilledResult<{ relayfee: bigint }>).value.relayfee).toBe(BigInt(expected('batch', 'relayFee') as string));
-    expect((results[4] as PromiseRejectedResult).reason).toMatchObject({ kind: 'rpc', code: -32601, method: 'frobnicate' });
+    expect((results[4] as PromiseRejectedResult).reason).toMatchObject({ kind: 'rpc', rpcCode: -32601, method: 'frobnicate' });
   });
 
   it('sends a lone call, and a call with its own signal, outside a batch', async () => {
@@ -1044,7 +1044,7 @@ describe('transport options', () => {
       new PearldClient({ url: 'https://127.0.0.1:18334', fetch: (async () => new Response(body)) as unknown as typeof fetch, batch: true });
     const unreadable = answer(fixture('batch-unreadable').body);
     const failures = await Promise.all([rejection(unreadable.getBlockCount()), rejection(unreadable.getBestBlockHash())]);
-    expect(failures.map((e) => [e.kind, e.code, e.method])).toEqual([
+    expect(failures.map((e) => [e.kind, e.rpcCode, e.method])).toEqual([
       ['rpc', -32700, 'getblockcount'],
       ['rpc', -32700, 'getbestblockhash'],
     ]);
@@ -1102,7 +1102,7 @@ describe('transport options', () => {
     }) as unknown as typeof fetch;
     const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: refusing, retry: 5 });
     expect((await rejection(client.getBlockCount())).status).toBe(401);
-    expect((await rejection(client.getBlockCount())).code).toBe(-32601);
+    expect((await rejection(client.getBlockCount())).rpcCode).toBe(-32601);
     expect(attempts).toBe(2);
   });
 
@@ -1119,7 +1119,7 @@ describe('transport options', () => {
     expect(await client.getBlockCount()).toBe(321);
     expect(up.sent[0]!.url).toBe('https://b.example:44107/');
     expect(new Headers(up.sent[0]!.init.headers).get('Authorization')).toBe(`Basic ${btoa('b:y')}`);
-    expect(await rejection(client.getRawTransaction(txid))).toMatchObject({ kind: 'rpc', code: -5 });
+    expect(await rejection(client.getRawTransaction(txid))).toMatchObject({ kind: 'rpc', rpcCode: -5 });
 
     const answering = fakeFetch({ getrawtransaction: 'getrawtransaction-missing' });
     const never2 = fakeFetch({});
@@ -1180,7 +1180,7 @@ describe('address paging', () => {
   it('does not take a missing transaction index for an unknown transaction', async () => {
     const { client } = pearld({ getrawtransaction: 'getrawtransaction-noindex' });
     const err = await rejection(pearldChainClient(client).getTransaction(txid));
-    expect(err).toMatchObject({ kind: 'rpc', code: -5 });
+    expect(err).toMatchObject({ kind: 'rpc', rpcCode: -5 });
     expect(err.message).toContain('transaction index must be enabled');
   });
 

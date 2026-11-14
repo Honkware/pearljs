@@ -15,6 +15,7 @@ import {
   validateMnemonic as scureValidateMnemonic,
 } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english';
+import { PearlError } from './errors.js';
 
 /** Word counts BIP39 allows, for 128 to 256 bits of entropy. */
 export const MNEMONIC_WORD_COUNTS = [12, 15, 18, 21, 24] as const;
@@ -59,7 +60,7 @@ export function entropyToMnemonic(entropy: Uint8Array): string {
 export function mnemonicToEntropy(mnemonic: string): Uint8Array {
   const phrase = normalizeMnemonic(mnemonic);
   if (!scureValidateMnemonic(phrase, wordlist)) {
-    throw new Error('invalid BIP39 mnemonic');
+    throw new PearlError('MNEMONIC_INVALID', 'invalid BIP39 mnemonic');
   }
   return scureMnemonicToEntropy(phrase, wordlist);
 }
@@ -75,7 +76,7 @@ export function mnemonicToEntropy(mnemonic: string): Uint8Array {
 export function mnemonicToSeed(mnemonic: string, passphrase = ''): Uint8Array {
   const phrase = normalizeMnemonic(mnemonic);
   if (!scureValidateMnemonic(phrase, wordlist)) {
-    throw new Error('invalid BIP39 mnemonic');
+    throw new PearlError('MNEMONIC_INVALID', 'invalid BIP39 mnemonic');
   }
   return mnemonicToSeedSync(phrase, passphrase);
 }
@@ -145,7 +146,10 @@ export function parseSeedInput(raw: string, passphrase = ''): ParsedSeedInput {
 export function seedFromInput(raw: string, passphrase = ''): Uint8Array {
   const parsed = parseSeedInput(raw, passphrase);
   if (parsed.kind === 'invalid') {
-    throw new Error(`invalid seed: ${parsed.reason}`);
+    // parseSeedInput quotes an unknown word for a form to show. A mistyped word
+    // gives away most of the right one, so it stays out of the error.
+    const reason = parsed.reason.endsWith('is not a BIP39 word') ? 'a word is not in the BIP39 list' : parsed.reason;
+    throw new PearlError('SEED_INVALID', `invalid seed: ${reason}`);
   }
   return parsed.seed;
 }

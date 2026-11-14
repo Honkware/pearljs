@@ -16,6 +16,7 @@
 import { OP_CODES, OPCODE_NAMES } from './opcodes.js';
 import { scriptPush } from './script.js';
 import { toHex } from './internal/bytes.js';
+import { PearlError } from './errors.js';
 
 /** A decompiled script: opcodes as numbers, pushed data as byte arrays. */
 export type ScriptChunk = number | Uint8Array;
@@ -91,7 +92,7 @@ function tokenize(script: Uint8Array): TokenizeResult {
  */
 export function decompileScript(script: Uint8Array): ScriptChunk[] {
   const { tokens, error } = tokenize(script);
-  if (error !== null) throw new Error(error);
+  if (error !== null) throw new PearlError('SCRIPT_MALFORMED', error);
   return tokens.map((token) => token.data ?? token.opcode);
 }
 
@@ -107,7 +108,7 @@ export function compileScript(chunks: readonly ScriptChunk[]): Uint8Array {
     } else if (Number.isInteger(chunk) && chunk >= 0 && chunk <= 0xff && !isPushOpcode(chunk)) {
       out.push(chunk);
     } else {
-      throw new Error(`${String(chunk)} is not an opcode; pass pushed data as a Uint8Array`);
+      throw new PearlError('SCRIPT_INVALID', `${String(chunk)} is not an opcode; pass pushed data as a Uint8Array`);
     }
   }
   return Uint8Array.from(out);
@@ -180,12 +181,12 @@ export function scriptFromAsm(asm: string): Uint8Array {
   const parts: number[][] = [];
   for (const word of asm === '' ? [] : asm.split(' ')) {
     if (word === '') {
-      throw new Error(
+      throw new PearlError('SCRIPT_INVALID',
         'script asm has an empty word, which may be a zero-length push or stray whitespace; write 0x for an empty push',
       );
     }
     if (AMBIGUOUS_WORD.test(word)) {
-      throw new Error(
+      throw new PearlError('SCRIPT_INVALID',
         `script word "${word}" is ambiguous: write OP_${word} for the number or 0x${word} for a one-byte push`,
       );
     }
@@ -194,7 +195,7 @@ export function scriptFromAsm(asm: string): Uint8Array {
       parts.push([value === -1 ? OP_CODES.OP_1NEGATE : value === 0 ? OP_CODES.OP_0 : OP_CODES.OP_1 + value - 1]);
     } else if (word.startsWith('OP_')) {
       const opcode = (OP_CODES as Record<string, number>)[word];
-      if (opcode === undefined || isPushOpcode(opcode)) throw new Error(`unknown or push opcode ${word}`);
+      if (opcode === undefined || isPushOpcode(opcode)) throw new PearlError('SCRIPT_INVALID', `unknown or push opcode ${word}`);
       parts.push([opcode]);
     } else if (/^(0x([0-9a-fA-F]{2})*|([0-9a-fA-F]{2})+)$/.test(word)) {
       const hex = word.startsWith('0x') ? word.slice(2) : word;
@@ -202,7 +203,7 @@ export function scriptFromAsm(asm: string): Uint8Array {
       for (let i = 0; i < data.length; i += 1) data[i] = parseInt(hex.slice(2 * i, 2 * i + 2), 16);
       parts.push(pushWithLength(data));
     } else {
-      throw new Error(`cannot parse script word "${word.length > 80 ? `${word.slice(0, 80)}...` : word}"`);
+      throw new PearlError('SCRIPT_INVALID', `cannot parse script word "${word.length > 80 ? `${word.slice(0, 80)}...` : word}"`);
     }
   }
   const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
@@ -248,7 +249,7 @@ export function decodeScriptNumberBigInt(data: Uint8Array, options: DecodeScript
   }
   const maxLength = options.maxLength ?? 4;
   if (data.length > maxLength) {
-    throw new Error(
+    throw new PearlError('SCRIPT_INVALID',
       `numeric value encoded as ${toHex(data)} is ${data.length} bytes which exceeds the max allowed of ${maxLength}`,
     );
   }
@@ -259,7 +260,7 @@ export function decodeScriptNumberBigInt(data: Uint8Array, options: DecodeScript
     (last & 0x7f) === 0 &&
     (data.length === 1 || (data[data.length - 2]! & 0x80) === 0)
   ) {
-    throw new Error(`numeric value encoded as ${toHex(data)} is not minimally encoded`);
+    throw new PearlError('SCRIPT_INVALID', `numeric value encoded as ${toHex(data)} is not minimally encoded`);
   }
   let value = 0n;
   for (let i = data.length - 1; i >= 0; i -= 1) {

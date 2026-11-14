@@ -19,6 +19,7 @@
 
 import { shake256 } from '@noble/hashes/sha3';
 import { concat, equalBytes, toHex } from './internal/bytes.js';
+import { SigningError, XmssError } from './errors.js';
 
 /** Bytes in the private seed an XMSS key is generated from. */
 export const XMSS_PRIVATE_SEED_LENGTH = 64;
@@ -344,11 +345,11 @@ export function xmssSign(secretKey: Uint8Array, msgUid: number, message: Uint8Ar
   checkLength(secretKey, XMSS_SECRET_KEY_LENGTH, 'XMSS secret key');
   const levels = buildTree(secretKey.subarray(0, N), secretKey.subarray(3 * N, 4 * N));
   if (!equalBytes(levels[TREE_HEIGHT]![0]!, secretKey.subarray(2 * N, 3 * N))) {
-    throw new Error('XMSS secret key is inconsistent: its root does not match its seeds');
+    throw new XmssError('XMSS_KEY_INVALID', 'XMSS secret key is inconsistent: its root does not match its seeds');
   }
   const signature = signWithTree(secretKey, levels, msgUid, message);
   if (!xmssVerify(secretKey.subarray(2 * N), message, signature)) {
-    throw new Error('XMSS signature failed verification');
+    throw new XmssError('XMSS_SIGNATURE_INVALID', 'XMSS signature failed verification');
   }
   return signature;
 }
@@ -488,20 +489,20 @@ export function createXmssSigner(
   let queue: Promise<unknown> = Promise.resolve();
 
   const signNext = async (message: Uint8Array): Promise<Uint8Array> => {
-    if (destroyed) throw new Error('this XMSS signer has been destroyed');
+    if (destroyed) throw new SigningError('SIGNER_DESTROYED', 'this XMSS signer has been destroyed');
     const index = await store.reserve(Uint8Array.from(publicKey));
     if (!Number.isInteger(index) || index < 0) {
-      throw new Error(`XMSS index store returned ${String(index)}`);
+      throw new XmssError('XMSS_STORE_INVALID', `XMSS index store returned ${String(index)}`);
     }
     if (index >= XMSS_MAX_SIGNATURES) {
-      throw new Error(`this XMSS key has used all ${XMSS_MAX_SIGNATURES} of its signatures`);
+      throw new XmssError('XMSS_INDEX_EXHAUSTED', `this XMSS key has used all ${XMSS_MAX_SIGNATURES} of its signatures`);
     }
     if (index <= lastIndex) {
-      throw new Error(
+      throw new XmssError('XMSS_INDEX_REUSE',
         `XMSS index store returned index ${index} after index ${lastIndex}; refusing to reuse a one-time index`,
       );
     }
-    if (destroyed) throw new Error('this XMSS signer has been destroyed');
+    if (destroyed) throw new SigningError('SIGNER_DESTROYED', 'this XMSS signer has been destroyed');
     const messageHex = toHex(message);
     let signed = signedMessages.get(keyHex);
     if (signed === undefined) {
@@ -510,7 +511,7 @@ export function createXmssSigner(
     }
     const earlier = signed.get(index);
     if (earlier !== undefined && earlier !== messageHex) {
-      throw new Error(
+      throw new XmssError('XMSS_INDEX_REUSE',
         `XMSS index ${index} already signed a different message for this key; ` +
           'a key must have exactly one index store',
       );
@@ -520,7 +521,7 @@ export function createXmssSigner(
     signed.set(index, messageHex);
     const signature = signWithTree(secretKey, levels, index, message);
     if (!xmssVerify(publicKey, message, signature)) {
-      throw new Error('XMSS signature failed verification');
+      throw new XmssError('XMSS_SIGNATURE_INVALID', 'XMSS signature failed verification');
     }
     return signature;
   };

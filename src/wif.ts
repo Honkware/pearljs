@@ -16,6 +16,7 @@ import * as ecc from 'tiny-secp256k1';
 import { encodeAddress } from './address.js';
 import type { PearlNetwork } from './networks.js';
 import { taprootOutputKey } from './scripttree.js';
+import { PearlError } from './errors.js';
 
 const ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 const COMPRESS_MAGIC = 0x01;
@@ -76,7 +77,7 @@ function checksum(payload: Uint8Array): Uint8Array {
  */
 export function encodeWif(privateKey: Uint8Array, network: PearlNetwork, compressed = true): string {
   if (!ecc.isPrivate(privateKey)) {
-    throw new Error('invalid private key');
+    throw new PearlError('KEY_INVALID', 'invalid private key');
   }
   const payload = Uint8Array.from([network.wif, ...privateKey, ...(compressed ? [COMPRESS_MAGIC] : [])]);
   return base58Encode(Uint8Array.from([...payload, ...checksum(payload)]));
@@ -99,29 +100,29 @@ export function decodeWif(wif: string, network: PearlNetwork): DecodedWif {
   }
   // Checked before decoding, which is quadratic in the length.
   if (wif.length > MAX_WIF_LENGTH) {
-    throw new Error('malformed private key');
+    throw new PearlError('WIF_MALFORMED', 'malformed private key');
   }
   const decoded = base58Decode(wif);
   let compressed: boolean;
   if (decoded.length === 1 + 32 + 1 + 4) {
-    if (decoded[33] !== COMPRESS_MAGIC) throw new Error('malformed private key');
+    if (decoded[33] !== COMPRESS_MAGIC) throw new PearlError('WIF_MALFORMED', 'malformed private key');
     compressed = true;
   } else if (decoded.length === 1 + 32 + 4) {
     compressed = false;
   } else {
-    throw new Error('malformed private key');
+    throw new PearlError('WIF_MALFORMED', 'malformed private key');
   }
   const payload = decoded.slice(0, decoded.length - 4);
   const expected = checksum(payload);
   if (!expected.every((byte, i) => byte === decoded[decoded.length - 4 + i])) {
-    throw new Error('checksum mismatch');
+    throw new PearlError('WIF_BAD_CHECKSUM', 'checksum mismatch');
   }
   const privateKey = decoded.slice(1, 33);
   if (!ecc.isPrivate(privateKey)) {
-    throw new Error('malformed private key');
+    throw new PearlError('WIF_MALFORMED', 'malformed private key');
   }
   if (decoded[0] !== network.wif) {
-    throw new Error(`key is not intended for ${network.name}`);
+    throw new PearlError('WIF_WRONG_NETWORK', `key is not intended for ${network.name}`);
   }
   return { privateKey, compressed };
 }
@@ -133,7 +134,7 @@ export function decodeWif(wif: string, network: PearlNetwork): DecodedWif {
 export function keyPathAddress(privateKey: Uint8Array, network: PearlNetwork): string {
   const publicKey = ecc.isPrivate(privateKey) ? ecc.pointFromScalar(privateKey, true) : null;
   if (publicKey === null) {
-    throw new Error('invalid private key');
+    throw new PearlError('KEY_INVALID', 'invalid private key');
   }
   const { outputKey } = taprootOutputKey(publicKey.slice(1));
   return encodeAddress({ version: 1, program: outputKey }, network);

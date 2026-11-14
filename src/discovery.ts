@@ -18,6 +18,7 @@ import type { WalletBackend, WalletBalance, WalletUtxo } from './backend.js';
 import { sumBalance } from './backend.js';
 import type { AccountUtxo } from './builder.js';
 import type { PearlAccount } from './keys.js';
+import { PearlError } from './errors.js';
 
 /** The recovery window Oyster restores with. */
 export const OYSTER_RECOVERY_WINDOW = 250;
@@ -104,7 +105,7 @@ export async function discoverAccount(
   const found = children.size === 0 ? [] : await backend.getUtxos([...children.keys()]);
   const utxos = found.map((utxo) => {
     const child = children.get(utxo.address);
-    if (child === undefined) throw new Error(`the backend returned an output for ${utxo.address}, which was not asked for`);
+    if (child === undefined) throw new PearlError('BACKEND_RESPONSE', `the backend returned an output for ${utxo.address}, which was not asked for`);
     return { ...utxo, index: child.index, change: child.change };
   });
   return { receive, change, utxos, balance: sumBalance(utxos, backend.network.coinbaseMaturity) };

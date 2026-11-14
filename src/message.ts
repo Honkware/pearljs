@@ -30,6 +30,7 @@ import { OP_CODES, scriptPush, taggedHash } from './script.js';
 import { assertTaprootSighashType } from './scriptpath.js';
 import { serializeWitness } from './transaction.js';
 import { fromBase64 } from './internal/bytes.js';
+import { PearlError, SigningError } from './errors.js';
 
 /** txscript.MaxDataCarrierSize: the most message bytes Oyster can sign. */
 export const MAX_MESSAGE_LENGTH = 80;
@@ -44,11 +45,11 @@ function messageBytes(message: string): Uint8Array {
   }
   // With the u flag a surrogate only matches when it is not half of a pair.
   if (/\p{Surrogate}/u.test(message)) {
-    throw new Error('message has a lone surrogate, which has no UTF-8 encoding');
+    throw new PearlError('MESSAGE_INVALID', 'message has a lone surrogate, which has no UTF-8 encoding');
   }
   const bytes = new TextEncoder().encode(message);
   if (bytes.length > MAX_MESSAGE_LENGTH) {
-    throw new Error(`message is ${bytes.length} bytes, more than the ${MAX_MESSAGE_LENGTH} Oyster can sign`);
+    throw new PearlError('MESSAGE_INVALID', `message is ${bytes.length} bytes, more than the ${MAX_MESSAGE_LENGTH} Oyster can sign`);
   }
   return bytes;
 }
@@ -76,29 +77,29 @@ function parseWitness(bytes: Uint8Array): Uint8Array[] {
   let offset = 0;
   const readVarInt = (): number => {
     const first = bytes[offset];
-    if (first === undefined) throw new Error('signature ends early');
+    if (first === undefined) throw new PearlError('SIGNATURE_MALFORMED', 'signature ends early');
     offset += 1;
     if (first < 0xfd) return first;
     const width = first === 0xfd ? 2 : first === 0xfe ? 4 : 8;
-    if (offset + width > bytes.length) throw new Error('signature ends early');
+    if (offset + width > bytes.length) throw new PearlError('SIGNATURE_MALFORMED', 'signature ends early');
     let value = 0;
     for (let i = width - 1; i >= 0; i -= 1) value = value * 256 + bytes[offset + i]!;
     offset += width;
     // An 8-byte value loses its low bits as a number, never enough to cross 2^32.
     if (value < (width === 2 ? 0xfd : width === 4 ? 0x10000 : 0x100000000)) {
-      throw new Error('signature has a non-canonical varint');
+      throw new PearlError('SIGNATURE_MALFORMED', 'signature has a non-canonical varint');
     }
     return value;
   };
   const count = readVarInt();
   if (count > MAX_WITNESS_ITEMS) {
-    throw new Error(`too many witness items: ${count}, max ${MAX_WITNESS_ITEMS}`);
+    throw new PearlError('SIGNATURE_MALFORMED', `too many witness items: ${count}, max ${MAX_WITNESS_ITEMS}`);
   }
   const items: Uint8Array[] = [];
   for (let i = 0; i < count; i += 1) {
     const length = readVarInt();
     if (length > MAX_WITNESS_ITEM_SIZE || offset + length > bytes.length) {
-      throw new Error(`witness item ${i} is too large or ends early`);
+      throw new PearlError('SIGNATURE_MALFORMED', `witness item ${i} is too large or ends early`);
     }
     items.push(Uint8Array.from(bytes.subarray(offset, offset + length)));
     offset += length;
@@ -111,7 +112,7 @@ function decodeBase64(text: string): Uint8Array {
     throw new TypeError('signature must be a base64 string');
   }
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text)) {
-    throw new Error('signature is not valid base64');
+    throw new PearlError('SIGNATURE_MALFORMED', 'signature is not valid base64');
   }
   return fromBase64(text);
 }
@@ -148,11 +149,11 @@ function auxRandOf(options: SignMessageOptions): Uint8Array {
 export function signMessage(privateKey: Uint8Array, message: string, options: SignMessageOptions = {}): string {
   const bytes = messageBytes(message);
   if (!(privateKey instanceof Uint8Array)) {
-    throw new Error('invalid private key');
+    throw new PearlError('KEY_INVALID', 'invalid private key');
   }
   const publicKey = ecc.isPrivate(privateKey) ? ecc.pointFromScalar(privateKey, true) : null;
   if (publicKey === null) {
-    throw new Error('invalid private key');
+    throw new PearlError('KEY_INVALID', 'invalid private key');
   }
   const internalKey = publicKey.slice(1);
   const tweak = taggedHash('TapTweak', internalKey);
@@ -160,7 +161,7 @@ export function signMessage(privateKey: Uint8Array, message: string, options: Si
   const tweakedKey = ecc.privateAdd(evenKey, tweak);
   const outputKey = ecc.xOnlyPointAddTweak(internalKey, tweak);
   if (tweakedKey === null || outputKey === null) {
-    throw new Error('taproot tweak produced an invalid key');
+    throw new PearlError('KEY_INVALID', 'taproot tweak produced an invalid key');
   }
   const scriptPubKey = Uint8Array.from([OP_CODES.OP_1, 32, ...outputKey.xOnlyPubkey]);
   const hash = toSignTransaction(scriptPubKey, bytes).hashForWitnessV1(
@@ -178,7 +179,7 @@ export function signMessage(privateKey: Uint8Array, message: string, options: Si
     if (evenKey !== privateKey) evenKey.fill(0);
   }
   if (!ecc.verifySchnorr(hash, outputKey.xOnlyPubkey, signature)) {
-    throw new Error('message signature failed verification');
+    throw new SigningError('SIGNATURE_INVALID', 'message signature failed verification');
   }
   return btoa(String.fromCharCode(...serializeWitness([signature])));
 }

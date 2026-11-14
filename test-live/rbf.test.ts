@@ -102,7 +102,7 @@ describeLive('replace-by-fee', () => {
     expect(await pearld.getRawMempool()).toEqual([transactionId(replacement)]);
     await expect(pearld.getRawTransaction(transactionId(original))).rejects.toMatchObject({
       kind: 'rpc',
-      code: RPC_ERROR_CODES.NO_TX_INFO,
+      rpcCode: RPC_ERROR_CODES.NO_TX_INFO,
     });
 
     // So it cannot be replaced in turn, whatever the fee.
@@ -112,7 +112,7 @@ describeLive('replace-by-fee', () => {
     expect(spent).toBe(`output already spent in mempool: output=${funding.getId()}:0, tx=${transactionId(replacement)}`);
     const refused = await pearld.sendRawTransaction(serializeTransaction(second)).catch((error: unknown) => error);
     expect(refused).toBeInstanceOf(PearlRpcError);
-    expect(refused).toMatchObject({ kind: 'rpc', code: RPC_ERROR_CODES.TX_REJECTED });
+    expect(refused).toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.TX_REJECTED });
     expect((refused as PearlRpcError).message).toContain(spent);
 
     await confirm(replacement);

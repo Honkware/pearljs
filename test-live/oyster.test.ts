@@ -198,13 +198,13 @@ describeOyster('Oyster', () => {
     const mempool = await pearld.getRawMempool();
     const refused = await oyster.sendToAddress(miner.deriveAddress(201), 1_000_000n, 2000n).catch((error: unknown) => error);
     expect(refused).toBeInstanceOf(PearlRpcError);
-    expect(refused).toMatchObject({ kind: 'rpc', code: RPC_ERROR_CODES.WALLET_UNLOCK_NEEDED });
-    await expect(oyster.dumpPrivKey(firstAddress)).rejects.toMatchObject({ code: RPC_ERROR_CODES.WALLET_UNLOCK_NEEDED });
+    expect(refused).toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.WALLET_UNLOCK_NEEDED });
+    await expect(oyster.dumpPrivKey(firstAddress)).rejects.toMatchObject({ rpcCode: RPC_ERROR_CODES.WALLET_UNLOCK_NEEDED });
     expect(await pearld.getRawMempool()).toEqual(mempool);
 
     await expect(oyster.walletPassphrase('not the passphrase', 60)).rejects.toMatchObject({
       kind: 'rpc',
-      code: RPC_ERROR_CODES.WALLET_PASSPHRASE_INCORRECT,
+      rpcCode: RPC_ERROR_CODES.WALLET_PASSPHRASE_INCORRECT,
     });
     await oyster.walletPassphrase(OYSTER_PASSPHRASE, 600);
     expect(await oyster.walletIsLocked()).toBe(false);

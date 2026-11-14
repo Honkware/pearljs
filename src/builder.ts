@@ -26,6 +26,7 @@ import type { ScriptTree } from './scripttree.js';
 import { createPsbt, createTransaction, finalizePsbt } from './transaction.js';
 import { p2mr } from './payments.js';
 import { equalBytes } from './internal/bytes.js';
+import { PearlError, PolicyError, SigningError } from './errors.js';
 
 const FINAL_SEQUENCE = 0xffffffff;
 // mempool.MaxRBFSequence: an input at or under this signals replacement.
@@ -111,13 +112,13 @@ function recipientScript(recipient: Recipient, network: PearlNetwork): Uint8Arra
  */
 export function buildPayment<T extends Utxo>(options: PaymentOptions<T>): Payment<T> {
   const { network, recipients, feeRate } = options;
-  if (recipients.length === 0) throw new Error('a payment needs at least one recipient');
+  if (recipients.length === 0) throw new PearlError('PAYMENT_INVALID', 'a payment needs at least one recipient');
   const maxIndex = recipients.findIndex((recipient) => recipient.amount === 'max');
   if (recipients.some((recipient, i) => recipient.amount === 'max' && i !== maxIndex)) {
-    throw new Error('only one recipient can take the maximum');
+    throw new PearlError('PAYMENT_INVALID', 'only one recipient can take the maximum');
   }
   const outpoints = new Set(options.utxos.map((utxo) => `${utxo.txid.toLowerCase()}:${utxo.vout}`));
-  if (outpoints.size !== options.utxos.length) throw new Error('the unspent outputs contain duplicates');
+  if (outpoints.size !== options.utxos.length) throw new PearlError('PAYMENT_INVALID', 'the unspent outputs contain duplicates');
 
   const fixed: TxOutput[] = recipients
     .filter((recipient) => recipient.amount !== 'max')
@@ -125,7 +126,7 @@ export function buildPayment<T extends Utxo>(options: PaymentOptions<T>): Paymen
   let remainderScript: Uint8Array;
   if (maxIndex >= 0) remainderScript = recipientScript(recipients[maxIndex]!, network);
   else if (options.changeAddress !== undefined) remainderScript = toOutputScript(options.changeAddress, network);
-  else throw new Error('a change address is needed unless a recipient takes the maximum');
+  else throw new PearlError('PAYMENT_INVALID', 'a change address is needed unless a recipient takes the maximum');
 
   const spendable = spendableUtxos(options.utxos, options);
   let selection;
@@ -144,7 +145,7 @@ export function buildPayment<T extends Utxo>(options: PaymentOptions<T>): Paymen
     throw new InsufficientFundsError(err.available, err.required, err.fee, skipped);
   }
   if (maxIndex >= 0 && selection.change === 0n) {
-    throw new Error(
+    throw new PearlError('PAYMENT_INVALID',
       `nothing above the dust limit is left to send: ${formatPearl(selection.totalInput)} PRL in, ` +
         `${formatPearl(selection.totalInput - selection.fee)} PRL to the other recipients`,
     );
@@ -190,11 +191,11 @@ function checkUnsigned(tx: Transaction, fee: bigint, vsize: number, relayFee: bi
   probe.ins.forEach((_, i) => probe.setWitness(i, [new Uint8Array(1)]));
   checkStandard(probe, relayFee === undefined ? {} : { minRelayFee: relayFee });
   if (vsize > MAX_STANDARD_TX_VSIZE) {
-    throw new Error(`vsize of transaction is larger than max allowed: ${vsize} > ${MAX_STANDARD_TX_VSIZE}`);
+    throw new PolicyError('POLICY_TX_TOO_LARGE', `vsize of transaction is larger than max allowed: ${vsize} > ${MAX_STANDARD_TX_VSIZE}`);
   }
   const required = minRelayFee(vsize, relayFee);
   if (fee < required) {
-    throw new Error(
+    throw new PolicyError('POLICY_FEE_TOO_LOW',
       `the fee of ${fee} grain is under the ${required} grain pearld requires to relay ${vsize} vbytes; raise the fee rate`,
     );
   }
@@ -241,7 +242,7 @@ export function finalizePayment<T extends Utxo>(
 ): SignedPayment<T> {
   const transaction = options.signed ?? finalizePsbt(payment.psbt);
   if (transaction.getId() !== payment.transaction.getId()) {
-    throw new Error('the signed transaction is not the one this payment built');
+    throw new SigningError('TRANSACTION_MISMATCH', 'the signed transaction is not the one this payment built');
   }
   checkStandard(transaction, {
     prevouts: payment.prevouts,
@@ -299,10 +300,10 @@ export function payFromAccount(account: PearlSigningAccount, options: AccountPay
   const utxos = options.utxos.map((utxo) => {
     if (classifyOutputScript(utxo.script) === 'p2mr') {
       if (utxo.p2mr === undefined) {
-        throw new Error(`unspent output ${utxo.txid}:${utxo.vout} is P2MR and needs \`p2mr\` to name its tree and leaf`);
+        throw new PearlError('UTXO_INVALID', `unspent output ${utxo.txid}:${utxo.vout} is P2MR and needs \`p2mr\` to name its tree and leaf`);
       }
       if (!equalBytes(utxo.script, p2mr({ merkleRoot: utxo.p2mr.tree.root }).output)) {
-        throw new Error(`unspent output ${utxo.txid}:${utxo.vout} does not commit to the script tree given for it`);
+        throw new PearlError('UTXO_INVALID', `unspent output ${utxo.txid}:${utxo.vout} does not commit to the script tree given for it`);
       }
       return utxo.spend === undefined
         ? { ...utxo, spend: { type: 'scriptPath' as const, tree: utxo.p2mr.tree, leafIndex: utxo.p2mr.leafIndex, p2mr: true } }
@@ -310,7 +311,7 @@ export function payFromAccount(account: PearlSigningAccount, options: AccountPay
     }
     const address = account.deriveAddress(utxo.index, utxo.change ?? false);
     if (!equalBytes(utxo.script, toOutputScript(address, options.network))) {
-      throw new Error(
+      throw new PearlError('UTXO_INVALID',
         `unspent output ${utxo.txid}:${utxo.vout} does not pay the account's child ${utxo.change === true ? 1 : 0}/${utxo.index}`,
       );
     }

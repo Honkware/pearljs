@@ -19,6 +19,7 @@ import { DEFAULT_MIN_RELAY_FEE, estimateVsize, isDust, minRelayFee } from './pol
 import type { SpendEstimate } from './policy.js';
 import { classifyOutputScript } from './script.js';
 import { varIntSize } from './internal/bytes.js';
+import { PearlError } from './errors.js';
 
 /** An unspent output as coin selection takes it. */
 export interface Utxo {
@@ -155,7 +156,8 @@ export interface CoinSelection<T extends Utxo = Utxo> {
 }
 
 /** Thrown when the coins do not cover the outputs and the fee. Amounts are in grain. */
-export class InsufficientFundsError extends Error {
+export class InsufficientFundsError extends PearlError {
+  override name = 'InsufficientFundsError';
   /** Total value of the coins that could be spent. */
   readonly available: bigint;
   /** Outputs plus the fee for spending every one of those coins. */
@@ -168,11 +170,11 @@ export class InsufficientFundsError extends Error {
   /** `skipped` counts outputs that were held back as unconfirmed or immature. */
   constructor(available: bigint, required: bigint, fee: bigint, skipped = 0) {
     super(
+      'INSUFFICIENT_FUNDS',
       `insufficient funds: ${prl(required - available)} short ` +
         `(${prl(available)} spendable, ${prl(required)} needed including a fee of ${prl(fee)})` +
         (skipped === 0 ? '' : `; ${skipped} unspent outputs were left out as unconfirmed, immature or empty`),
     );
-    this.name = 'InsufficientFundsError';
     this.available = available;
     this.required = required;
     this.fee = fee;
@@ -192,13 +194,13 @@ export class InsufficientFundsError extends Error {
  */
 export function selectCoins<T extends Utxo>(options: SelectCoinsOptions<T>): CoinSelection<T> {
   const { outputs, feeRate, changeScript } = options;
-  if (typeof feeRate !== 'bigint' || feeRate < 0n) throw new Error('fee rate must be a bigint of grain per 1000 vbytes');
+  if (typeof feeRate !== 'bigint' || feeRate < 0n) throw new PearlError('FEE_RATE_INVALID', 'fee rate must be a bigint of grain per 1000 vbytes');
   const target = outputs.reduce((sum, output) => {
     if (typeof output.value !== 'bigint') throw new TypeError('output value must be a bigint of grains');
-    if (output.value < 0n) throw new Error('transaction output amount is negative');
+    if (output.value < 0n) throw new PearlError('AMOUNT_OUT_OF_RANGE', 'transaction output amount is negative');
     return sum + output.value;
   }, 0n);
-  if (target > MAX_GRAIN) throw new Error('sum of output values exceeds the maximum amount');
+  if (target > MAX_GRAIN) throw new PearlError('AMOUNT_OUT_OF_RANGE', 'sum of output values exceeds the maximum amount');
 
   const strategy = options.strategy ?? 'largest';
   const coins = arrangeCoins(options.utxos, strategy, feeRate, options.random);
@@ -248,16 +250,16 @@ function prl(grain: bigint): string {
 
 function checkCoin(coin: Utxo): void {
   if (typeof coin.value !== 'bigint' || coin.value < 0n || coin.value > MAX_GRAIN) {
-    throw new Error(`unspent output ${coin.txid}:${coin.vout} has a value outside Pearl amount bounds`);
+    throw new PearlError('UTXO_INVALID', `unspent output ${coin.txid}:${coin.vout} has a value outside Pearl amount bounds`);
   }
   const kind = classifyOutputScript(coin.script);
   if (kind !== 'p2tr' && kind !== 'p2mr') {
-    throw new Error(`unspent output ${coin.txid}:${coin.vout} is not a supported address type (p2tr or p2mr)`);
+    throw new PearlError('UTXO_INVALID', `unspent output ${coin.txid}:${coin.vout} is not a supported address type (p2tr or p2mr)`);
   }
   // Oyster prices a P2MR input as a key path (txsizes/size.go:97-131), which
   // is too little for any script path; the leaf has to be known instead.
   if (kind === 'p2mr' && (coin.spend === undefined || coin.spend.type === 'keyPath')) {
-    throw new Error(`unspent output ${coin.txid}:${coin.vout} is P2MR and needs \`spend\` to say which leaf will be used`);
+    throw new PearlError('UTXO_INVALID', `unspent output ${coin.txid}:${coin.vout} is P2MR and needs \`spend\` to say which leaf will be used`);
   }
 }
 

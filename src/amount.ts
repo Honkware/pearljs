@@ -1,3 +1,4 @@
+import { PearlError } from './errors.js';
 // Pearl monetary amounts. All values are bigint grains; JS numbers are
 // rejected at the boundary because they lose precision well below MAX_GRAIN.
 
@@ -33,14 +34,14 @@ export function parsePearl(text: string): bigint {
     throw new TypeError('amount must be a decimal string');
   }
   if (!PEARL_RE.test(text)) {
-    throw new Error(`invalid pearl amount: ${JSON.stringify(text)}`);
+    throw new PearlError('AMOUNT_INVALID', `invalid pearl amount: ${JSON.stringify(text)}`);
   }
   const dot = text.indexOf('.');
   const whole = dot === -1 ? text : text.slice(0, dot);
   const frac = (dot === -1 ? '' : text.slice(dot + 1)).padEnd(DECIMALS, '0');
   const grain = BigInt(whole) * GRAIN_PER_PEARL + BigInt(frac || '0');
   if (grain > MAX_GRAIN) {
-    throw new Error(`pearl amount exceeds maximum: ${text}`);
+    throw new PearlError('AMOUNT_OUT_OF_RANGE', `pearl amount exceeds maximum: ${text}`);
   }
   return grain;
 }
@@ -56,7 +57,7 @@ export function formatPearl(grain: bigint): string {
     throw new TypeError('amount must be a bigint of grains');
   }
   if (grain < -MAX_GRAIN || grain > MAX_GRAIN) {
-    throw new Error(`grain amount out of range: ${grain}`);
+    throw new PearlError('AMOUNT_OUT_OF_RANGE', `grain amount out of range: ${grain}`);
   }
   const magnitude = grain < 0n ? -grain : grain;
   const whole = magnitude / GRAIN_PER_PEARL;
@@ -81,14 +82,14 @@ const VBYTE_RATE_RE = /^\d+(\.\d{1,3})?$/;
  */
 export function feeRateFromGrainPerVbyte(rate: bigint | string): bigint {
   if (typeof rate === 'bigint') {
-    if (rate < 0n) throw new Error(`invalid fee rate: ${rate}`);
+    if (rate < 0n) throw new PearlError('FEE_RATE_INVALID', `invalid fee rate: ${rate}`);
     return rate * 1000n;
   }
   if (typeof rate !== 'string') {
     throw new TypeError('fee rate must be a bigint or a decimal string');
   }
   if (!VBYTE_RATE_RE.test(rate)) {
-    throw new Error(`invalid fee rate: ${JSON.stringify(rate)}`);
+    throw new PearlError('FEE_RATE_INVALID', `invalid fee rate: ${JSON.stringify(rate)}`);
   }
   const [whole, frac = ''] = rate.split('.');
   return BigInt(whole!) * 1000n + BigInt(frac.padEnd(3, '0'));
@@ -101,7 +102,7 @@ export function feeRateFromGrainPerVbyte(rate: bigint | string): bigint {
  */
 export function feeRateToGrainPerVbyte(feeRate: bigint): string {
   if (typeof feeRate !== 'bigint' || feeRate < 0n) {
-    throw new Error('fee rate must be a non-negative bigint of grain per 1000 vbytes');
+    throw new PearlError('FEE_RATE_INVALID', 'fee rate must be a non-negative bigint of grain per 1000 vbytes');
   }
   const frac = (feeRate % 1000n).toString().padStart(3, '0').replace(/0+$/, '');
   return frac === '' ? (feeRate / 1000n).toString() : `${feeRate / 1000n}.${frac}`;
@@ -123,7 +124,7 @@ export function feeRateFromPearlPerKvB(rate: string): bigint {
  */
 export function feeRateToPearlPerKvB(feeRate: bigint): string {
   if (typeof feeRate !== 'bigint' || feeRate < 0n) {
-    throw new Error('fee rate must be a non-negative bigint of grain per 1000 vbytes');
+    throw new PearlError('FEE_RATE_INVALID', 'fee rate must be a non-negative bigint of grain per 1000 vbytes');
   }
   return formatPearl(feeRate);
 }

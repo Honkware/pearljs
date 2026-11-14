@@ -60,7 +60,7 @@ describeLive('invoices over pearld', () => {
     });
     expect(await chain.getTransaction('00'.repeat(32))).toBeNull();
     expect(await chain.getAddressActivity(address(160))).toEqual([]);
-    await expect(chain.getAddressActivity('not an address')).rejects.toMatchObject({ kind: 'rpc', code: -5 });
+    await expect(chain.getAddressActivity('not an address')).rejects.toMatchObject({ kind: 'rpc', rpcCode: -5 });
   });
 
   it('follows an invoice from unpaid through the mempool to confirmed and overpaid', async () => {

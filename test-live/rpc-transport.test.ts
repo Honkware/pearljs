@@ -131,7 +131,7 @@ describeLive('typed pearld methods', () => {
     const raw = await pearld.getBlockHex(blockHash);
     const duplicate = await pearld.submitBlock(raw).catch((error: unknown) => error);
     expect(duplicate).toBeInstanceOf(PearlRpcError);
-    expect(duplicate).toMatchObject({ kind: 'rpc', method: 'submitblock', code: RPC_ERROR_CODES.VERIFY });
+    expect(duplicate).toMatchObject({ kind: 'rpc', method: 'submitblock', rpcCode: RPC_ERROR_CODES.VERIFY });
     expect((duplicate as PearlRpcError).message).toMatch(/^submitblock: rejected: /);
 
     // The tip again with one output value changed no longer matches its merkle root.
@@ -143,7 +143,7 @@ describeLive('typed pearld methods', () => {
     expect(at).toBeGreaterThan(0);
     const altered = tipHex.slice(0, at) + (tipHex[at] === '0' ? '1' : '0') + tipHex.slice(at + 1);
     const tip = await pearld.getBestBlockHash();
-    await expect(pearld.submitBlock(altered)).rejects.toMatchObject({ kind: 'rpc', code: RPC_ERROR_CODES.VERIFY });
+    await expect(pearld.submitBlock(altered)).rejects.toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.VERIFY });
     expect(await pearld.getBestBlockHash()).toBe(tip);
     await expect(pearld.submitBlock('00')).rejects.toMatchObject({ kind: 'rpc' });
   });
@@ -173,9 +173,9 @@ describeLive('typed pearld methods', () => {
     const values = results.map((result) => (result.status === 'fulfilled' ? result.value : result.reason)) as unknown[];
     expect(values[0]).toBe(await pearld.getBlockCount());
     expect(values[1]).toBe(await pearld.getBlockHash(1));
-    expect(values[2]).toMatchObject({ kind: 'rpc', method: 'nosuchmethod', code: -32601 });
+    expect(values[2]).toMatchObject({ kind: 'rpc', method: 'nosuchmethod', rpcCode: -32601 });
     expect(values[3]).toEqual(await pearld.getRawTransaction(funding.getId()));
-    expect(values[4]).toMatchObject({ kind: 'rpc', method: 'getrawtransaction', code: RPC_ERROR_CODES.NO_TX_INFO });
+    expect(values[4]).toMatchObject({ kind: 'rpc', method: 'getrawtransaction', rpcCode: RPC_ERROR_CODES.NO_TX_INFO });
     expect(values[5]).toEqual(await pearld.getTxOut(funding.getId(), 1));
   });
 
@@ -228,7 +228,7 @@ describeLive('typed pearld methods', () => {
       const [viaWs, viaHttp] = [await ws.getBlockTemplate(), await pearld.getBlockTemplate()];
       expect(viaWs.coinbasevalue).toBe(viaHttp.coinbasevalue);
       expect((await ws.getCFilter(blockHash)).filter).toEqual((await pearld.getCFilter(blockHash)).filter);
-      await expect(ws.getRawTransaction('00'.repeat(32))).rejects.toMatchObject({ kind: 'rpc', code: RPC_ERROR_CODES.NO_TX_INFO });
+      await expect(ws.getRawTransaction('00'.repeat(32))).rejects.toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.NO_TX_INFO });
     } finally {
       await ws.close();
       await agent.destroy();
@@ -290,7 +290,7 @@ describeLive('a second pearld without indexes', () => {
     while ((await second.client.getBestBlockHash()) !== (await pearld.getBestBlockHash())) await new Promise((resolve) => setTimeout(resolve, 250));
     // While both are up the first answers, and it has no transaction index. Its
     // RPC error is an answer, so the node that knows the transaction is not asked.
-    await expect(client.getRawTransaction(txid)).rejects.toMatchObject({ kind: 'rpc', code: RPC_ERROR_CODES.NO_TX_INFO });
+    await expect(client.getRawTransaction(txid)).rejects.toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.NO_TX_INFO });
 
     await second.stop();
     expect((await client.getRawTransaction(txid)).txid).toBe(txid);
