@@ -229,7 +229,7 @@ export function isPushOnlyScript(script: Uint8Array): boolean {
   return error === null && tokens.every((token) => token.opcode <= OP_CODES.OP_16);
 }
 
-/** Options for decodeScriptNumber and decodeScriptNumberBigInt. */
+/** Options for decodeScriptNumber. */
 export interface DecodeScriptNumberOptions {
   /** Refuse an encoding longer than the number needs. True unless given. */
   requireMinimal?: boolean;
@@ -241,9 +241,10 @@ export interface DecodeScriptNumberOptions {
  * Decodes a script number like MakeScriptNum: little-endian sign-magnitude,
  * at most maxLength bytes (4, or 5 for lock times), minimally encoded unless
  * requireMinimal is false. Returns a bigint, the type encodeScriptNumber
- * takes, so every length decodes exactly.
+ * takes, so every length decodes exactly; Number(value) is exact for the 4-
+ * and 5-byte numbers scripts use.
  */
-export function decodeScriptNumberBigInt(data: Uint8Array, options: DecodeScriptNumberOptions = {}): bigint {
+export function decodeScriptNumber(data: Uint8Array, options: DecodeScriptNumberOptions = {}): bigint {
   if (!(data instanceof Uint8Array)) {
     throw new TypeError('script number must be a Uint8Array');
   }
@@ -267,21 +268,6 @@ export function decodeScriptNumberBigInt(data: Uint8Array, options: DecodeScript
     value = value * 256n + BigInt(i === data.length - 1 ? last & 0x7f : data[i]!);
   }
   return last & 0x80 ? -value : value;
-}
-
-/**
- * decodeScriptNumberBigInt as a JS number, for the 4- and 5-byte numbers
- * scripts use. A value a number cannot hold exactly, which takes a maxLength
- * of 7 or more, throws instead of being rounded.
- */
-export function decodeScriptNumber(data: Uint8Array, options: DecodeScriptNumberOptions = {}): number {
-  const value = decodeScriptNumberBigInt(data, options);
-  if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < -BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new RangeError(
-      `script number ${value} does not fit a JS number exactly; use decodeScriptNumberBigInt`,
-    );
-  }
-  return Number(value);
 }
 
 // The 14 opcodes txscript's isOpcodeDisabled lists, plus OP_CHECKMULTISIG and

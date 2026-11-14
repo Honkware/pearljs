@@ -85,7 +85,7 @@ export function parseMultiA(script: Uint8Array): MultiALeaf | null {
   let threshold: number | null;
   if (isData(thresholdChunk)) {
     try {
-      threshold = decodeScriptNumber(thresholdChunk);
+      threshold = Number(decodeScriptNumber(thresholdChunk));
     } catch {
       threshold = null;
     }

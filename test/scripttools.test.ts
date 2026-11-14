@@ -6,7 +6,6 @@ import { describe, expect, it } from 'vitest';
 import {
   compileScript,
   decodeScriptNumber,
-  decodeScriptNumberBigInt,
   decompileScript,
   encodeScriptNumber,
   isDisabledOpcode,
@@ -189,28 +188,20 @@ describe('script toolkit', () => {
       const decode = () =>
         decodeScriptNumber(hexToBytes(expected.data), { requireMinimal: expected.minimal, maxLength: expected.maxLength });
       if (expected.error === '') {
-        expect(decode()).toBe(expected.value);
+        expect(decode()).toBe(BigInt(expected.value));
       } else {
         expect(decode).toThrow(expected.error);
       }
     }
   });
 
-  it('decodes long script numbers exactly or not at all', () => {
+  it('decodes long script numbers exactly', () => {
     const big = 2n ** 60n + 1n;
-    const encoded = encodeScriptNumber(big);
-    expect(decodeScriptNumberBigInt(encoded, { maxLength: 8 })).toBe(big);
-    expect(decodeScriptNumberBigInt(encodeScriptNumber(-big), { maxLength: 8 })).toBe(-big);
-    expect(() => decodeScriptNumber(encoded, { maxLength: 8 })).toThrow('does not fit a JS number exactly');
-    expect(decodeScriptNumber(encodeScriptNumber(2n ** 53n - 1n), { maxLength: 8 })).toBe(Number.MAX_SAFE_INTEGER);
-    expect(() => decodeScriptNumber(encodeScriptNumber(2n ** 53n), { maxLength: 8 })).toThrow(RangeError);
-    for (const expected of toolkit.numbers.filter((item) => item.error === '')) {
-      const options = { requireMinimal: expected.minimal, maxLength: expected.maxLength };
-      expect(decodeScriptNumberBigInt(hexToBytes(expected.data), options)).toBe(BigInt(expected.value));
-    }
+    expect(decodeScriptNumber(encodeScriptNumber(big), { maxLength: 8 })).toBe(big);
+    expect(decodeScriptNumber(encodeScriptNumber(-big), { maxLength: 8 })).toBe(-big);
     // Negative zero is zero, as in Go.
-    expect(Object.is(decodeScriptNumber(Uint8Array.of(0x80), { requireMinimal: false }), 0)).toBe(true);
-    expect(() => decodeScriptNumberBigInt('00' as unknown as Uint8Array)).toThrow(TypeError);
+    expect(decodeScriptNumber(Uint8Array.of(0x80), { requireMinimal: false })).toBe(0n);
+    expect(() => decodeScriptNumber('00' as unknown as Uint8Array)).toThrow(TypeError);
   });
 
   it('marks as disabled exactly the opcodes Pearl\'s engine rejects as disabled', () => {
