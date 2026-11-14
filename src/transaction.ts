@@ -19,6 +19,7 @@ import { decompileScript } from './scripttools.js';
 import { verifyP2mrLeafCommitment, verifyTaprootLeafCommitment } from './scripttree.js';
 import type { PearlNetwork } from './networks.js';
 import { fromBase64, toHex, varInt } from './internal/bytes.js';
+import { ensureEcc } from './internal/ecc.js';
 import { PearlError, SigningError } from './errors.js';
 
 export { Psbt, Transaction };
@@ -42,10 +43,25 @@ function checkHex(hex: string, what: string): void {
   }
 }
 
-/** Parses a serialized transaction from hex. Throws on malformed input. */
+/**
+ * Parses a serialized transaction from hex. Throws TX_MALFORMED for input
+ * that is not a transaction, and for an output above MAX_GRAIN, which no
+ * Pearl transaction can carry and Transaction.fromHex alone lets through.
+ */
 export function parseTransaction(hex: string): Transaction {
   checkHex(hex, 'transaction');
-  return Transaction.fromHex(hex);
+  let tx: Transaction;
+  try {
+    tx = Transaction.fromHex(hex);
+  } catch (err) {
+    throw new PearlError('TX_MALFORMED', err instanceof Error ? err.message : 'transaction could not be decoded', { cause: err });
+  }
+  tx.outs.forEach((output, i) => {
+    if (output.value > MAX_GRAIN) {
+      throw new PearlError('TX_MALFORMED', `transaction output ${i} holds ${output.value} grain, more than the largest Pearl amount`);
+    }
+  });
+  return tx;
 }
 
 /** Serializes a transaction to hex, with witnesses unless includeWitness is false. */
@@ -97,6 +113,7 @@ export function parsePsbt(base64: string): Psbt {
   ) {
     throw new PearlError('PSBT_MALFORMED', 'PSBT must be canonical padded base64');
   }
+  ensureEcc();
   let psbt: Psbt;
   try {
     psbt = Psbt.fromBase64(base64);
@@ -169,6 +186,8 @@ function psbtEnd(bytes: Uint8Array, inputs: number, outputs: number): number {
  * the script-path prepare functions fill them in.
  */
 export function createPsbt(tx: Transaction): Psbt {
+  // Also for a caller who signs this PSBT with bitcoinjs's own methods.
+  ensureEcc();
   const psbt = new Psbt();
   psbt.setVersion(tx.version);
   psbt.setLocktime(tx.locktime);
@@ -204,6 +223,7 @@ export function createPsbt(tx: Transaction): Psbt {
  * result.
  */
 export function finalizePsbt(psbt: Psbt): Transaction {
+  ensureEcc();
   psbt.data.inputs.forEach((input, index) => {
     if (input.finalScriptSig !== undefined || input.finalScriptWitness !== undefined) return;
     const witness = pearlScriptPathWitness(psbt, index);
@@ -317,12 +337,13 @@ export function psbtOutputs(psbt: Psbt, network: PearlNetwork): PsbtOutput[] {
 }
 
 /**
- * Adds an output paying a Pearl address to a PSBT. value is in grain. Throws
- * when the address is not valid on the network or the value is outside Pearl's
- * bounds.
+ * Adds an output paying a Pearl address to a transaction or a PSBT. value is
+ * in grain. Throws when the address is not valid on the network or the value
+ * is outside Pearl's bounds; Transaction.addOutput and Psbt.addOutput check
+ * neither, so prefer this to calling them.
  */
 export function addPearlOutput(
-  psbt: Psbt,
+  target: Transaction | Psbt,
   address: string,
   value: bigint,
   network: PearlNetwork,
@@ -333,5 +354,7 @@ export function addPearlOutput(
   if (value < 0n || value > MAX_GRAIN) {
     throw new PearlError('AMOUNT_OUT_OF_RANGE', 'output value is outside Pearl amount bounds');
   }
-  psbt.addOutput({ script: toOutputScript(address, network), value });
+  const script = toOutputScript(address, network);
+  if (target instanceof Transaction) target.addOutput(script, value);
+  else target.addOutput({ script, value });
 }

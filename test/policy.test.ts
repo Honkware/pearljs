@@ -103,6 +103,27 @@ describe('checkStandard', () => {
     );
   });
 
+  it('refuses a fee rate above maxFeeRate when one is given, truncating the rate as testmempoolaccept does', () => {
+    const tx = parseTransaction(standard('standard').txHex);
+    expect(tx.virtualSize()).toBe(154);
+    const spending = (fee: bigint) => ({ prevouts: [{ script: p2tr, value: 15000n + fee }] });
+    // 15400 grain over 154 vbytes is 100000 grain per 1000 vbytes exactly.
+    expect(() => checkStandard(tx, { ...spending(15400n), maxFeeRate: 100_000n })).not.toThrow();
+    // 15401 grain is 100006.49, which truncates to the limit and passes.
+    expect(() => checkStandard(tx, { ...spending(15401n), maxFeeRate: 100_006n })).not.toThrow();
+    let error: unknown;
+    try {
+      checkStandard(tx, { ...spending(15401n), maxFeeRate: 100_000n });
+    } catch (err) {
+      error = err;
+    }
+    expect(error).toBeInstanceOf(PolicyError);
+    expect((error as PolicyError).code).toBe('POLICY_FEE_TOO_HIGH');
+    expect((error as PolicyError).message).toContain('max-fee-exceeded');
+    // No limit unless asked for.
+    expect(() => checkStandard(tx, spending(1_000_000_000n))).not.toThrow();
+  });
+
   it('reports spending more than the inputs before a non-standard version or dust, as pearld does', () => {
     const tx = parseTransaction(standard('standard').txHex);
     tx.version = 3;

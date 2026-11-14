@@ -21,13 +21,15 @@ export const GRAIN_PER_PEARL = 100000000n;
 export const MAX_GRAIN = 2100000000000000000n;
 
 const DECIMALS = 8;
-const PEARL_RE = /^\d+(\.\d{1,8})?$/;
+// No leading zeros: "00000001" is more likely a mangled 0.00000001 than one PRL.
+const PEARL_RE = /^(0|[1-9]\d*)(\.\d{1,8})?$/;
 
 /**
  * Parses a decimal pearl string like "1.5" into grains.
  *
- * Throws for anything but a non-negative decimal with at most 8 decimal places,
- * and for an amount above MAX_GRAIN.
+ * Throws for anything but a non-negative decimal with at most 8 decimal places
+ * and no leading zeros, signs, spaces or exponent, and for an amount above
+ * MAX_GRAIN.
  */
 export function parsePearl(text: string): bigint {
   if (typeof text !== 'string') {
@@ -79,7 +81,7 @@ export function formatPearl(grain: bigint): string {
  */
 export type FeeRate = bigint;
 
-const VBYTE_RATE_RE = /^\d+(\.\d{1,3})?$/;
+const VBYTE_RATE_RE = /^(0|[1-9]\d*)(\.\d{1,3})?$/;
 
 /**
  * A fee rate from grain per vbyte, as a bigint or a decimal string with up to three decimals like "1.5".

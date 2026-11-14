@@ -34,16 +34,16 @@ for (const name of ['v1-one-spend', 'v2-dense-two-spends', 'v3-four-spends']) {
   if (vector === undefined) throw new Error(`no block vector named ${name}`);
   const block = parseBlock(Buffer.from(vector.hex, 'hex'));
 
-  // Both throw when the block does not hold together.
+  // Each throws when the block does not hold together.
   checkCertificateBinding(block);
   checkWitnessCommitment(block);
+  checkMerkleRoot(block);
 
   const { certificate, header } = block;
   console.log(name);
   console.log('  hash       ', blockHashHex(header), blockHashHex(header) === vector.hash ? '(matches Pearl)' : '(differs)');
   console.log('  time       ', new Date(header.timestamp * 1000).toISOString());
   console.log('  certificate', certificate === null ? 'none' : `V${certificate.version}, ${certificate.proof.length} byte proof, MoE ${isMoECertificate(certificate)}`);
-  console.log('  merkle root', checkMerkleRoot(block) ? 'matches' : 'does not match');
   console.log('  size       ', blockSize(block), 'bytes,', blockVsize(block), 'vbytes');
   console.log('  difficulty ', difficultyForBits(header.bits, networks.mainnet), 'work', workForBits(header.bits));
   console.log('  txids      ', block.transactions.map((tx) => transactionId(tx).slice(0, 12)).join(' '));

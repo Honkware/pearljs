@@ -95,6 +95,11 @@ export interface StandardOptions {
   medianTimePast?: number;
   /** pearld's --minrelaytxfee, in grain per 1000 vbytes. */
   relayFeeRate?: FeeRate;
+  /**
+   * Highest fee rate to accept, in grain per 1000 vbytes, as the maxfeerate of
+   * testmempoolaccept. Needs prevouts. Not checked unless given.
+   */
+  maxFeeRate?: FeeRate;
   /** Highest transaction version to accept. MAX_STANDARD_TX_VERSION (2) unless given. */
   maxTxVersion?: number;
 }
@@ -160,6 +165,14 @@ export function checkStandard(tx: Transaction, options: StandardOptions = {}): v
   const required = minRelayFee(vsize, feeRate);
   if (fee < required) {
     throw new PolicyError('POLICY_FEE_TOO_LOW', `transaction ${tx.getId()} has ${fee} fees which is under the required amount of ${required}`);
+  }
+  // validateFeeRate in rpcserver.go: the rate is truncated, and equal passes.
+  const rate = (fee * 1000n) / BigInt(vsize);
+  if (options.maxFeeRate !== undefined && rate > options.maxFeeRate) {
+    throw new PolicyError(
+      'POLICY_FEE_TOO_HIGH',
+      `max-fee-exceeded: the fee rate of ${rate} grain per 1000 vbytes is above the ${options.maxFeeRate} allowed`,
+    );
   }
 }
 

@@ -8,17 +8,14 @@
  * @module
  */
 
-import { initEccLib, payments } from 'bitcoinjs-lib';
-import * as ecc from 'tiny-secp256k1';
+import { payments } from 'bitcoinjs-lib';
 import { fromOutputScript, WITNESS_PROGRAM_LENGTH } from './address.js';
 import type { PearlNetwork } from './networks.js';
+import { ensureEcc } from './internal/ecc.js';
 import { scriptPush } from './script.js';
 import { PearlError } from './errors.js';
 
-initEccLib(ecc);
-
-// txscript.MaxDataCarrierSize.
-/** The most data bytes embed puts in an OP_RETURN output (txscript.MaxDataCarrierSize). */
+/** The most data bytes embed puts in an OP_RETURN output unless told to allow more (txscript.MaxDataCarrierSize). */
 export const MAX_EMBED_DATA_SIZE = 80;
 
 const OP_RETURN = 0x6a;
@@ -63,6 +60,7 @@ function checkProgram(bytes: Uint8Array, what: string): void {
 export function p2tr(args: { internalPubkey: Uint8Array; merkleRoot?: Uint8Array }): P2trPayment {
   checkProgram(args.internalPubkey, 'internal pubkey');
   if (args.merkleRoot !== undefined) checkProgram(args.merkleRoot, 'merkle root');
+  ensureEcc();
   const payment = payments.p2tr(
     args.merkleRoot === undefined
       ? { internalPubkey: args.internalPubkey }
@@ -103,12 +101,14 @@ export function p2mrAddress(args: { merkleRoot: Uint8Array }, network: PearlNetw
 }
 
 /**
- * Provably-prunable OP_RETURN output carrying up to 80 bytes of data, the
- * standardness limit in txscript.MaxDataCarrierSize. The script after
- * OP_RETURN is push-only by construction.
+ * Provably-prunable OP_RETURN output carrying one push of data: up to 80
+ * bytes (MAX_EMBED_DATA_SIZE, txscript.MaxDataCarrierSize), the most Pearl's
+ * own NullDataScript writes and other software expects. pearld's mempool has
+ * no size rule for OP_RETURN outputs, so `allowOversize` lifts the limit to
+ * the 520 bytes one push holds; build a longer script with compileScript.
  */
-export function embed(args: { data: Uint8Array }): EmbedPayment {
-  if (args.data.length > MAX_EMBED_DATA_SIZE) {
+export function embed(args: { data: Uint8Array; allowOversize?: boolean }): EmbedPayment {
+  if (args.data.length > MAX_EMBED_DATA_SIZE && args.allowOversize !== true) {
     throw new PearlError('SCRIPT_INVALID',
       `embed data of ${args.data.length} bytes exceeds ${MAX_EMBED_DATA_SIZE}`,
     );

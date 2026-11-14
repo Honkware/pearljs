@@ -42,6 +42,10 @@ describe('parsePearl', () => {
   it('rejects more than 8 decimal places', () => {
     expect(() => parsePearl('0.000000001')).toThrow(/invalid/);
     expect(() => parsePearl('1.000000001')).toThrow(/invalid/);
+    // Leading zeros are refused: '00000001' is not one PRL.
+    for (const text of ['00000001', '01', '00', '00.5', '01.5']) expect(() => parsePearl(text)).toThrow(/invalid/);
+    expect(parsePearl('0')).toBe(0n);
+    expect(parsePearl('0.5')).toBe(50000000n);
   });
 
   it('rejects non-decimal input', () => {

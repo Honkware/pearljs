@@ -163,6 +163,22 @@ describe('PSBT helpers', () => {
     );
   });
 
+  it('adds a checked output to a transaction too, and refuses to parse one above the maximum amount', () => {
+    const address = 'prl1pqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqen4g90';
+    const tx = unsignedTransaction();
+    const before = tx.outs.length;
+    addPearlOutput(tx, address, 7n, networks.mainnet);
+    expect(tx.outs.at(-1)).toMatchObject({ value: 7n, script: Uint8Array.from([0x51, 32, ...new Uint8Array(32)]) });
+    expect(() => addPearlOutput(tx, address, MAX_GRAIN + 1n, networks.mainnet)).toThrow('outside Pearl amount bounds');
+    expect(tx.outs).toHaveLength(before + 1);
+
+    // The class itself takes any 64-bit value; parseTransaction is where it stops.
+    tx.outs.at(-1)!.value = MAX_GRAIN;
+    expect(parseTransaction(tx.toHex()).outs.at(-1)!.value).toBe(MAX_GRAIN);
+    tx.outs.at(-1)!.value = MAX_GRAIN + 1n;
+    expect(() => parseTransaction(tx.toHex())).toThrow(`holds ${MAX_GRAIN + 1n} grain, more than the largest Pearl amount`);
+  });
+
   it('rejects invalid output values', () => {
     const psbt = createPsbt(unsignedTransaction());
     const address = 'prl1pqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqen4g90';

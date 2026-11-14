@@ -48,7 +48,7 @@ describe('Pearl blocks', () => {
       expect(block.transactions.map((tx) => tx.getId())).toEqual(expected.txids);
       expect(displayHex(calculateMerkleRoot(block.transactions))).toBe(expected.merkleRoot);
       expect(displayHex(calculateMerkleRoot(block.transactions, true))).toBe(expected.witnessMerkleRoot);
-      expect(checkMerkleRoot(block)).toBe(true);
+      expect(() => checkMerkleRoot(block)).not.toThrow();
       if (expected.witnessError === '') {
         expect(() => checkWitnessCommitment(block)).not.toThrow();
       } else {
@@ -92,8 +92,31 @@ describe('Pearl blocks', () => {
 
   it('notices a header whose merkle root does not match', () => {
     const block = parseBlock(hexToBytes(vectors.blocks.find((item) => item.name === 'v3-four-spends')!.hex));
+    const calculated = displayHex(calculateMerkleRoot(block.transactions));
     block.header.merkleRoot[0] = block.header.merkleRoot[0]! ^ 1;
-    expect(checkMerkleRoot(block)).toBe(false);
+    // blockchain.checkBlockSanity's message.
+    expect(() => checkMerkleRoot(block)).toThrow(
+      `block merkle root is invalid - block header indicates ${displayHex(block.header.merkleRoot)}, but calculated value is ${calculated}`,
+    );
+  });
+
+  it('rejects a transaction count written in more bytes than it needs, as wire.ReadVarInt does', () => {
+    const expected = vectors.blocks.find((item) => item.name === 'v3-four-spends')!;
+    const raw = hexToBytes(expected.hex);
+    const block = parseBlock(raw);
+    const count = block.transactions.length;
+    const at = raw.length - block.transactions.reduce((sum, tx) => sum + tx.byteLength(), 0) - 1;
+    expect(raw[at]).toBe(count);
+    const withCount = (encoding: number[]): Uint8Array => Uint8Array.from([...raw.slice(0, at), ...encoding, ...raw.slice(at + 1)]);
+    for (const [encoding, discriminant] of [
+      [[0xfd, count, 0], 'fd'],
+      [[0xfe, count, 0, 0, 0], 'fe'],
+      [[0xff, count, 0, 0, 0, 0, 0, 0, 0], 'ff'],
+    ] as const) {
+      expect(() => parseBlock(withCount([...encoding]))).toThrow(
+        `non-canonical varint ${count.toString(16)} - discriminant ${discriminant} encodes a value that fits in fewer bytes`,
+      );
+    }
   });
 
   it('notices a certificate bound to a different header', () => {

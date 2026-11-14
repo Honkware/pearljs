@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { encodeAddress, toOutputScript } from '../src/address.js';
 import { mainnet } from '../src/networks.js';
 import { embed, MAX_EMBED_DATA_SIZE, p2mr, p2tr } from '../src/payments.js';
+import { classifyOutputScript } from '../src/script.js';
 
 const hex = (u: Uint8Array) => Buffer.from(u).toString('hex');
 const unhex = (s: string) => Uint8Array.from(Buffer.from(s, 'hex'));
@@ -89,6 +90,15 @@ describe('embed', () => {
     expect(MAX_EMBED_DATA_SIZE).toBe(80);
     expect(() => embed({ data: new Uint8Array(81) })).toThrow(/80/);
     expect(() => embed({ data: new Uint8Array(80) })).not.toThrow();
+  });
+
+  it('carries up to one full push when asked to allow oversize data, and still passes relay policy checks', () => {
+    const payment = embed({ data: new Uint8Array(520).fill(7), allowOversize: true });
+    // OP_RETURN OP_PUSHDATA2 <520 little-endian> <data>
+    expect(hex(payment.output.slice(0, 4))).toBe('6a4d0802');
+    expect(payment.output).toHaveLength(524);
+    expect(classifyOutputScript(payment.output)).toBe('nulldata');
+    expect(() => embed({ data: new Uint8Array(521), allowOversize: true })).toThrow('MAX_SCRIPT_ELEMENT_SIZE');
   });
 
   it('pushes empty data as OP_RETURN OP_0, matching txscript NullDataScript', () => {

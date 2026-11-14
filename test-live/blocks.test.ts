@@ -46,7 +46,7 @@ function expectMatchesPearld(raw: string, block: PearlBlock, info: VerboseBlock)
   expect(hex(serializeBlock(block))).toBe(raw);
   expect(blockHashHex(block.header)).toBe(info.hash);
   expect(reversedHex(block.header.merkleRoot)).toBe(info.merkleroot);
-  expect(checkMerkleRoot(block)).toBe(true);
+  expect(() => checkMerkleRoot(block)).not.toThrow();
   expect(block.transactions.map(transactionId)).toEqual(info.tx);
   expect(blockVsize(block)).toBe(info.vsize);
   expect(blockStrippedSize(block)).toBe(info.strippedsize);

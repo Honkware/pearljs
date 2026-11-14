@@ -204,7 +204,8 @@ export function decimalToGrain(text: string): bigint {
   const point = whole!.length + shift;
   const padded = point < 0 ? '0'.repeat(-point) + digits : digits.padEnd(point, '0');
   const at = Math.max(point, 0);
-  const intPart = padded.slice(0, at) || '0';
+  // An exponent can leave zeros in front (0.5e1), which parsePearl refuses.
+  const intPart = padded.slice(0, at).replace(/^0+(?=\d)/, '') || '0';
   const fracPart = padded.slice(at);
   const roundUp = fracPart.length > 8 && fracPart[8]! >= '5' ? 1n : 0n;
   const grain = parsePearl(fracPart === '' ? intPart : `${intPart}.${fracPart.slice(0, 8)}`) + roundUp;

@@ -25,7 +25,7 @@ import {
   serializeBlockHeader,
 } from './blockheader.js';
 import type { PearlBlockHeader } from './blockheader.js';
-import { concat, equalBytes, uint32le, varInt } from './internal/bytes.js';
+import { concat, equalBytes, toHex, uint32le, varInt } from './internal/bytes.js';
 import { PearlError } from './errors.js';
 
 // wire.CertificateMaxSize, wire.MaxZKProofSize and the public data sizes.
@@ -108,16 +108,26 @@ class Reader {
     return new DataView(this.take(4).buffer).getUint32(0, true);
   }
 
+  /** wire.ReadVarInt, which refuses a value written in more bytes than it needs. */
   varInt(): number {
     const first = this.take(1)[0]!;
     if (first < 0xfd) return first;
-    if (first === 0xfd) return new DataView(this.take(2).buffer).getUint16(0, true);
-    if (first === 0xfe) return this.uint32();
-    const wide = new DataView(this.take(8).buffer).getBigUint64(0, true);
-    if (wide > BigInt(Number.MAX_SAFE_INTEGER)) {
+    const [value, min] =
+      first === 0xfd
+        ? [BigInt(new DataView(this.take(2).buffer).getUint16(0, true)), 0xfdn]
+        : first === 0xfe
+          ? [BigInt(this.uint32()), 0x10000n]
+          : [new DataView(this.take(8).buffer).getBigUint64(0, true), 0x100000000n];
+    if (value < min) {
+      throw new PearlError(
+        'BLOCK_MALFORMED',
+        `non-canonical varint ${value.toString(16)} - discriminant ${first.toString(16)} encodes a value that fits in fewer bytes`,
+      );
+    }
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
       throw new PearlError('BLOCK_MALFORMED', 'transaction count does not fit in a number');
     }
-    return Number(wide);
+    return Number(value);
   }
 
   remaining(): Uint8Array {
@@ -293,9 +303,19 @@ export function calculateMerkleRoot(transactions: readonly Transaction[], witnes
   );
 }
 
-/** Whether the header's merkle root matches the block's transactions. */
-export function checkMerkleRoot(block: PearlBlock): boolean {
-  return block.transactions.length > 0 && equalBytes(block.header.merkleRoot, calculateMerkleRoot(block.transactions));
+/**
+ * Throws BLOCK_MERKLE_ROOT_MISMATCH, with pearld's message, unless the
+ * header's merkle root is that of the block's transactions.
+ */
+export function checkMerkleRoot(block: PearlBlock): void {
+  const calculated = calculateMerkleRoot(block.transactions);
+  if (!equalBytes(block.header.merkleRoot, calculated)) {
+    const display = (hash: Uint8Array): string => toHex(Uint8Array.from(hash).reverse());
+    throw new PearlError(
+      'BLOCK_MERKLE_ROOT_MISMATCH',
+      `block merkle root is invalid - block header indicates ${display(block.header.merkleRoot)}, but calculated value is ${display(calculated)}`,
+    );
+  }
 }
 
 function isCoinbase(tx: Transaction): boolean {

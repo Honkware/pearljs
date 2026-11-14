@@ -417,6 +417,9 @@ describe('decimalToGrain', () => {
     expect(decimalToGrain('-0.5')).toBe(-50000000n);
     expect(decimalToGrain('0.30000000000000004')).toBe(30000000n);
     expect(decimalToGrain('0.000000015')).toBe(2n);
+    // An exponent that moves the point past a leading zero.
+    expect(decimalToGrain('0.5e1')).toBe(500000000n);
+    expect(decimalToGrain('0.05e2')).toBe(500000000n);
     expect(decimalToGrain('20999999999.99999999')).toBe(2099999999999999999n);
   });
 

@@ -101,7 +101,8 @@ export function extractWitnessProgram(script: Uint8Array): WitnessProgram | null
   if (script.length !== 2 + second) {
     return null;
   }
-  return { version, program: script.slice(2) };
+  // Not slice(): on a Node Buffer that returns a view of the caller's bytes.
+  return { version, program: Uint8Array.from(script.subarray(2)) };
 }
 
 /**

@@ -40,6 +40,10 @@ export function encodeAddress(
   if (!Number.isInteger(version) || version < MIN_WITNESS_VERSION || version > MAX_WITNESS_VERSION) {
     throw new AddressError('ADDRESS_UNSUPPORTED_VERSION', `unsupported witness version: ${version}`);
   }
+  // A plain array would be encoded with whatever numbers it holds.
+  if (!(program instanceof Uint8Array)) {
+    throw new TypeError('witness program must be a Uint8Array');
+  }
   if (program.length !== WITNESS_PROGRAM_LENGTH) {
     throw new AddressError('ADDRESS_WRONG_LENGTH',
       `witness program must be ${WITNESS_PROGRAM_LENGTH} bytes, got ${program.length}`,
@@ -57,6 +61,9 @@ export function decodeAddress(
   address: string,
   network: PearlNetwork,
 ): WitnessAddress {
+  if (typeof address !== 'string') {
+    throw new TypeError('address must be a string');
+  }
   let decoded;
   try {
     decoded = bech32m.decode(address);

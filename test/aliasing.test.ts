@@ -11,8 +11,11 @@ import {
   createPsbt,
   createTransaction,
   createXmssSigner,
+  decodeAddress,
   decompileScript,
   deriveSigningAccountFromSeed,
+  encodeAddress,
+  extractWitnessProgram,
   networks,
   p2mr,
   p2mrControlBlock,
@@ -151,5 +154,18 @@ describe('returned bytes are copies', () => {
     expect(xmssVerify(publicKey, message, await signer.sign(message))).toBe(true);
     expect(seen[0]).not.toBe(seen[1]);
     expect(bytesToHex(seen[1]!)).toBe('00'.repeat(64));
+  });
+
+  it('extractWitnessProgram returns a copy of the program, also for a Node Buffer', () => {
+    const script = Buffer.from([0x51, 32, ...new Uint8Array(32).fill(9)]);
+    const { program } = extractWitnessProgram(script)!;
+    script.fill(0);
+    expect(program).toEqual(new Uint8Array(32).fill(9));
+  });
+
+  it('encodeAddress takes bytes only, not an array of whatever numbers', () => {
+    const numbers = new Array<number>(32).fill(300) as unknown as Uint8Array;
+    expect(() => encodeAddress({ version: 1, program: numbers }, networks.mainnet)).toThrow(TypeError);
+    expect(() => decodeAddress(5 as unknown as string, networks.mainnet)).toThrow(TypeError);
   });
 });
