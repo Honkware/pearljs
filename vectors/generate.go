@@ -11,8 +11,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math/big"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -222,6 +224,9 @@ type Vectors struct {
 	BadBlocks        []BadBlockVector        `json:"badBlocks"`
 	Policy           PolicyVectors           `json:"policy"`
 	P2MRPSBTs        []P2MRPSBTVector        `json:"p2mrPsbts"`
+	Leaves           LeafBuilderVectors      `json:"leaves"`
+	Mempool          []MempoolScenarioVector `json:"mempool"`
+	Consensus        ConsensusVectors        `json:"consensus"`
 }
 
 // P2MRPSBTInputVector is one input of a P2MRPSBTVector. Kind is "p2mr" for
@@ -1909,6 +1914,10 @@ func main() {
 		})
 	}
 
+	vectors.Leaves = leafBuilderVectors(account, internalPub)
+	vectors.Mempool = mempoolVectors()
+	vectors.Consensus = consensusVectors(nets)
+
 	data, err := json.MarshalIndent(vectors, "", "  ")
 	check(err)
 	data = append(data, '\n')
@@ -1930,4 +1939,667 @@ func mustPort(port string) int {
 
 func binaryUint32(id [4]byte) uint32 {
 	return uint32(id[0])<<24 | uint32(id[1])<<16 | uint32(id[2])<<8 | uint32(id[3])
+}
+
+// TimelockSpendVector is a CLTV or CSV leaf over the key at account/0/KeyIndex,
+// spent through P2TR by a transaction that Pearl's script engine accepts when
+// Error is empty and refuses with Error otherwise.
+type TimelockSpendVector struct {
+	Name       string        `json:"name"`
+	Kind       string        `json:"kind"`
+	Value      int64         `json:"value"`
+	KeyIndex   uint32        `json:"keyIndex"`
+	LeafScript string        `json:"leafScript"`
+	Prevout    PrevoutVector `json:"prevout"`
+	SpendTxHex string        `json:"spendTxHex"`
+	Error      string        `json:"error"`
+}
+
+// SequenceVector is blockchain.LockTimeToSequence(IsSeconds, LockTime).
+type SequenceVector struct {
+	IsSeconds bool   `json:"isSeconds"`
+	LockTime  uint32 `json:"lockTime"`
+	Sequence  uint32 `json:"sequence"`
+}
+
+type LeafBuilderVectors struct {
+	Timelocks []TimelockSpendVector `json:"timelocks"`
+	Sequences []SequenceVector      `json:"sequences"`
+	// MultiA is a 17-of-18 multi_a leaf, whose threshold is a data push
+	// rather than a small-int opcode, finalized by psbt.Finalize.
+	MultiA MultiASpendVector `json:"multiA"`
+}
+
+// MempoolTxVector is one transaction offered to a TxPool. Error is the
+// pool's refusal, empty when it was accepted.
+type MempoolTxVector struct {
+	Name  string `json:"name"`
+	TxHex string `json:"txHex"`
+	Fee   int64  `json:"fee"`
+	Vsize int64  `json:"vsize"`
+	Error string `json:"error"`
+}
+
+// MempoolScenarioVector offers Transactions in order to a fresh TxPool with
+// the production package limits and default relay fee.
+type MempoolScenarioVector struct {
+	Name              string            `json:"name"`
+	RejectReplacement bool              `json:"rejectReplacement"`
+	Transactions      []MempoolTxVector `json:"transactions"`
+}
+
+type CheckpointVector struct {
+	Height int32  `json:"height"`
+	Hash   string `json:"hash"`
+}
+
+// CertRuleVector is blockchain.CheckCertificateRules (with BFNoPoWCheck, so
+// the rank-penalty rule is skipped) for a certificate of Version carrying
+// PublicDataLen bytes of public data, at Height.
+type CertRuleVector struct {
+	Height        int32  `json:"height"`
+	Version       uint32 `json:"version"`
+	PublicDataLen int    `json:"publicDataLen"`
+	Required      uint32 `json:"required"`
+	Error         string `json:"error"`
+}
+
+// HeightAmountVector carries Amount as a string, since supplies pass 2^53.
+type HeightAmountVector struct {
+	Height int32 `json:"height"`
+	Amount int64 `json:"amount,string"`
+}
+
+type DifficultyVector struct {
+	Bits       uint32  `json:"bits"`
+	Difficulty float64 `json:"difficulty"`
+}
+
+type ConsensusNetworkVector struct {
+	Name                  string               `json:"name"`
+	MoEForkHeight         int32                `json:"moeForkHeight"`
+	DenseOnlyForkHeight   int32                `json:"denseOnlyForkHeight"`
+	RankPenaltyForkHeight int32                `json:"rankPenaltyForkHeight"`
+	SaltedSeedForkHeight  int32                `json:"saltedSeedForkHeight"`
+	Checkpoints           []CheckpointVector   `json:"checkpoints"`
+	DNSSeeds              []string             `json:"dnsSeeds"`
+	TargetTimePerBlock    int64                `json:"targetTimePerBlock"`
+	WTEMAHalfLife         int64                `json:"wtemaHalfLife"`
+	PowLimit              string               `json:"powLimit"`
+	PowLimitBits          uint32               `json:"powLimitBits"`
+	CoinbaseMaturity      uint16               `json:"coinbaseMaturity"`
+	CertRules             []CertRuleVector     `json:"certRules"`
+	Subsidies             []HeightAmountVector `json:"subsidies"`
+	Supplies              []HeightAmountVector `json:"supplies"`
+	Difficulties          []DifficultyVector   `json:"difficulties"`
+}
+
+// CompactVector is CompactToBig(Bits) and CalcWork(Bits) as decimal strings,
+// and BigToCompact of that target.
+type CompactVector struct {
+	Bits      uint32 `json:"bits"`
+	Target    string `json:"target"`
+	Work      string `json:"work"`
+	Recompact uint32 `json:"recompact"`
+}
+
+type TargetVector struct {
+	Target string `json:"target"`
+	Bits   uint32 `json:"bits"`
+}
+
+type ConsensusVectors struct {
+	Networks []ConsensusNetworkVector `json:"networks"`
+	Compact  []CompactVector          `json:"compact"`
+	Targets  []TargetVector           `json:"targets"`
+}
+
+// scriptError runs Pearl's script engine over every input and returns its
+// first error, or "" when the transaction is valid.
+func scriptError(tx *wire.MsgTx, prevOuts []*wire.TxOut) string {
+	fetcher := txscript.NewMultiPrevOutFetcher(nil)
+	for i, txIn := range tx.TxIn {
+		fetcher.AddPrevOut(txIn.PreviousOutPoint, prevOuts[i])
+	}
+	sigHashes := txscript.NewTxSigHashes(tx, fetcher)
+	for i, prevOut := range prevOuts {
+		engine, err := txscript.NewEngine(
+			prevOut.PkScript, tx, i, txscript.StandardVerifyFlags, nil,
+			sigHashes, prevOut.Value, fetcher,
+		)
+		if err != nil {
+			return err.Error()
+		}
+		if err := engine.Execute(); err != nil {
+			return err.Error()
+		}
+	}
+	return ""
+}
+
+func leafBuilderVectors(account *hdkeychain.ExtendedKey, internalPub *btcec.PublicKey) LeafBuilderVectors {
+	var out LeafBuilderVectors
+	const timelockKey = 40
+	priv, err := derive(account, 0, timelockKey).ECPrivKey()
+	check(err)
+	xOnly := schnorr.SerializePubKey(priv.PubKey())
+	const amount int64 = 100_000_000
+
+	timelockLeaf := func(kind string, value int64) []byte {
+		op := byte(txscript.OP_CHECKLOCKTIMEVERIFY)
+		if kind == "csv" {
+			op = txscript.OP_CHECKSEQUENCEVERIFY
+		}
+		script, err := txscript.NewScriptBuilder().AddInt64(value).AddOp(op).AddOp(txscript.OP_DROP).
+			AddData(xOnly).AddOp(txscript.OP_CHECKSIG).Script()
+		check(err)
+		return script
+	}
+	secondsSequence := int64(blockchain.LockTimeToSequence(true, 20*512))
+	for _, item := range []struct {
+		name     string
+		kind     string
+		value    int64
+		version  int32
+		lockTime uint32
+		sequence uint32
+		fails    bool
+	}{
+		{"cltv-height", "cltv", 500, 2, 500, wire.MaxTxInSequenceNum - 1, false},
+		{"cltv-height-later-locktime", "cltv", 500, 2, 600, wire.MaxTxInSequenceNum - 1, false},
+		{"cltv-height-before-maturity", "cltv", 500, 2, 499, wire.MaxTxInSequenceNum - 1, true},
+		{"cltv-height-final-sequence", "cltv", 500, 2, 600, wire.MaxTxInSequenceNum, true},
+		{"cltv-time", "cltv", 1_700_000_000, 2, 1_700_000_000, 0, false},
+		{"cltv-time-before-maturity", "cltv", 1_700_000_000, 2, 1_699_999_999, 0, true},
+		{"cltv-time-against-height-locktime", "cltv", 1_700_000_000, 2, 499_999_999, 0, true},
+		{"cltv-small-int", "cltv", 16, 1, 16, 0, false},
+		{"cltv-five-byte-number", "cltv", 3_000_000_000, 2, 3_000_000_000, 0, false},
+		{"csv-blocks", "csv", 10, 2, 0, 10, false},
+		{"csv-blocks-before-maturity", "csv", 10, 2, 0, 9, true},
+		{"csv-one-block", "csv", 1, 2, 0, 1, false},
+		{"csv-blocks-version-1", "csv", 10, 1, 0, 10, true},
+		{"csv-blocks-disabled-input-sequence", "csv", 10, 2, 0, 10 | wire.SequenceLockTimeDisabled, true},
+		{"csv-seconds", "csv", secondsSequence, 2, 0, uint32(secondsSequence), false},
+		{"csv-seconds-before-maturity", "csv", secondsSequence, 2, 0, uint32(secondsSequence) - 1, true},
+		{"csv-seconds-against-block-sequence", "csv", secondsSequence, 2, 0, 20, true},
+		{"csv-disabled-in-script", "csv", int64(wire.SequenceLockTimeDisabled), 1, 0, wire.MaxTxInSequenceNum, false},
+	} {
+		leafScript := timelockLeaf(item.kind, item.value)
+		leaf := txscript.NewBaseTapLeaf(leafScript)
+		tree := txscript.AssembleTaprootScriptTree(leaf)
+		root := tree.RootNode.TapHash()
+		prevScript, err := txscript.PayToTaprootScript(txscript.ComputeTaprootOutputKey(internalPub, root[:]))
+		check(err)
+		block := tree.LeafMerkleProofs[0].ToControlBlock(internalPub)
+		controlBlock, err := block.ToBytes()
+		check(err)
+
+		tx := wire.NewMsgTx(item.version)
+		tx.LockTime = item.lockTime
+		txIn := wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x1d}, 0), nil, nil)
+		txIn.Sequence = item.sequence
+		tx.AddTxIn(txIn)
+		tx.AddTxOut(wire.NewTxOut(amount-10_000, prevScript))
+		fetcher := txscript.NewCannedPrevOutputFetcher(prevScript, amount)
+		sigHashes := txscript.NewTxSigHashes(tx, fetcher)
+		sig, err := txscript.RawTxInTapscriptSignature(
+			tx, sigHashes, 0, amount, prevScript, leaf, txscript.SigHashDefault, priv,
+		)
+		check(err)
+		tx.TxIn[0].SetWitness(wire.TxWitness{sig, leafScript, controlBlock})
+		errText := scriptError(tx, []*wire.TxOut{wire.NewTxOut(amount, prevScript)})
+		if (errText != "") != item.fails {
+			panic(fmt.Sprintf("timelock %s: unexpected script result %q", item.name, errText))
+		}
+		out.Timelocks = append(out.Timelocks, TimelockSpendVector{
+			Name: item.name, Kind: item.kind, Value: item.value, KeyIndex: timelockKey,
+			LeafScript: hex.EncodeToString(leafScript),
+			Prevout:    PrevoutVector{Script: hex.EncodeToString(prevScript), Value: amount},
+			SpendTxHex: serializeTx(tx, true), Error: errText,
+		})
+	}
+
+	for _, item := range []struct {
+		isSeconds bool
+		lockTime  uint32
+	}{
+		{false, 0}, {false, 1}, {false, 144}, {false, 0xffff},
+		{true, 0}, {true, 511}, {true, 512}, {true, 1000}, {true, 20 * 512}, {true, 0xffff * 512},
+	} {
+		out.Sequences = append(out.Sequences, SequenceVector{
+			IsSeconds: item.isSeconds, LockTime: item.lockTime,
+			Sequence: blockchain.LockTimeToSequence(item.isSeconds, item.lockTime),
+		})
+	}
+
+	// 17-of-18 multi_a over account/0/50..67, signed by the first 17 keys.
+	const multiAKeys, multiAThreshold, multiAOffset = 18, 17, 50
+	builder := txscript.NewScriptBuilder()
+	privs := make([]*btcec.PrivateKey, multiAKeys)
+	var keyIndices, signerIndices []uint32
+	for i := 0; i < multiAKeys; i++ {
+		privs[i], err = derive(account, 0, uint32(multiAOffset+i)).ECPrivKey()
+		check(err)
+		builder.AddData(schnorr.SerializePubKey(privs[i].PubKey()))
+		if i == 0 {
+			builder.AddOp(txscript.OP_CHECKSIG)
+		} else {
+			builder.AddOp(txscript.OP_CHECKSIGADD)
+		}
+		keyIndices = append(keyIndices, uint32(i))
+		if i < multiAThreshold {
+			signerIndices = append(signerIndices, uint32(i))
+		}
+	}
+	leafScript, err := builder.AddInt64(multiAThreshold).AddOp(txscript.OP_NUMEQUAL).Script()
+	check(err)
+	leaf := txscript.NewBaseTapLeaf(leafScript)
+	tree := txscript.AssembleTaprootScriptTree(leaf)
+	root := tree.RootNode.TapHash()
+	prevScript, err := txscript.PayToTaprootScript(txscript.ComputeTaprootOutputKey(internalPub, root[:]))
+	check(err)
+	block := tree.LeafMerkleProofs[0].ToControlBlock(internalPub)
+	controlBlock, err := block.ToBytes()
+	check(err)
+	spendTx := wire.NewMsgTx(2)
+	spendTx.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x1e}, 0), nil, nil))
+	spendTx.AddTxOut(wire.NewTxOut(amount-10_000, prevScript))
+	unsignedHex := serializeTx(spendTx, false)
+	packet, err := psbt.NewFromUnsignedTx(spendTx)
+	check(err)
+	packet.Inputs[0].WitnessUtxo = wire.NewTxOut(amount, prevScript)
+	packet.Inputs[0].TaprootLeafScript = []*psbt.TaprootTapLeafScript{{
+		ControlBlock: controlBlock, Script: leafScript, LeafVersion: leaf.LeafVersion,
+	}}
+	fetcher := txscript.NewCannedPrevOutputFetcher(prevScript, amount)
+	sigHashes := txscript.NewTxSigHashes(spendTx, fetcher)
+	leafHash := leaf.TapHash()
+	for _, index := range signerIndices {
+		sig, err := txscript.RawTxInTapscriptSignature(
+			spendTx, sigHashes, 0, amount, prevScript, leaf, txscript.SigHashDefault, privs[index],
+		)
+		check(err)
+		packet.Inputs[0].TaprootScriptSpendSig = append(packet.Inputs[0].TaprootScriptSpendSig,
+			&psbt.TaprootScriptSpendSig{
+				XOnlyPubKey: schnorr.SerializePubKey(privs[index].PubKey()), LeafHash: leafHash[:],
+				Signature: sig, SigHash: txscript.SigHashDefault,
+			})
+	}
+	check(psbt.Finalize(packet, 0))
+	finalTx, err := psbt.Extract(packet)
+	check(err)
+	verifyInputs(finalTx, []*wire.TxOut{wire.NewTxOut(amount, prevScript)})
+	var lengths []int
+	for _, item := range finalTx.TxIn[0].DecodeWitness() {
+		lengths = append(lengths, len(item))
+	}
+	out.MultiA = MultiASpendVector{
+		Name: "17-of-18-signed-by-first-17", KeyIndices: keyIndices, SignerIndices: signerIndices,
+		Threshold: multiAThreshold, LeafScript: hex.EncodeToString(leafScript),
+		InternalPubKey: hex.EncodeToString(schnorr.SerializePubKey(internalPub)), UnsignedTxHex: unsignedHex,
+		Prevouts:   []PrevoutVector{{Script: hex.EncodeToString(prevScript), Value: amount}},
+		FinalTxHex: serializeTx(finalTx, true), WitnessLengths: lengths,
+	}
+	return out
+}
+
+// mempoolChain is the chain view behind the generator's TxPools, as in
+// node/mempool's fakeChain: a fixed set of confirmed outputs at height 1 and
+// a tip at height 1000 with sequence locks always met.
+type mempoolChain struct {
+	utxos *blockchain.UtxoViewpoint
+}
+
+func (c *mempoolChain) FetchUtxoView(tx *btcutil.Tx) (*blockchain.UtxoViewpoint, error) {
+	view := blockchain.NewUtxoViewpoint()
+	prevOut := wire.OutPoint{Hash: *tx.Hash()}
+	for i := range tx.MsgTx().TxOut {
+		prevOut.Index = uint32(i)
+		view.Entries()[prevOut] = c.utxos.LookupEntry(prevOut).Clone()
+	}
+	for _, txIn := range tx.MsgTx().TxIn {
+		view.Entries()[txIn.PreviousOutPoint] = c.utxos.LookupEntry(txIn.PreviousOutPoint).Clone()
+	}
+	return view, nil
+}
+
+type mempoolCoin struct {
+	outPoint wire.OutPoint
+	value    int64
+}
+
+func mempoolVectors() []MempoolScenarioVector {
+	keyBytes := mustHex("700868df1838811ffbdf918fb482c1f7ead62db4b97bd7012c23e726485e577d")
+	signKey, signPub := btcec.PrivKeyFromBytes(keyBytes)
+	payScript, err := txscript.PayToTaprootScript(txscript.ComputeTaprootKeyNoScript(signPub))
+	check(err)
+
+	const fundingOutputs = 300
+	funding := wire.NewMsgTx(2)
+	funding.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0xee}, 0), nil, nil))
+	for i := 0; i < fundingOutputs; i++ {
+		funding.AddTxOut(wire.NewTxOut(1_000_000_000, payScript))
+	}
+	chain := &mempoolChain{utxos: blockchain.NewUtxoViewpoint()}
+	chain.utxos.AddTxOuts(btcutil.NewTx(funding), 1)
+	nextCoin := 0
+	coin := func() mempoolCoin {
+		c := mempoolCoin{wire.OutPoint{Hash: funding.TxHash(), Index: uint32(nextCoin)}, 1_000_000_000}
+		nextCoin++
+		return c
+	}
+
+	newPool := func(rejectReplacement bool) *mempool.TxPool {
+		return mempool.New(&mempool.Config{
+			Policy: mempool.Policy{
+				DisableRelayPriority: true, FreeTxRelayLimit: 15, MaxOrphanTxs: 5, MaxOrphanTxSize: 1000,
+				MinRelayTxFee: mempool.DefaultMinRelayTxFee, MaxTxVersion: 2, RejectReplacement: rejectReplacement,
+				LimitAncestorCount:   mempool.DefaultAncestorCountLimit,
+				LimitAncestorSize:    mempool.DefaultAncestorSizeLimit,
+				LimitDescendantCount: mempool.DefaultDescendantCountLimit,
+			},
+			ChainParams:    &chaincfg.MainNetParams,
+			FetchUtxoView:  chain.FetchUtxoView,
+			BestHeight:     func() int32 { return 1000 },
+			MedianTimePast: func() time.Time { return time.Unix(1_700_000_000, 0) },
+			CalcSequenceLock: func(*btcutil.Tx, *blockchain.UtxoViewpoint) (*blockchain.SequenceLock, error) {
+				return &blockchain.SequenceLock{Seconds: -1, BlockHeight: -1}, nil
+			},
+			HashCache: txscript.NewHashCache(1000),
+		})
+	}
+
+	// spend pays the inputs less fee into outputs equal outputs, the last
+	// taking the remainder.
+	spend := func(inputs []mempoolCoin, outputs int, fee int64, sequence uint32) (*btcutil.Tx, []mempoolCoin) {
+		tx := wire.NewMsgTx(2)
+		fetcher := txscript.NewMultiPrevOutFetcher(nil)
+		var total int64
+		for _, input := range inputs {
+			txIn := wire.NewTxIn(&input.outPoint, nil, nil)
+			txIn.Sequence = sequence
+			tx.AddTxIn(txIn)
+			fetcher.AddPrevOut(input.outPoint, wire.NewTxOut(input.value, payScript))
+			total += input.value
+		}
+		each := (total - fee) / int64(outputs)
+		for i := 0; i < outputs; i++ {
+			value := each
+			if i == outputs-1 {
+				value = total - fee - each*int64(outputs-1)
+			}
+			tx.AddTxOut(wire.NewTxOut(value, payScript))
+		}
+		sigHashes := txscript.NewTxSigHashes(tx, fetcher)
+		for i, input := range inputs {
+			witness, err := txscript.TaprootWitnessSignature(
+				tx, sigHashes, i, input.value, payScript, txscript.SigHashDefault, signKey,
+			)
+			check(err)
+			tx.TxIn[i].SetWitness(witness)
+		}
+		var coins []mempoolCoin
+		for i, txOut := range tx.TxOut {
+			coins = append(coins, mempoolCoin{wire.OutPoint{Hash: tx.TxHash(), Index: uint32(i)}, txOut.Value})
+		}
+		return btcutil.NewTx(tx), coins
+	}
+	vsizeOf := func(inputs, outputs int) int64 {
+		tx, _ := spend(make([]mempoolCoin, inputs), outputs, 0, 0)
+		return blockchain.GetTransactionVsize(tx)
+	}
+	const rbf, final = mempool.MaxRBFSequence, wire.MaxTxInSequenceNum
+
+	var scenarios []MempoolScenarioVector
+	scenario := func(name string, rejectReplacement bool, build func(offer func(string, *btcutil.Tx, int64, bool))) {
+		pool := newPool(rejectReplacement)
+		s := MempoolScenarioVector{Name: name, RejectReplacement: rejectReplacement}
+		offer := func(txName string, tx *btcutil.Tx, fee int64, accept bool) {
+			_, err := pool.ProcessTransaction(tx, false, false, 0)
+			errText := ""
+			if err != nil {
+				errText = err.Error()
+			}
+			if (errText == "") != accept {
+				panic(fmt.Sprintf("mempool %s/%s: unexpected result %q", name, txName, errText))
+			}
+			s.Transactions = append(s.Transactions, MempoolTxVector{
+				Name: txName, TxHex: serializeTx(tx.MsgTx(), true), Fee: fee,
+				Vsize: blockchain.GetTransactionVsize(tx), Error: errText,
+			})
+		}
+		build(offer)
+		scenarios = append(scenarios, s)
+	}
+
+	scenario("explicit-signal", false, func(offer func(string, *btcutil.Tx, int64, bool)) {
+		c := coin()
+		first, _ := spend([]mempoolCoin{c}, 1, 1000, rbf)
+		offer("original", first, 1000, true)
+		second, _ := spend([]mempoolCoin{c}, 1, 2000, final)
+		offer("replacement", second, 2000, true)
+		third, _ := spend([]mempoolCoin{c}, 1, 5000, final)
+		offer("replacing-a-non-signalling-transaction", third, 5000, false)
+	})
+	scenario("inherited-signal", false, func(offer func(string, *btcutil.Tx, int64, bool)) {
+		parent, coins := spend([]mempoolCoin{coin()}, 1, 1000, rbf)
+		offer("signalling-parent", parent, 1000, true)
+		child, _ := spend(coins, 1, 1000, final)
+		offer("non-signalling-child", child, 1000, true)
+		replacement, _ := spend(coins, 1, 3000, final)
+		offer("child-replacement", replacement, 3000, true)
+	})
+	scenario("fee-rate-not-higher", false, func(offer func(string, *btcutil.Tx, int64, bool)) {
+		c := coin()
+		first, _ := spend([]mempoolCoin{c}, 1, 1000, rbf)
+		offer("original", first, 1000, true)
+		second, _ := spend([]mempoolCoin{c}, 2, 1100, rbf)
+		offer("larger-replacement-at-a-lower-rate", second, 1100, false)
+	})
+	scenario("fee-rate-equal", false, func(offer func(string, *btcutil.Tx, int64, bool)) {
+		c := coin()
+		first, _ := spend([]mempoolCoin{c}, 1, 1000, rbf)
+		offer("original", first, 1000, true)
+		// Same size and fee, so the same rate; only the sequence differs.
+		second, _ := spend([]mempoolCoin{c}, 1, 1000, final)
+		offer("replacement-at-the-same-rate", second, 1000, false)
+	})
+	scenario("absolute-fee", false, func(offer func(string, *btcutil.Tx, int64, bool)) {
+		c := coin()
+		first, _ := spend([]mempoolCoin{c}, 2, 2000, rbf)
+		offer("original", first, 2000, true)
+		needed := 2000 + vsizeOf(1, 1)
+		short, _ := spend([]mempoolCoin{c}, 1, needed-1, rbf)
+		offer("one-grain-short", short, needed-1, false)
+		exact, _ := spend([]mempoolCoin{c}, 1, needed, rbf)
+		offer("exact-minimum", exact, needed, true)
+	})
+	scenario("spends-conflict-output", false, func(offer func(string, *btcutil.Tx, int64, bool)) {
+		c := coin()
+		first, coins := spend([]mempoolCoin{c}, 2, 1000, rbf)
+		offer("original", first, 1000, true)
+		bad, _ := spend([]mempoolCoin{c, coins[1]}, 1, 10_000, final)
+		offer("replacement-spending-the-original", bad, 10_000, false)
+	})
+	scenario("new-unconfirmed-input", false, func(offer func(string, *btcutil.Tx, int64, bool)) {
+		other, otherCoins := spend([]mempoolCoin{coin()}, 1, 1000, final)
+		offer("unrelated", other, 1000, true)
+		c := coin()
+		first, _ := spend([]mempoolCoin{c}, 1, 1000, rbf)
+		offer("original", first, 1000, true)
+		bad, _ := spend([]mempoolCoin{c, otherCoins[0]}, 1, 10_000, final)
+		offer("replacement-adding-an-unconfirmed-input", bad, 10_000, false)
+	})
+	scenario("reject-replacement", true, func(offer func(string, *btcutil.Tx, int64, bool)) {
+		c := coin()
+		first, _ := spend([]mempoolCoin{c}, 1, 1000, rbf)
+		offer("original", first, 1000, true)
+		second, _ := spend([]mempoolCoin{c}, 1, 5000, rbf)
+		offer("replacement", second, 5000, false)
+	})
+	evictions := func(count int, accept bool) func(offer func(string, *btcutil.Tx, int64, bool)) {
+		return func(offer func(string, *btcutil.Tx, int64, bool)) {
+			var coins []mempoolCoin
+			for i := 0; i < count; i++ {
+				c := coin()
+				coins = append(coins, c)
+				tx, _ := spend([]mempoolCoin{c}, 1, 1000, rbf)
+				offer(fmt.Sprintf("original-%d", i), tx, 1000, true)
+			}
+			fee := int64(count)*1000 + 2*vsizeOf(count, 1)
+			replacement, _ := spend(coins, 1, fee, final)
+			offer("replacement", replacement, fee, accept)
+		}
+	}
+	scenario("evicts-100", false, evictions(100, true))
+	scenario("evicts-101", false, evictions(101, false))
+	scenario("evicts-101-with-descendants", false, func(offer func(string, *btcutil.Tx, int64, bool)) {
+		var roots []mempoolCoin
+		for i := 0; i < 5; i++ {
+			c := coin()
+			roots = append(roots, c)
+			tx, coins := spend([]mempoolCoin{c}, 1, 1000, rbf)
+			offer(fmt.Sprintf("root-%d", i), tx, 1000, true)
+			for j := 0; j < 20; j++ {
+				tx, coins = spend(coins, 1, 1000, final)
+				offer(fmt.Sprintf("root-%d-descendant-%d", i, j), tx, 1000, true)
+			}
+		}
+		fee := int64(200_000)
+		replacement, _ := spend(roots, 1, fee, final)
+		offer("replacement", replacement, fee, false)
+	})
+	scenario("ancestor-count", false, func(offer func(string, *btcutil.Tx, int64, bool)) {
+		coins := []mempoolCoin{coin()}
+		for i := 0; i < 26; i++ {
+			var tx *btcutil.Tx
+			tx, coins = spend(coins, 1, 1000, final)
+			offer(fmt.Sprintf("chain-%d", i), tx, 1000, i < 25)
+		}
+	})
+	scenario("ancestor-size", false, func(offer func(string, *btcutil.Tx, int64, bool)) {
+		parent, coins := spend([]mempoolCoin{coin()}, 2000, 100_000, final)
+		offer("fat-parent", parent, 100_000, true)
+		child, _ := spend(coins[:1], 400, 20_000, final)
+		offer("fat-child", child, 20_000, false)
+	})
+	scenario("descendant-count", false, func(offer func(string, *btcutil.Tx, int64, bool)) {
+		parent, coins := spend([]mempoolCoin{coin()}, 25, 2000, final)
+		offer("parent", parent, 2000, true)
+		for i := 0; i < 25; i++ {
+			child, _ := spend(coins[i:i+1], 1, 1000, final)
+			offer(fmt.Sprintf("child-%d", i), child, 1000, i < 24)
+		}
+	})
+	return scenarios
+}
+
+// difficultyRatio mirrors getDifficultyRatio in node/rpcserver.go, which is
+// in package main.
+func difficultyRatio(bits uint32, params *chaincfg.Params) float64 {
+	max := blockchain.CompactToBig(params.PowLimitBits)
+	target := blockchain.CompactToBig(bits)
+	diff, err := strconv.ParseFloat(new(big.Rat).SetFrac(max, target).FloatString(8), 64)
+	check(err)
+	return diff
+}
+
+func consensusVectors(nets []*chaincfg.Params) ConsensusVectors {
+	var out ConsensusVectors
+	for _, net := range nets {
+		v := ConsensusNetworkVector{
+			Name: net.Name, MoEForkHeight: net.MoEForkHeight, DenseOnlyForkHeight: net.DenseOnlyForkHeight,
+			RankPenaltyForkHeight: net.RankPenaltyForkHeight, SaltedSeedForkHeight: net.SaltedSeedForkHeight,
+			Checkpoints: []CheckpointVector{}, DNSSeeds: []string{},
+			TargetTimePerBlock: int64(net.TargetTimePerBlock / time.Second),
+			WTEMAHalfLife:      int64(net.WTEMAHalfLife / time.Second),
+			PowLimit:           net.PowLimit.String(), PowLimitBits: net.PowLimitBits,
+			CoinbaseMaturity: net.CoinbaseMaturity,
+		}
+		for _, cp := range net.Checkpoints {
+			v.Checkpoints = append(v.Checkpoints, CheckpointVector{cp.Height, cp.Hash.String()})
+		}
+		for _, seed := range net.DNSSeeds {
+			v.DNSSeeds = append(v.DNSSeeds, seed.Host)
+		}
+
+		heights := map[int32]bool{0: true, 1: true, 2: true, 1000: true}
+		for _, fork := range []int32{net.MoEForkHeight, net.DenseOnlyForkHeight, net.RankPenaltyForkHeight, net.SaltedSeedForkHeight} {
+			if fork > 0 {
+				heights[fork-1], heights[fork], heights[fork+1] = true, true, true
+			}
+		}
+		var sorted []int32
+		for h := range heights {
+			sorted = append(sorted, h)
+		}
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+		header := &wire.BlockHeader{}
+		for _, height := range sorted {
+			for _, cert := range []struct {
+				version uint32
+				size    int
+			}{{1, wire.PublicDataSizeV1}, {2, wire.PublicDataSizeDenseV2}, {2, wire.PublicDataSizeDenseV2 + 1},
+				{3, wire.PublicDataSizeDenseV2}, {3, wire.PublicDataSizeDenseV2 + 1}} {
+				var c wire.BlockCertificate
+				switch cert.version {
+				case 1:
+					c = &wire.CertificateV1{}
+				case 2:
+					c = &wire.CertificateV2{PublicDataLen: uint32(cert.size)}
+				default:
+					c = &wire.CertificateV3{CertificateV2: wire.CertificateV2{PublicDataLen: uint32(cert.size)}}
+				}
+				errText := ""
+				if err := blockchain.CheckCertificateRules(header, c, height, net, blockchain.BFNoPoWCheck); err != nil {
+					errText = err.Error()
+				}
+				v.CertRules = append(v.CertRules, CertRuleVector{
+					Height: height, Version: cert.version, PublicDataLen: cert.size,
+					Required: uint32(net.RequiredCertVersion(height)), Error: errText,
+				})
+			}
+		}
+
+		emission := int32((4 * 365 * 24 * 60 * 60) / int64(net.TargetTimePerBlock/time.Second))
+		subsidyHeights := []int32{0, 1, 2, 3, 100, 1000, 10_000, 99_000, emission - 1, emission, emission + 1,
+			1_000_000, 10_000_000, 1 << 30, 1<<31 - 1}
+		for _, h := range subsidyHeights {
+			v.Subsidies = append(v.Subsidies, HeightAmountVector{h, blockchain.CalcBlockSubsidy(h, net)})
+		}
+		supplyHeights := map[int32]bool{0: true, 1: true, 2: true, 100: true, 99_999: true, 130_000: true, emission: true}
+		var supply int64
+		for h := int32(0); h <= emission; h++ {
+			supply += blockchain.CalcBlockSubsidy(h, net)
+			if supplyHeights[h] {
+				v.Supplies = append(v.Supplies, HeightAmountVector{h, supply})
+			}
+		}
+
+		for _, bits := range []uint32{net.PowLimitBits, net.GenesisBlock.MsgHeader.BlockHeader.Bits, 0x1b00ffff, 0x1a7fffff,
+			0x1a0a1b2c, 0x19012345, 0x1d00ffff, 0x0f123456} {
+			v.Difficulties = append(v.Difficulties, DifficultyVector{bits, difficultyRatio(bits, net)})
+		}
+		out.Networks = append(out.Networks, v)
+	}
+
+	for _, bits := range []uint32{0, 0x00123456, 0x01003456, 0x01123456, 0x02008000, 0x02123456, 0x03123456,
+		0x04123456, 0x04923456, 0x05009234, 0x20123456, 0x1d00ffff, 0x1b00ffff, 0x1e010000, 0x1a0a1b2c,
+		0x01800000, 0xff7fffff} {
+		target := blockchain.CompactToBig(bits)
+		out.Compact = append(out.Compact, CompactVector{
+			Bits: bits, Target: target.String(), Work: blockchain.CalcWork(bits).String(),
+			Recompact: blockchain.BigToCompact(target),
+		})
+	}
+	one := big.NewInt(1)
+	for _, target := range []*big.Int{
+		big.NewInt(0), big.NewInt(1), big.NewInt(0x7f), big.NewInt(0x80), big.NewInt(0xffff),
+		big.NewInt(0x800000), big.NewInt(0x12345678), big.NewInt(-1), big.NewInt(-0x12345600),
+		new(big.Int).Sub(new(big.Int).Lsh(one, 208), one), new(big.Int).Sub(new(big.Int).Lsh(one, 233), one),
+		new(big.Int).Lsh(one, 255), new(big.Int).Sub(new(big.Int).Lsh(one, 256), one),
+	} {
+		out.Targets = append(out.Targets, TargetVector{target.String(), blockchain.BigToCompact(target)})
+	}
+	return out
 }
