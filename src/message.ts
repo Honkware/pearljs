@@ -108,11 +108,32 @@ function decodeBase64(text: string): Uint8Array {
   return Uint8Array.from(atob(text), (char) => char.charCodeAt(0));
 }
 
+export interface SignMessageOptions {
+  /**
+   * The 32 bytes of auxiliary randomness BIP340 mixes into the nonce. Fresh
+   * random bytes are used when it is left out; pass a fixed value only to
+   * get reproducible signatures in tests.
+   */
+  auxRand?: Uint8Array;
+}
+
+// BIP340 recommends fresh auxiliary randomness for every signature, as a
+// defence against fault and side-channel attacks on the nonce. Without it
+// tiny-secp256k1 signs with 32 zero bytes.
+function auxRandOf(options: SignMessageOptions): Uint8Array {
+  if (options.auxRand === undefined) return crypto.getRandomValues(new Uint8Array(32));
+  if (!(options.auxRand instanceof Uint8Array) || options.auxRand.length !== 32) {
+    throw new Error('auxRand must be 32 bytes');
+  }
+  return options.auxRand;
+}
+
 /**
  * Signs a message for the BIP86 P2TR address of privateKey, as Oyster's
- * signmessage does, and returns the base64 signature.
+ * signmessage does, and returns the base64 signature. Signatures differ from
+ * call to call unless auxRand is fixed; every one verifies.
  */
-export function signMessage(privateKey: Uint8Array, message: string): string {
+export function signMessage(privateKey: Uint8Array, message: string, options: SignMessageOptions = {}): string {
   const bytes = messageBytes(message);
   if (!(privateKey instanceof Uint8Array)) {
     throw new Error('invalid private key');
@@ -136,7 +157,17 @@ export function signMessage(privateKey: Uint8Array, message: string): string {
     [0n],
     Transaction.SIGHASH_DEFAULT,
   );
-  const signature = ecc.signSchnorr(hash, tweakedKey);
+  let signature: Uint8Array;
+  try {
+    signature = ecc.signSchnorr(hash, tweakedKey, auxRandOf(options));
+  } finally {
+    // The derived keys are this function's own copies; privateKey is the caller's.
+    tweakedKey.fill(0);
+    if (evenKey !== privateKey) evenKey.fill(0);
+  }
+  if (!ecc.verifySchnorr(hash, outputKey.xOnlyPubkey, signature)) {
+    throw new Error('message signature failed verification');
+  }
   return btoa(String.fromCharCode(...serializeWitness([signature])));
 }
 

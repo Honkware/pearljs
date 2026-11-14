@@ -1,6 +1,14 @@
 // BIP86 hierarchical-deterministic account support for Pearl. Watch-only
 // accounts expose neutered depth-3 nodes. Signing accounts keep private nodes
 // in closures and use the standard BIP86 tweak for Taproot key-path spends.
+//
+// Signing accounts wipe what they can: each child key is overwritten once
+// its signature is made, and destroy overwrites the master and account keys.
+// That covers the byte arrays pearljs and bip32 hold, not everything that
+// ever existed. The seed belongs to the caller. Values computed on the way
+// (HMAC outputs, the WASM signer's memory, any copy the engine made when it
+// moved an object) wait for the garbage collector, which frees memory without
+// clearing it, and a string such as a mnemonic cannot be overwritten at all.
 
 import { BIP32Factory } from 'bip32';
 import type { BIP32Interface } from 'bip32';
@@ -20,7 +28,12 @@ import {
   signP2mrScriptPathInput,
   signTaprootScriptPathInput,
 } from './scriptpath.js';
-import type { P2mrPsbtSignOptions, P2mrSignOptions, PsbtSighashOptions } from './scriptpath.js';
+import type {
+  P2mrPsbtSignOptions,
+  P2mrSignOptions,
+  PsbtSighashOptions,
+  TapscriptSigner,
+} from './scriptpath.js';
 
 export { mnemonicToSeed } from './mnemonic.js';
 
@@ -81,6 +94,12 @@ export interface PearlInputOptions {
 export interface PearlSignOptions {
   index: number;
   change?: boolean;
+  /**
+   * The 32 bytes of auxiliary randomness BIP340 mixes into the nonce. Fresh
+   * random bytes are used when it is left out; pass a fixed value only to
+   * get reproducible signatures in tests.
+   */
+  auxRand?: Uint8Array;
 }
 
 /** Options for signInput; allowedSighashTypes holds only SIGHASH_DEFAULT unless set. */
@@ -92,11 +111,15 @@ export interface PearlScriptPathSignOptions extends P2mrPsbtSignOptions {
   change?: boolean;
   /** Hash of the tap leaf to sign, from assembleScriptTree. */
   leafHash: Uint8Array;
+  /** See PearlSignOptions.auxRand. */
+  auxRand?: Uint8Array;
 }
 
 export interface PearlP2mrSignOptions extends P2mrSignOptions {
   index: number;
   change?: boolean;
+  /** See PearlSignOptions.auxRand. */
+  auxRand?: Uint8Array;
 }
 
 /**
@@ -124,6 +147,12 @@ export interface PearlSigningAccount {
   signP2mrInput(tx: Transaction, inputIndex: number, options: PearlP2mrSignOptions): void;
   /** Signs a message for the child's P2TR address; see signMessage. */
   signMessage(message: string, options: PearlSignOptions): string;
+  /**
+   * Overwrites the master and account private keys with zeros. Every signing
+   * method throws afterwards; the watch-only methods keep working. See the
+   * note at the top of this module for what this cannot reach.
+   */
+  destroy(): void;
 }
 
 function assertNonHardenedIndex(value: number, label: string): void {
@@ -216,15 +245,47 @@ export function deriveAccountFromSeed(
   account = 0,
 ): PearlAccount {
   assertNetwork(network);
+  assertSeed(seed);
+  const path = accountPath(network, account);
+  const master = bip32.fromSeed(seed, toBip32Params(network));
+  const accountNode = master.derivePath(path);
+  return toWatchOnlyAccount(accountNode, path, network);
+}
+
+function assertSeed(seed: Uint8Array): void {
+  if (!(seed instanceof Uint8Array)) {
+    throw new TypeError('seed must be a Uint8Array');
+  }
   if (seed.length < MIN_SEED_BYTES || seed.length > MAX_SEED_BYTES) {
     throw new RangeError(
       `seed must be between ${MIN_SEED_BYTES} and ${MAX_SEED_BYTES} bytes (128 to 512 bits), got ${seed.length}`,
     );
   }
-  const path = accountPath(network, account);
-  const master = bip32.fromSeed(seed, toBip32Params(network));
-  const accountNode = master.derivePath(path);
-  return toWatchOnlyAccount(accountNode, path, network);
+}
+
+/**
+ * A Schnorr signer for one private key. BIP340 recommends fresh auxiliary
+ * randomness for every signature, as a defence against fault and
+ * side-channel attacks on the nonce; bip32's own signSchnorr passes none, so
+ * its signatures are fully deterministic.
+ */
+function schnorrSigner(
+  privateKey: Uint8Array,
+  publicKey: Uint8Array,
+  auxRand: Uint8Array | undefined,
+): TapscriptSigner & { sign(): never } {
+  if (auxRand !== undefined && (!(auxRand instanceof Uint8Array) || auxRand.length !== 32)) {
+    throw new Error('auxRand must be 32 bytes');
+  }
+  return {
+    publicKey,
+    // bitcoinjs signers must offer ECDSA too; Taproot never asks for it.
+    sign(): never {
+      throw new Error('BIP86 accounts only produce Schnorr signatures');
+    },
+    signSchnorr: (hash: Uint8Array) =>
+      ecc.signSchnorr(hash, privateKey, auxRand ?? crypto.getRandomValues(new Uint8Array(32))),
+  };
 }
 
 function assertInputIndex(psbt: Psbt, inputIndex: number): void {
@@ -247,20 +308,27 @@ export function deriveSigningAccountFromSeed(
   account = 0,
 ): PearlSigningAccount {
   assertNetwork(network);
-  if (seed.length < MIN_SEED_BYTES || seed.length > MAX_SEED_BYTES) {
-    throw new RangeError(
-      `seed must be between ${MIN_SEED_BYTES} and ${MAX_SEED_BYTES} bytes (128 to 512 bits), got ${seed.length}`,
-    );
-  }
+  assertSeed(seed);
   const path = accountPath(network, account);
   const master = bip32.fromSeed(seed, toBip32Params(network));
   const accountNode = master.derivePath(path);
   const watchOnly = toWatchOnlyAccount(accountNode, path, network);
   const masterFingerprint = Uint8Array.from(master.fingerprint);
 
-  const deriveChild = (index: number, change: boolean): BIP32Interface => {
+  let destroyed = false;
+
+  /** Runs use with the private child node, then overwrites the keys derived for it. */
+  const withChild = <T>(index: number, change: boolean, use: (child: BIP32Interface) => T): T => {
+    if (destroyed) throw new Error('this signing account has been destroyed');
     assertNonHardenedIndex(index, 'Address index');
-    return accountNode.derive(change ? 1 : 0).derive(index);
+    const branch = accountNode.derive(change ? 1 : 0);
+    const child = branch.derive(index);
+    try {
+      return use(child);
+    } finally {
+      branch.privateKey?.fill(0);
+      child.privateKey?.fill(0);
+    }
   };
 
   return {
@@ -306,8 +374,7 @@ export function deriveSigningAccountFromSeed(
     signInput(psbt: Psbt, inputIndex: number, options: PearlPsbtSignOptions): void {
       assertInputIndex(psbt, inputIndex);
       const change = options.change ?? false;
-      const child = deriveChild(options.index, change);
-      const internalPubkey = child.publicKey.slice(1, 33);
+      const internalPubkey = watchOnly.derivePublicKey(options.index, change);
       const input = psbt.data.inputs[inputIndex];
       if (input === undefined) {
         throw new RangeError(`PSBT input index ${inputIndex} is out of range`);
@@ -329,8 +396,22 @@ export function deriveSigningAccountFromSeed(
       if (input.tapInternalKey === undefined) {
         psbt.updateInput(inputIndex, { tapInternalKey: internalPubkey });
       }
-      const signer = child.tweak(bitcoinCrypto.taggedHash('TapTweak', internalPubkey));
-      psbt.signInput(inputIndex, signer, [sighashType]);
+      withChild(options.index, change, (child) => {
+        // The BIP86 tweak, done here so the tweaked key can be overwritten after use.
+        const privateKey = child.privateKey!;
+        const evenKey = child.publicKey[0] === 0x03 ? ecc.privateNegate(privateKey) : privateKey;
+        const tweakedKey = ecc.privateAdd(evenKey, bitcoinCrypto.taggedHash('TapTweak', internalPubkey));
+        if (tweakedKey === null) {
+          throw new Error('taproot tweak produced an invalid key');
+        }
+        try {
+          const signer = schnorrSigner(tweakedKey, expectedScript.slice(2), options.auxRand);
+          psbt.signInput(inputIndex, signer, [sighashType]);
+        } finally {
+          tweakedKey.fill(0);
+          if (evenKey !== privateKey) evenKey.fill(0);
+        }
+      });
       const valid = psbt.validateSignaturesOfInput(inputIndex, (pubkey, hash, signature) =>
         ecc.verifySchnorr(hash, pubkey, signature),
       );
@@ -344,21 +425,30 @@ export function deriveSigningAccountFromSeed(
       options: PearlScriptPathSignOptions,
     ): void {
       assertInputIndex(psbt, inputIndex);
-      const child = deriveChild(options.index, options.change ?? false);
       const prevScript = psbt.data.inputs[inputIndex]!.witnessUtxo?.script;
-      if (prevScript !== undefined && classifyOutputScript(prevScript) === 'p2mr') {
-        signP2mrScriptPathInput(psbt, inputIndex, child, options.leafHash, options);
-      } else {
-        signTaprootScriptPathInput(psbt, inputIndex, child, options.leafHash, options);
-      }
+      withChild(options.index, options.change ?? false, (child) => {
+        const signer = schnorrSigner(child.privateKey!, child.publicKey, options.auxRand);
+        if (prevScript !== undefined && classifyOutputScript(prevScript) === 'p2mr') {
+          signP2mrScriptPathInput(psbt, inputIndex, signer, options.leafHash, options);
+        } else {
+          signTaprootScriptPathInput(psbt, inputIndex, signer, options.leafHash, options);
+        }
+      });
     },
     signP2mrInput(tx: Transaction, inputIndex: number, options: PearlP2mrSignOptions): void {
-      const child = deriveChild(options.index, options.change ?? false);
-      signP2mrInput(tx, inputIndex, child, options);
+      withChild(options.index, options.change ?? false, (child) =>
+        signP2mrInput(tx, inputIndex, schnorrSigner(child.privateKey!, child.publicKey, options.auxRand), options),
+      );
     },
     signMessage(message: string, options: PearlSignOptions): string {
-      const child = deriveChild(options.index, options.change ?? false);
-      return signMessage(child.privateKey!, message);
+      return withChild(options.index, options.change ?? false, (child) =>
+        signMessage(child.privateKey!, message, options.auxRand === undefined ? {} : { auxRand: options.auxRand }),
+      );
+    },
+    destroy(): void {
+      destroyed = true;
+      master.privateKey?.fill(0);
+      accountNode.privateKey?.fill(0);
     },
   };
 }

@@ -159,4 +159,24 @@ describe('message signing', () => {
       'message must be a string',
     );
   });
+
+  it('mixes fresh randomness into every signature unless auxRand is given', () => {
+    const key = new Uint8Array(32).fill(1);
+    const first = signMessage(key, 'same message');
+    const second = signMessage(key, 'same message');
+    expect(first).not.toBe(second);
+    const keyAddress = account.deriveAddress(0);
+    expect(account.signMessage('m', { index: 0 })).not.toBe(account.signMessage('m', { index: 0 }));
+    expect(verifyMessage(keyAddress, account.signMessage('m', { index: 0 }), 'm', networks.mainnet)).toBe(true);
+
+    const auxRand = new Uint8Array(32).fill(9);
+    expect(signMessage(key, 'same message', { auxRand })).toBe(signMessage(key, 'same message', { auxRand }));
+    expect(account.signMessage('m', { index: 0, auxRand })).toBe(account.signMessage('m', { index: 0, auxRand }));
+    expect(signMessage(key, 'same message', { auxRand })).not.toBe(
+      signMessage(key, 'same message', { auxRand: new Uint8Array(32) }),
+    );
+    expect(() => signMessage(key, 'x', { auxRand: new Uint8Array(31) })).toThrow('auxRand must be 32 bytes');
+    // The caller's key is not the one that gets wiped.
+    expect(key.every((byte) => byte === 1)).toBe(true);
+  });
 });

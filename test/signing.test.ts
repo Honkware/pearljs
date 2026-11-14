@@ -1,3 +1,5 @@
+import { BIP32Factory } from 'bip32';
+import { crypto as bitcoinCrypto } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { describe, expect, it } from 'vitest';
 import {
@@ -190,5 +192,77 @@ describe('BIP86 signing accounts', () => {
         value: 1 as unknown as bigint,
       }),
     ).toThrow(TypeError);
+  });
+
+  it('mixes fresh randomness into every signature unless auxRand is given', () => {
+    const expected = preparedVector('default');
+    const account = deriveSigningAccountFromSeed(seed, networks.mainnet);
+    const sign = (auxRand?: Uint8Array): string => {
+      const psbt = createPsbt(parseTransaction(expected.unsignedTxHex));
+      account.prepareInput(psbt, 0, { index: expected.index, value: BigInt(expected.value) });
+      account.signInput(psbt, 0, { index: expected.index, ...(auxRand === undefined ? {} : { auxRand }) });
+      const signature = psbt.data.inputs[0]!.tapKeySig!;
+      expect(
+        ecc.verifySchnorr(hexToBytes(expected.sighash), hexToBytes(expected.tweakedPubKey), signature),
+      ).toBe(true);
+      return bytesToHex(signature);
+    };
+    expect(sign()).not.toBe(sign());
+    const auxRand = new Uint8Array(32).fill(3);
+    expect(sign(auxRand)).toBe(sign(auxRand));
+    expect(sign(auxRand)).not.toBe(sign(new Uint8Array(32)));
+    expect(() => sign(new Uint8Array(16))).toThrow('auxRand must be 32 bytes');
+
+    // Without auxiliary randomness tiny-secp256k1 signs as if it were 32 zero bytes,
+    // which is what every signature used before.
+    const tweaked = BIP32Factory(ecc)
+      .fromSeed(seed, {
+        wif: networks.mainnet.wif,
+        bip32: { public: networks.mainnet.hdPublicKeyId, private: networks.mainnet.hdPrivateKeyId },
+      })
+      .derivePath(expected.path)
+      .tweak(bitcoinCrypto.taggedHash('TapTweak', hexToBytes(expected.internalPubKey)));
+    expect(sign(new Uint8Array(32))).toBe(bytesToHex(tweaked.signSchnorr(hexToBytes(expected.sighash))));
+  });
+
+  it('stops signing once destroyed and keeps the watch-only side working', () => {
+    const expected = preparedVector('default');
+    const ownedSeed = Uint8Array.from(seed);
+    const account = deriveSigningAccountFromSeed(ownedSeed, networks.mainnet);
+    const addressBefore = account.deriveAddress(4);
+    const psbt = createPsbt(parseTransaction(expected.unsignedTxHex));
+    account.prepareInput(psbt, 0, { index: expected.index, value: BigInt(expected.value) });
+    account.signMessage('before', { index: 0 });
+
+    account.destroy();
+    account.destroy();
+    expect(() => account.signInput(psbt, 0, { index: expected.index })).toThrow('has been destroyed');
+    expect(() => account.signMessage('after', { index: 0 })).toThrow('has been destroyed');
+    expect(() =>
+      account.signScriptPathInput(psbt, 0, { index: 0, leafHash: new Uint8Array(32) }),
+    ).toThrow('has been destroyed');
+    expect(() =>
+      account.signP2mrInput(parseTransaction(expected.unsignedTxHex), 0, {
+        index: 0,
+        prevouts: [],
+        tree: { root: new Uint8Array(32), leaves: [] },
+        leafIndex: 0,
+      }),
+    ).toThrow('has been destroyed');
+    expect(psbt.data.inputs[0]?.tapKeySig).toBeUndefined();
+
+    expect(account.deriveAddress(4)).toBe(addressBefore);
+    expect(account.watchOnlyAccount().extendedPublicKey()).toBe(
+      deriveSigningAccountFromSeed(seed, networks.mainnet).watchOnlyAccount().extendedPublicKey(),
+    );
+    // The seed is the caller's to wipe.
+    expect(bytesToHex(ownedSeed)).toBe(vectors.bip86.seed);
+  });
+
+  it('rejects a seed that is not bytes with a clear error', () => {
+    expect(() => deriveSigningAccountFromSeed(vectors.bip86.seed as unknown as Uint8Array, networks.mainnet)).toThrow(
+      'seed must be a Uint8Array',
+    );
+    expect(() => deriveSigningAccountFromSeed(undefined as unknown as Uint8Array, networks.mainnet)).toThrow(TypeError);
   });
 });
