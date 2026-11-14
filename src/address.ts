@@ -4,7 +4,8 @@
 // Pearl, so all of those are rejected on decode.
 
 import { bech32m } from 'bech32';
-import type { PearlNetwork } from './networks.js';
+import { networks } from './networks.js';
+import type { PearlNetwork, PearlNetworkName } from './networks.js';
 
 export interface WitnessAddress {
   version: number;
@@ -72,6 +73,47 @@ export function decodeAddress(
     );
   }
   return { version, program: Uint8Array.from(program) };
+}
+
+/** Whether the text is an address pearld accepts on the network: bech32m, witness v1 or v2, 32 bytes. */
+export function isValidAddress(address: string, network: PearlNetwork): boolean {
+  try {
+    decodeAddress(address, network);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface AddressInfo {
+  type: 'p2tr' | 'p2mr';
+  /**
+   * Every network that uses the address's prefix. The prefix alone cannot
+   * tell testnet from testnet2 (both `tprl`) or regtest from simnet (both
+   * `rprl`), so those addresses name two networks.
+   */
+  networks: PearlNetworkName[];
+  program: Uint8Array;
+}
+
+/** The type and candidate networks of a Pearl address, or null for anything that is not one. */
+export function addressInfo(address: string): AddressInfo | null {
+  const names = Object.keys(networks) as PearlNetworkName[];
+  for (const name of names) {
+    let decoded;
+    try {
+      decoded = decodeAddress(address, networks[name]);
+    } catch {
+      continue;
+    }
+    const hrp = networks[name].bech32Hrp;
+    return {
+      type: decoded.version === 1 ? 'p2tr' : 'p2mr',
+      networks: names.filter((other) => networks[other].bech32Hrp === hrp),
+      program: decoded.program,
+    };
+  }
+  return null;
 }
 
 /** Builds the output script OP_n <32-byte program> for a Pearl address. */

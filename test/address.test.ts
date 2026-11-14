@@ -1,12 +1,15 @@
 import { bech32, bech32m } from 'bech32';
 import { describe, expect, it } from 'vitest';
 import {
+  addressInfo,
   decodeAddress,
   encodeAddress,
   fromOutputScript,
+  isValidAddress,
   toOutputScript,
 } from '../src/address.js';
-import { mainnet, regtest, testnet } from '../src/networks.js';
+import { mainnet, regtest, simnet, testnet, testnet2 } from '../src/networks.js';
+import vectors from '../vectors/pearl-go.json' with { type: 'json' };
 
 const hex = (u: Uint8Array) => Buffer.from(u).toString('hex');
 const unhex = (s: string) => Uint8Array.from(Buffer.from(s, 'hex'));
@@ -194,6 +197,58 @@ describe('fromOutputScript', () => {
       expect(() => fromOutputScript(unhex(script), mainnet)).toThrow(
         /not a pearl witness program/,
       );
+    }
+  });
+});
+
+describe('isValidAddress', () => {
+  it('accepts every address Go encoded, on its own network', () => {
+    const byName = { mainnet, testnet, testnet2, regtest, simnet };
+    for (const vector of vectors.addresses) {
+      const network = byName[vector.network as keyof typeof byName];
+      expect(isValidAddress(vector.address, network)).toBe(true);
+      expect(isValidAddress(vector.address, network === mainnet ? regtest : mainnet)).toBe(false);
+    }
+  });
+
+  it('returns false where decodeAddress throws', () => {
+    const v0 = bech32.encode('prl', [0, ...bech32.toWords(program)]);
+    const v3 = bech32m.encode('prl', [3, ...bech32m.toWords(program)]);
+    const short = bech32m.encode('prl', [1, ...bech32m.toWords(program.slice(0, 20))]);
+    for (const bad of ['', 'prl1', 'not an address', V1_MAINNET.toUpperCase().replace('PRL1', 'prl1'), `${V1_MAINNET.slice(0, -1)}q`, v0, v3, short]) {
+      expect(isValidAddress(bad, mainnet)).toBe(false);
+    }
+    expect(isValidAddress(undefined as unknown as string, mainnet)).toBe(false);
+  });
+});
+
+describe('addressInfo', () => {
+  it('names the type and network of a mainnet address', () => {
+    expect(addressInfo(V1_MAINNET)).toEqual({ type: 'p2tr', networks: ['mainnet'], program });
+    expect(addressInfo(V2_MAINNET)).toEqual({ type: 'p2mr', networks: ['mainnet'], program });
+  });
+
+  it('names both networks that share a prefix', () => {
+    expect(addressInfo(encodeAddress({ version: 1, program }, testnet))?.networks).toEqual(['testnet', 'testnet2']);
+    expect(addressInfo(encodeAddress({ version: 2, program }, testnet2))?.networks).toEqual(['testnet', 'testnet2']);
+    expect(addressInfo(encodeAddress({ version: 1, program }, regtest))?.networks).toEqual(['regtest', 'simnet']);
+    expect(addressInfo(encodeAddress({ version: 1, program }, simnet))?.networks).toEqual(['regtest', 'simnet']);
+  });
+
+  it('agrees with Go on the type of every vector address', () => {
+    for (const vector of vectors.addresses) {
+      const info = addressInfo(vector.address);
+      expect(info?.type).toBe(vector.kind);
+      expect(info?.networks).toContain(vector.network);
+      expect(hex(info!.program)).toBe(vector.program);
+    }
+  });
+
+  it('returns null for anything that is not a Pearl address', () => {
+    const bitcoin = bech32m.encode('bc', [1, ...bech32m.toWords(program)]);
+    const v0 = bech32.encode('prl', [0, ...bech32.toWords(program)]);
+    for (const bad of ['', 'hello', bitcoin, v0, `${V1_MAINNET}x`]) {
+      expect(addressInfo(bad)).toBeNull();
     }
   });
 });
