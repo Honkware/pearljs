@@ -6,17 +6,22 @@
 //
 // - P2TR script paths go through a BIP371 PSBT. Pearl's Go PSBT code reads
 //   and finalizes these the same way.
-// - P2MR spends set the witness on the transaction directly, as Pearl's
-//   wallet does in txauthor.spendMerkleRoot. Pearl's PSBT parser checks every
-//   tap-leaf control block as a Taproot one, which needs a 33-byte header, so
-//   a PSBT carrying a P2MR control block would not load in Pearl's own tools.
+// - P2MR spends either set the witness on the transaction directly, as
+//   Pearl's wallet does in txauthor.spendMerkleRoot, or go through a PSBT
+//   with the fields Pearl's psbt package already has: the witness UTXO, a tap
+//   leaf script keyed by the P2MR control block, and tap script signatures,
+//   with no internal key or Merkle root. Pearl has no P2MR PSBT code of its
+//   own. Its parser checks every tap-leaf control block as a Taproot one,
+//   which needs a 33-byte header, so it rejects a single-leaf P2MR control
+//   block and loads a longer one only when the first proof hash happens to be
+//   a valid x-only key; its finalizer accepts P2TR inputs only.
 
 import { sha256 } from '@noble/hashes/sha2';
 import { Transaction } from 'bitcoinjs-lib';
 import type { Psbt } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { MAX_GRAIN } from './amount.js';
-import { p2tr } from './payments.js';
+import { p2mr, p2tr } from './payments.js';
 import { classifyOutputScript, taggedHash, tapLeafHash, xmssLeafScript } from './script.js';
 import {
   p2mrControlBlock,
@@ -414,11 +419,16 @@ function prepareP2mrSpend(
   return { leaf, controlBlock };
 }
 
+type InputValueOptions = Pick<
+  P2mrSignOptions,
+  'prevouts' | 'previousTransactions' | 'trustPrevouts'
+>;
+
 /**
  * Checks the input values of an all-P2MR spend against the previous
  * transactions, or refuses unless trustPrevouts is set.
  */
-function checkInputValues(tx: Transaction, options: P2mrSignOptions, sighashType: number): void {
+function checkInputValues(tx: Transaction, options: InputValueOptions, sighashType: number): void {
   if (!coversInputValues(options.prevouts, sighashType) && options.trustPrevouts !== true) {
     if (options.previousTransactions === undefined) {
       throw new Error(
@@ -581,7 +591,7 @@ function checkTaprootScriptPathInput(
   }
   const kind = classifyOutputScript(prevScript);
   if (kind === 'p2mr') {
-    throw new Error('P2MR inputs are signed on the transaction with signP2mrInput, not in a PSBT');
+    throw new Error('P2MR PSBT inputs are signed with signP2mrScriptPathInput');
   }
   if (kind !== 'p2tr') {
     throw new Error(`PSBT input ${inputIndex} does not spend a P2TR output`);
@@ -608,4 +618,181 @@ function checkSignedInput(psbt: Psbt, inputIndex: number): void {
   if (!valid) {
     throw new Error(`invalid tapscript signature for PSBT input ${inputIndex}`);
   }
+}
+
+export interface P2mrScriptPathInputOptions {
+  tree: ScriptTree;
+  leafIndex: number;
+  value: bigint;
+  sighashType?: number;
+  /**
+   * The transaction that created the spent output, stored as the input's
+   * nonWitnessUtxo. Signers need it for every input when every input is
+   * P2MR.
+   */
+  previousTransaction?: Transaction;
+}
+
+/**
+ * Adds P2MR script-path metadata to a PSBT input: witness UTXO, the chosen
+ * leaf keyed by its P2MR control block, the sighash type when it is not
+ * SIGHASH_DEFAULT, and the previous transaction when one is given. There is
+ * no internal key or Merkle root, since the output commits to the root
+ * directly.
+ */
+export function prepareP2mrScriptPathInput(
+  psbt: Psbt,
+  inputIndex: number,
+  options: P2mrScriptPathInputOptions,
+): void {
+  const txInput = psbt.txInputs[inputIndex];
+  if (!Number.isInteger(inputIndex) || txInput === undefined) {
+    throw new RangeError(`PSBT input index ${inputIndex} is out of range`);
+  }
+  assertValue(options.value, 'input value');
+  const sighashType = options.sighashType ?? Transaction.SIGHASH_DEFAULT;
+  assertTaprootSighashType(sighashType);
+  const leaf = options.tree.leaves[options.leafIndex];
+  if (leaf === undefined) {
+    throw new RangeError(`script tree has no leaf ${options.leafIndex}`);
+  }
+  const { output } = p2mr({ merkleRoot: options.tree.root });
+  const previous = options.previousTransaction;
+  if (previous !== undefined) {
+    const spent = previous.outs[txInput.index];
+    if (!equalBytes(previous.getHash(), txInput.hash)) {
+      throw new Error(`the previous transaction is not the one PSBT input ${inputIndex} spends`);
+    }
+    if (spent === undefined || spent.value !== options.value || !equalBytes(spent.script, output)) {
+      throw new Error(`the previous transaction does not pay this P2MR output and value`);
+    }
+    psbt.updateInput(inputIndex, { nonWitnessUtxo: previous.toBuffer() });
+  }
+  psbt.updateInput(inputIndex, {
+    witnessUtxo: { script: output, value: options.value },
+    tapLeafScript: [
+      {
+        leafVersion: leaf.leafVersion,
+        script: leaf.script,
+        controlBlock: p2mrControlBlock(options.tree, options.leafIndex),
+      },
+    ],
+  });
+  if (sighashType !== Transaction.SIGHASH_DEFAULT) {
+    psbt.updateInput(inputIndex, { sighashType });
+  }
+}
+
+export interface P2mrPsbtSignOptions {
+  /** Sign without checking input values against each input's nonWitnessUtxo. */
+  trustPrevouts?: boolean;
+}
+
+/**
+ * Signs a prepared P2MR script-path PSBT input for one leaf and adds the
+ * tap script signature. The leaf must be in the input's tapLeafScript, open
+ * the witness UTXO, and push the signer's key. finalizePsbt then builds the
+ * witness, multi_a leaves included.
+ *
+ * When every input is P2MR, every input must carry its previous transaction
+ * (nonWitnessUtxo), and the values are checked against them before signing,
+ * unless trustPrevouts is set.
+ */
+export function signP2mrScriptPathInput(
+  psbt: Psbt,
+  inputIndex: number,
+  signer: TapscriptSigner,
+  leafHash: Uint8Array,
+  options: P2mrPsbtSignOptions = {},
+): void {
+  const { hash, sighashType } = checkP2mrScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash, options);
+  const signature = finishTapscriptSignature(
+    hash, signer.publicKey, signer.signSchnorr(hash), sighashType, inputIndex,
+  );
+  addTapScriptSig(psbt, inputIndex, signer.publicKey, leafHash, signature);
+}
+
+/** signP2mrScriptPathInput for a signer that answers asynchronously. */
+export async function signP2mrScriptPathInputAsync(
+  psbt: Psbt,
+  inputIndex: number,
+  signer: TapscriptSignerAsync,
+  leafHash: Uint8Array,
+  options: P2mrPsbtSignOptions = {},
+): Promise<void> {
+  const { hash, sighashType } = checkP2mrScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash, options);
+  const signature = finishTapscriptSignature(
+    hash, signer.publicKey, await signer.signSchnorr(hash), sighashType, inputIndex,
+  );
+  addTapScriptSig(psbt, inputIndex, signer.publicKey, leafHash, signature);
+}
+
+// bitcoinjs computes BIP341's message and Pearl's is NewTxSigHashes', so the
+// sighash is computed here and only the signature is handed to bitcoinjs.
+function addTapScriptSig(
+  psbt: Psbt,
+  inputIndex: number,
+  publicKey: Uint8Array,
+  leafHash: Uint8Array,
+  signature: Uint8Array,
+): void {
+  psbt.updateInput(inputIndex, {
+    tapScriptSig: [{ pubkey: Uint8Array.from(xOnly(publicKey)), leafHash: Uint8Array.from(leafHash), signature }],
+  });
+}
+
+function checkP2mrScriptPathInput(
+  psbt: Psbt,
+  inputIndex: number,
+  publicKey: Uint8Array,
+  leafHash: Uint8Array,
+  options: P2mrPsbtSignOptions,
+): { hash: Uint8Array; sighashType: number } {
+  const input = psbt.data.inputs[inputIndex];
+  if (!Number.isInteger(inputIndex) || input === undefined) {
+    throw new RangeError(`PSBT input index ${inputIndex} is out of range`);
+  }
+  const prevScript = input.witnessUtxo?.script;
+  if (prevScript === undefined) {
+    throw new Error(`PSBT input ${inputIndex} has no witness UTXO`);
+  }
+  if (classifyOutputScript(prevScript) !== 'p2mr') {
+    throw new Error(`PSBT input ${inputIndex} does not spend a P2MR output`);
+  }
+  const leaf = (input.tapLeafScript ?? []).find((item) =>
+    equalBytes(tapLeafHash(item.script, item.leafVersion), leafHash),
+  );
+  if (leaf === undefined) {
+    throw new Error(`PSBT input ${inputIndex} has no tap leaf with that hash`);
+  }
+  verifyP2mrLeafCommitment(leaf.controlBlock, prevScript.slice(2), leaf.script);
+  if (!scriptPushesKey(leaf.script, xOnly(publicKey))) {
+    throw new Error('the leaf script does not contain the signer key');
+  }
+  const sighashType = input.sighashType ?? Transaction.SIGHASH_DEFAULT;
+  assertTaprootSighashType(sighashType);
+
+  const tx = Transaction.fromBuffer(psbt.data.globalMap.unsignedTx.toBuffer());
+  const previous = psbt.data.inputs.map((item) =>
+    item.nonWitnessUtxo === undefined ? undefined : Transaction.fromBuffer(item.nonWitnessUtxo),
+  );
+  const prevouts = tx.ins.map((txInput, index): Prevout => {
+    const utxo = psbt.data.inputs[index]!.witnessUtxo ?? previous[index]?.outs[txInput.index];
+    if (utxo === undefined) {
+      throw new Error(`PSBT input ${index} has no UTXO to sign against`);
+    }
+    return { script: utxo.script, value: utxo.value };
+  });
+  const values: InputValueOptions = { ...options, prevouts };
+  if (previous.every((item): item is Transaction => item !== undefined)) {
+    values.previousTransactions = previous;
+  } else if (!coversInputValues(prevouts, sighashType) && options.trustPrevouts !== true) {
+    throw new Error(
+      'this spend needs the previous transaction (nonWitnessUtxo) of every input to check ' +
+        'input values before signing; set trustPrevouts to skip the check',
+    );
+  }
+  checkInputValues(tx, values, sighashType);
+  const hash = tapscriptSighash(tx, inputIndex, prevouts, leafHash, sighashType);
+  return { hash, sighashType };
 }

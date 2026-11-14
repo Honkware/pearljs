@@ -6,7 +6,7 @@ import { Psbt, Transaction } from 'bitcoinjs-lib';
 import { MAX_GRAIN } from './amount.js';
 import { toOutputScript } from './address.js';
 import { multiAStack, parseMultiA } from './multia.js';
-import { tapLeafHash } from './script.js';
+import { classifyOutputScript, tapLeafHash } from './script.js';
 import type { PearlNetwork } from './networks.js';
 
 export { Psbt, Transaction };
@@ -85,14 +85,15 @@ export function createPsbt(tx: Transaction): Psbt {
 
 /**
  * Finalizes every input and extracts the transaction. Script-path inputs
- * spending a multi_a leaf are finalized like Pearl's psbt.Finalize, since
- * bitcoinjs leaves no empty item for keys that did not sign and Pearl
- * rejects that witness; other inputs use bitcoinjs's finalizers.
+ * spending a multi_a leaf, and all P2MR script-path inputs, are finalized
+ * like Pearl's psbt.Finalize, since bitcoinjs leaves no empty item for keys
+ * that did not sign and Pearl rejects that witness; other inputs use
+ * bitcoinjs's finalizers.
  */
 export function finalizePsbt(psbt: Psbt): Transaction {
   psbt.data.inputs.forEach((input, index) => {
     if (input.finalScriptSig !== undefined || input.finalScriptWitness !== undefined) return;
-    const witness = multiAWitness(input);
+    const witness = pearlScriptPathWitness(input);
     if (witness === null) {
       psbt.finalizeInput(index);
     } else {
@@ -104,10 +105,11 @@ export function finalizePsbt(psbt: Psbt): Transaction {
 
 /**
  * The full witness for a script-path input whose signatures are for a
- * multi_a leaf, or null when the input is anything else. As in Pearl, all
- * signatures must be for the same leaf.
+ * multi_a leaf or that spends a P2MR output, or null when the input is
+ * anything else. As in Pearl, all signatures must be for the same leaf, and
+ * a P2MR leaf that is not multi_a takes them in PSBT order.
  */
-function multiAWitness(input: PsbtInput): Uint8Array[] | null {
+function pearlScriptPathWitness(input: PsbtInput): Uint8Array[] | null {
   const signatures = input.tapScriptSig ?? [];
   if (input.tapKeySig !== undefined || signatures.length === 0) return null;
   const target = toHex(signatures[0]!.leafHash);
@@ -119,7 +121,11 @@ function multiAWitness(input: PsbtInput): Uint8Array[] | null {
     throw new Error('no tap leaf script matches the script-path signatures');
   }
   const multiA = parseMultiA(leaf.script);
-  if (multiA === null) return null;
+  if (multiA === null) {
+    const prevScript = input.witnessUtxo?.script;
+    if (prevScript === undefined || classifyOutputScript(prevScript) !== 'p2mr') return null;
+    return [...signatures.map((sig) => sig.signature), leaf.script, leaf.controlBlock];
+  }
   const byKey = new Map(signatures.map((sig) => [toHex(sig.pubkey), sig.signature]));
   return [...multiAStack(multiA, byKey), leaf.script, leaf.controlBlock];
 }

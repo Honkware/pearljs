@@ -271,20 +271,6 @@ describe('P2MR spends', () => {
     }
   });
 
-  it('refuses P2MR inputs in a PSBT', () => {
-    const expected = spendVector('p2mr-1-leaf-default');
-    const tree = keyTree(1);
-    const psbt = createPsbt(parseTransaction(expected.unsignedTxHex));
-    psbt.updateInput(0, {
-      witnessUtxo: { script: hexToBytes(expected.prevScript), value: BigInt(expected.value) },
-      tapLeafScript: [
-        { leafVersion: 0xc0, script: tree.leaves[0]!.script, controlBlock: p2mrControlBlock(tree, 0) },
-      ],
-    });
-    expect(() => account.signScriptPathInput(psbt, 0, { index: 0, leafHash: tree.leaves[0]!.leafHash }))
-      .toThrow('signP2mrInput');
-  });
-
   it('refuses a tree the prevout does not commit to', () => {
     const expected = spendVector('p2mr-3-leaves-middle-all-anyonecanpay');
     const tx = parseTransaction(expected.unsignedTxHex);

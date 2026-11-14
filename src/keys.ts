@@ -13,12 +13,14 @@ import { fromOutputScript } from './address.js';
 import type { PearlNetwork } from './networks.js';
 import { signMessage } from './message.js';
 import { p2tr } from './payments.js';
+import { classifyOutputScript } from './script.js';
 import {
   assertTaprootSighashType as assertSighashType,
   signP2mrInput,
+  signP2mrScriptPathInput,
   signTaprootScriptPathInput,
 } from './scriptpath.js';
-import type { P2mrSignOptions } from './scriptpath.js';
+import type { P2mrPsbtSignOptions, P2mrSignOptions } from './scriptpath.js';
 
 const bip32 = BIP32Factory(ecc);
 
@@ -79,7 +81,8 @@ export interface PearlSignOptions {
   change?: boolean;
 }
 
-export interface PearlScriptPathSignOptions {
+/** trustPrevouts applies to P2MR inputs only. */
+export interface PearlScriptPathSignOptions extends P2mrPsbtSignOptions {
   index: number;
   change?: boolean;
   /** Hash of the tap leaf to sign, from assembleScriptTree. */
@@ -103,7 +106,10 @@ export interface PearlSigningAccount {
   deriveAddress(index: number, change?: boolean): string;
   prepareInput(psbt: Psbt, inputIndex: number, options: PearlInputOptions): void;
   signInput(psbt: Psbt, inputIndex: number, options: PearlSignOptions): void;
-  /** Signs a P2TR script-path PSBT input; see signTaprootScriptPathInput. */
+  /**
+   * Signs a P2TR or P2MR script-path PSBT input; see
+   * signTaprootScriptPathInput and signP2mrScriptPathInput.
+   */
   signScriptPathInput(psbt: Psbt, inputIndex: number, options: PearlScriptPathSignOptions): void;
   /** Signs a P2MR input and sets its witness; see signP2mrInput. */
   signP2mrInput(tx: Transaction, inputIndex: number, options: PearlP2mrSignOptions): void;
@@ -331,7 +337,12 @@ export function deriveSigningAccountFromSeed(
     ): void {
       assertInputIndex(psbt, inputIndex);
       const child = deriveChild(options.index, options.change ?? false);
-      signTaprootScriptPathInput(psbt, inputIndex, child, options.leafHash);
+      const prevScript = psbt.data.inputs[inputIndex]!.witnessUtxo?.script;
+      if (prevScript !== undefined && classifyOutputScript(prevScript) === 'p2mr') {
+        signP2mrScriptPathInput(psbt, inputIndex, child, options.leafHash, options);
+      } else {
+        signTaprootScriptPathInput(psbt, inputIndex, child, options.leafHash);
+      }
     },
     signP2mrInput(tx: Transaction, inputIndex: number, options: PearlP2mrSignOptions): void {
       const child = deriveChild(options.index, options.change ?? false);
