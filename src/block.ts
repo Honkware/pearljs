@@ -86,7 +86,13 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
 
 class Reader {
   offset = 0;
-  constructor(private readonly bytes: Uint8Array) {}
+  private readonly bytes: Uint8Array;
+
+  constructor(bytes: Uint8Array) {
+    // A plain view, so take() copies even for a Node Buffer, whose slice()
+    // shares memory and whose .buffer can be a pool other data lives in.
+    this.bytes = new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  }
 
   take(length: number): Uint8Array {
     if (this.offset + length > this.bytes.length) {

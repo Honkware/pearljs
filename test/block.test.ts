@@ -77,6 +77,14 @@ describe('Pearl blocks', () => {
     }
   });
 
+  it('parses a block held in a Node Buffer', () => {
+    // Buffer.from(hex) is what fetching a block over RPC usually produces.
+    for (const expected of vectors.blocks) {
+      const fromBuffer = parseBlock(Buffer.from(expected.hex, 'hex'));
+      expect(bytesToHex(serializeBlock(fromBuffer))).toBe(expected.hex);
+    }
+  });
+
   it('rejects bytes after the last transaction', () => {
     const raw = hexToBytes(vectors.blocks.find((item) => item.name === 'v1-one-spend')!.hex);
     expect(() => parseBlock(Uint8Array.from([...raw, 0x00]))).toThrow('unexpected bytes');
