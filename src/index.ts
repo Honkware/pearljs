@@ -26,4 +26,5 @@ export * from './scripttree.js';
 export * from './sweep.js';
 export * from './transaction.js';
 export * from './wif.js';
+export * from './ws.js';
 export * from './xmss.js';
