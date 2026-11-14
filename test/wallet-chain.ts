@@ -312,15 +312,15 @@ export class FakeChain implements WalletBackend, TransactionSource {
       const parent = this.#find(parentId);
       if (parent === null) {
         if (external) continue;
-        throw new PearlRpcError('rpc', 'sendrawtransaction', `missing inputs: ${parentId}:${input.index}`, { code: -25 });
+        throw new PearlRpcError('rpc', 'sendrawtransaction', `missing inputs: ${parentId}:${input.index}`, { rpcCode: -25 });
       }
-      if (parent.tx.outs[input.index] === undefined) throw new PearlRpcError('rpc', 'sendrawtransaction', 'output does not exist', { code: -25 });
+      if (parent.tx.outs[input.index] === undefined) throw new PearlRpcError('rpc', 'sendrawtransaction', 'output does not exist', { rpcCode: -25 });
       const spender = spent.get(key(parentId, input.index));
       if (spender === undefined) continue;
       const other = this.mempool.get(spender);
-      if (other === undefined) throw new PearlRpcError('rpc', 'sendrawtransaction', `output already spent: ${parentId}:${input.index}`, { code: -26 });
+      if (other === undefined) throw new PearlRpcError('rpc', 'sendrawtransaction', `output already spent: ${parentId}:${input.index}`, { rpcCode: -26 });
       if (!signalsReplacement(other) || this.#fee(tx) <= this.#fee(other)) {
-        throw new PearlRpcError('rpc', 'sendrawtransaction', `output already spent in mempool: ${parentId}:${input.index}`, { code: -26 });
+        throw new PearlRpcError('rpc', 'sendrawtransaction', `output already spent in mempool: ${parentId}:${input.index}`, { rpcCode: -26 });
       }
       evict.add(spender);
     }

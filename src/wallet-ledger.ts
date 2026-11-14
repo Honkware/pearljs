@@ -18,7 +18,9 @@
 
 import type { WalletBalance } from './backend.js';
 import type { BlockRef } from './client.js';
+import { confirmationsFromHeight } from './coinselect.js';
 import type { Utxo } from './coinselect.js';
+import { toHex } from './internal/bytes.js';
 import type { Transaction } from './transaction.js';
 
 /** Who in the wallet an output belongs to. */
@@ -111,7 +113,7 @@ export interface Ledger {
 export const outpointKey = (txid: string, vout: number): string => `${txid}:${vout}`;
 
 export function prevTxid(input: Transaction['ins'][number]): string {
-  return Array.from(Uint8Array.from(input.hash).reverse(), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return toHex(Uint8Array.from(input.hash).reverse());
 }
 
 /** Statuses with inactive spend chains followed to a fixed point. */
@@ -166,7 +168,7 @@ export function computeLedger(
   for (const [txid, entry] of txs) {
     if (!active(status.get(txid))) continue;
     const coinbase = entry.tx.isCoinbase();
-    const confirmations = entry.block === null || entry.block.height > context.tipHeight ? 0 : context.tipHeight - entry.block.height + 1;
+    const confirmations = confirmationsFromHeight(entry.block?.height, context.tipHeight);
     entry.tx.outs.forEach((output, vout) => {
       const key = outpointKey(txid, vout);
       if (spentBy.has(key) || context.externalSpends.has(key)) return;
@@ -242,7 +244,7 @@ export function computeHistory(
     }
     if (entry.prevouts.length !== entry.tx.ins.length) known = false;
     const direction = sent === 0n ? 'incoming' : outputsOurs ? 'self' : 'outgoing';
-    const confirmations = entry.block === null || entry.block.height > tipHeight ? 0 : tipHeight - entry.block.height + 1;
+    const confirmations = confirmationsFromHeight(entry.block?.height, tipHeight);
     entries.push({
       txid,
       status: status.get(txid) ?? 'pending',

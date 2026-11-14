@@ -68,6 +68,39 @@ const programs: Record<string, string> = {
     const utxo = { txid: '11'.repeat(32), vout: 0, value: 100000n, script: toOutputScript(account.deriveAddress(0), regtest), confirmations: 1, index: 0 };
     const paid = payFromAccount(account, { network: regtest, utxos: [utxo], recipients: [{ address: account.deriveAddress(1), amount: 'max' }], feeRate: 1000n });
     console.log(paid.txid);`,
+  // A wallet that syncs one payment and spends it, signing through a PSBT, from the wallet subpath alone.
+  wallet: `
+    import { addInputByTxid } from './src/builder.ts';
+    import { deriveAccountFromSeed } from './src/keys.ts';
+    import { regtest } from './src/networks.ts';
+    import { createMemoryStore } from './src/store.ts';
+    import { createTransaction } from './src/transaction.ts';
+    import { toOutputScript } from './src/address.ts';
+    import { PearlWallet } from './src/wallet.ts';
+    const seed = ${bytes(seed)};
+    const address = deriveAccountFromSeed(seed, regtest).deriveAddress(0);
+    const funding = createTransaction(2);
+    addInputByTxid(funding, '22'.repeat(32), 0);
+    funding.addOutput(toOutputScript(address, regtest), 100000n);
+    const txid = funding.getId();
+    const block = { height: 1, hash: '33'.repeat(32) };
+    const backend = {
+      network: regtest,
+      getTip: async () => block,
+      getHistory: async (a) => (a === address ? [{ txid, block, received: 100000n }] : []),
+      getAddressActivity: async () => [],
+      getTransaction: async (id) => (id === txid ? { txid, block } : null),
+      getRawTransaction: async (id) => (id === txid ? funding.toHex() : null),
+      getUtxos: async () => [{ txid, vout: 0, value: 100000n, script: toOutputScript(address, regtest), address, confirmations: 1, coinbase: false }],
+      getBalance: async () => ({ confirmed: 100000n, unconfirmed: 0n, immature: 0n }),
+      getSpendStatus: async () => ({ status: 'unspent', confirmations: 1 }),
+      estimateFeeRate: async () => 1000n,
+      broadcast: async () => 'ok',
+    };
+    const wallet = await PearlWallet.create({ store: createMemoryStore(), backend, transactions: backend, seed, passphrase: 'p', kdf: { N: 1024 }, gapLimit: 5 });
+    await wallet.sync();
+    const sent = await wallet.send({ recipients: [{ address: deriveAccountFromSeed(seed, regtest).deriveAddress(9), amount: 'max' }] });
+    console.log(sent.txid);`,
 };
 
 describe('subpaths that reach bitcoinjs Taproot code', () => {

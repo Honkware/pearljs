@@ -110,6 +110,8 @@ export type PearlErrorCode =
   | 'XMSS_STORE_INVALID'
   | 'XMSS_KEY_INVALID'
   | 'XMSS_SIGNATURE_INVALID'
+  | 'XMSS_KEY_RESTORED'
+  | 'XMSS_KEY_BEHIND'
   // Messages
   | 'MESSAGE_INVALID'
   // RPC and backends
@@ -121,7 +123,35 @@ export type PearlErrorCode =
   | 'BACKEND_UNSUPPORTED'
   | 'BACKEND_RESPONSE'
   // Invoices
-  | 'INVOICE_INVALID';
+  | 'INVOICE_INVALID'
+  // Wallet stores
+  | 'STORE_LOCKED'
+  | 'STORE_NOT_FOUND'
+  | 'STORE_EXISTS'
+  | 'STORE_INVALID'
+  | 'STORE_CLOSED'
+  | 'STORE_UNAVAILABLE'
+  // Keystore
+  | 'KEYSTORE_BAD_PASSPHRASE'
+  | 'KEYSTORE_TAMPERED'
+  | 'KEYSTORE_INVALID'
+  | 'KEYSTORE_LOCKED'
+  | 'KEYSTORE_NO_SECRET'
+  // Wallet
+  | 'WALLET_LOCKED'
+  | 'WALLET_WATCH_ONLY'
+  | 'WALLET_NOT_FOUND'
+  | 'WALLET_EXISTS'
+  | 'WALLET_WRONG_NETWORK'
+  | 'WALLET_SCHEMA'
+  | 'WALLET_UNKNOWN'
+  | 'WALLET_DUPLICATE'
+  | 'WALLET_GAP_LIMIT'
+  | 'WALLET_NOT_REPLACEABLE'
+  | 'WALLET_BROADCAST_REFUSED'
+  | 'WALLET_BROADCAST_UNCERTAIN'
+  | 'WALLET_BACKUP_INVALID'
+  | 'WALLET_CLOSED';
 
 /** What toJSON returns and fromJSON reads. */
 export interface PearlErrorJson {
@@ -180,6 +210,21 @@ export class SigningError extends PearlError {
 /** An XMSS key, signature or index store problem. */
 export class XmssError extends PearlError {
   override name = 'XmssError';
+}
+
+/** A wallet store that is locked, missing, damaged or closed. */
+export class StoreError extends PearlError {
+  override name = 'StoreError';
+}
+
+/** A keystore that is locked, damaged, or opened with the wrong passphrase. Never carries a passphrase or a secret. */
+export class KeystoreError extends PearlError {
+  override name = 'KeystoreError';
+}
+
+/** A wallet operation refused: locked, watch-only, unknown item, gap limit, a broadcast that failed. */
+export class WalletError extends PearlError {
+  override name = 'WalletError';
 }
 
 /**

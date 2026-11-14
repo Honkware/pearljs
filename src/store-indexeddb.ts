@@ -14,7 +14,8 @@
  * @module
  */
 
-import { checkOperations, copyJson } from './store.js';
+import { StoreError } from './errors.js';
+import { checkOperations, copyJson } from './internal/store-ops.js';
 import type { JsonValue, WalletStore } from './store.js';
 
 const OBJECT_STORE = 'entries';
@@ -30,15 +31,15 @@ export interface IndexedDbStoreOptions {
 function request<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error('IndexedDB request failed'));
+    req.onerror = () => reject(req.error ?? new StoreError('STORE_UNAVAILABLE', 'IndexedDB request failed'));
   });
 }
 
 function completion(tx: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
-    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB transaction aborted'));
-    tx.onerror = () => reject(tx.error ?? new Error('IndexedDB transaction failed'));
+    tx.onabort = () => reject(tx.error ?? new StoreError('STORE_UNAVAILABLE', 'IndexedDB transaction aborted'));
+    tx.onerror = () => reject(tx.error ?? new StoreError('STORE_UNAVAILABLE', 'IndexedDB transaction failed'));
   });
 }
 
@@ -65,15 +66,15 @@ async function holdLock(name: string): Promise<(() => void) | null> {
 
 /**
  * Opens (creating if needed) the IndexedDB database `name` as a wallet store
- * and takes its tab lock. Rejects when IndexedDB is missing and when another
- * tab or worker has the wallet open.
+ * and takes its tab lock. Rejects with StoreError: STORE_UNAVAILABLE without
+ * IndexedDB, STORE_LOCKED when another tab or worker has the wallet open.
  */
 export async function openIndexedDbStore(name: string, options: IndexedDbStoreOptions = {}): Promise<WalletStore> {
   if (typeof name !== 'string' || name.length === 0) throw new TypeError('database name must be a non-empty string');
   const factory = options.indexedDB ?? globalThis.indexedDB;
-  if (factory === undefined) throw new Error('IndexedDB is not available here; use createMemoryStore, or createFileStore under Node');
+  if (factory === undefined) throw new StoreError('STORE_UNAVAILABLE', 'IndexedDB is not available here; use createMemoryStore, or createFileStore under Node');
   const release = options.unlocked === true ? () => undefined : await holdLock(`pearljs-wallet:${name}`);
-  if (release === null) throw new Error(`wallet ${name} is open in another tab or worker; two writers must never share a wallet`);
+  if (release === null) throw new StoreError('STORE_LOCKED', `wallet ${name} is open in another tab or worker; two writers must never share a wallet`);
 
   let db: IDBDatabase;
   try {
@@ -88,7 +89,7 @@ export async function openIndexedDbStore(name: string, options: IndexedDbStoreOp
   }
   let open = true;
   const ensureOpen = (): void => {
-    if (!open) throw new Error('this wallet store is closed');
+    if (!open) throw new StoreError('STORE_CLOSED', 'this wallet store is closed');
   };
   const transaction = (mode: IDBTransactionMode): IDBTransaction =>
     db.transaction(OBJECT_STORE, mode, mode === 'readwrite' ? { durability: 'strict' } : undefined);

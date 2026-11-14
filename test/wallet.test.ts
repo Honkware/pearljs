@@ -129,7 +129,7 @@ describe('wallet: sending', () => {
     const before = wallet.balance();
     chain.broadcast = async () => {
       const { PearlRpcError } = await import('../src/index.js');
-      throw new PearlRpcError('rpc', 'sendrawtransaction', 'rejected', { code: -26 });
+      throw new PearlRpcError('rpc', 'sendrawtransaction', 'rejected', { rpcCode: -26 });
     };
     await expect(wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n })).rejects.toThrow('the node refused');
     expect(wallet.balance()).toEqual(before);

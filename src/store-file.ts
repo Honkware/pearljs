@@ -28,7 +28,8 @@
 import { closeSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { dirname } from 'node:path';
-import { applyOperations, checkOperations, copyJson, listEntries } from './store.js';
+import { StoreError } from './errors.js';
+import { applyOperations, checkOperations, copyJson, listEntries } from './internal/store-ops.js';
 import type { JsonValue, StoreOperation, WalletStore } from './store.js';
 
 const FORMAT = 'pearljs-wallet-store';
@@ -121,7 +122,8 @@ function takeLock(path: string, breakStale: boolean): void {
     return;
   }
   const who = owner === null ? 'another store' : `process ${owner.pid} on ${owner.host}`;
-  throw new Error(
+  throw new StoreError(
+    'STORE_LOCKED',
     `wallet store ${path} is locked by ${who}. Two writers must never share a wallet` +
       (stale ? `; that process is no longer running, so open with breakStaleLock: true to take the lock over` : `; if that process is gone, delete ${lockPath}`),
   );
@@ -133,19 +135,19 @@ function readEntries(path: string): Map<string, JsonValue> {
     parsed = JSON.parse(readFileSync(path, 'utf8'));
   } catch (error) {
     if (errnoOf(error) === 'ENOENT') throw error;
-    throw new Error(`wallet store ${path} is not valid JSON; refusing to guess its contents`);
+    throw new StoreError('STORE_INVALID', `wallet store ${path} is not valid JSON; refusing to guess its contents`);
   }
   const file = parsed as { format?: unknown; version?: unknown; entries?: unknown } | null;
-  if (file === null || typeof file !== 'object' || file.format !== FORMAT) throw new Error(`${path} is not a pearljs wallet store`);
-  if (file.version !== VERSION) throw new Error(`wallet store ${path} has format version ${String(file.version)}; this pearljs reads version ${VERSION}`);
-  if (file.entries === null || typeof file.entries !== 'object' || Array.isArray(file.entries)) throw new Error(`wallet store ${path} has no entries`);
+  if (file === null || typeof file !== 'object' || file.format !== FORMAT) throw new StoreError('STORE_INVALID', `${path} is not a pearljs wallet store`);
+  if (file.version !== VERSION) throw new StoreError('STORE_INVALID', `wallet store ${path} has format version ${String(file.version)}; this pearljs reads version ${VERSION}`);
+  if (file.entries === null || typeof file.entries !== 'object' || Array.isArray(file.entries)) throw new StoreError('STORE_INVALID', `wallet store ${path} has no entries`);
   return new Map(Object.entries(file.entries as Record<string, JsonValue>));
 }
 
 /**
- * Opens the wallet store at path and locks it. Throws when the file is
- * locked, when it does not exist and create is not set, when it exists and
- * create is set, and when it cannot be read as a store.
+ * Opens the wallet store at path and locks it. Throws StoreError:
+ * STORE_LOCKED, STORE_NOT_FOUND without create, STORE_EXISTS with it, and
+ * STORE_INVALID for a file that cannot be read as a store.
  */
 export function createFileStore(path: string, options: FileStoreOptions = {}): FileStore {
   if (typeof path !== 'string' || path.length === 0) throw new TypeError('wallet store path must be a non-empty string');
@@ -192,14 +194,14 @@ export function createFileStore(path: string, options: FileStoreOptions = {}): F
     }
   } catch (error) {
     release();
-    if (errnoOf(error) === 'EEXIST') throw new Error(`wallet store ${path} already exists; open it without create`);
-    if (errnoOf(error) === 'ENOENT') throw new Error(`wallet store ${path} does not exist; pass create: true to start a new one`);
+    if (errnoOf(error) === 'EEXIST') throw new StoreError('STORE_EXISTS', `wallet store ${path} already exists; open it without create`);
+    if (errnoOf(error) === 'ENOENT') throw new StoreError('STORE_NOT_FOUND', `wallet store ${path} does not exist; pass create: true to start a new one`);
     throw error;
   }
   process.once('exit', release);
 
   const ensureOpen = (): void => {
-    if (!open) throw new Error('this wallet store is closed');
+    if (!open) throw new StoreError('STORE_CLOSED', 'this wallet store is closed');
   };
   const commit = (operations: readonly StoreOperation[]): void => {
     ensureOpen();

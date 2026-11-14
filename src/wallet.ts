@@ -23,8 +23,12 @@ import { encodeAddress, fromOutputScript, toOutputScript } from './address.js';
 import type { WalletBackend } from './backend.js';
 import { buildPayment, finalizePayment } from './builder.js';
 import type { Payment, Recipient } from './builder.js';
+import type { FeeRate } from './amount.js';
 import type { BlockRef } from './client.js';
-import { InsufficientFundsError } from './coinselect.js';
+import { KeystoreError, PearlError, PearlRpcError, PolicyError, SigningError, StoreError, WalletError, XmssError } from './errors.js';
+import { toHex } from './internal/bytes.js';
+import { decodeBigint, decodeHex, encodeBigint } from './internal/store-ops.js';
+import { InsufficientFundsError, confirmationsFromHeight } from './coinselect.js';
 import type { CoinSelectionStrategy } from './coinselect.js';
 import { deriveAccountFromSeed, deriveSigningAccountFromSeed, importWatchOnlyAccount } from './keys.js';
 import type { PearlAccount, PearlSigningAccount } from './keys.js';
@@ -44,9 +48,8 @@ import { sweepKey } from './sweep.js';
 import { parseTransaction, Transaction } from './transaction.js';
 import { decodeWif, keyPathAddress } from './wif.js';
 import type { BlockDetails, PearlWsClient } from './ws.js';
-import { createXmssSigner, xmssKeygen, XMSS_MAX_SIGNATURES, XMSS_SIGNATURE_LENGTH } from './xmss.js';
+import { createXmssSigner, xmssKeygen, XMSS_LAST_INDEX, XMSS_MAX_SIGNATURES, XMSS_SIGNATURE_LENGTH } from './xmss.js';
 import type { XmssIndexStore } from './xmss.js';
-import { decodeBigint, decodeHex, encodeBigint, encodeHex } from './store.js';
 import type { JsonValue, StoreOperation, WalletStore } from './store.js';
 import { computeHistory, computeLedger, outpointKey, prevTxid } from './wallet-ledger.js';
 import type { CoinOwner, HistoryEntry, Ledger, LedgerOwnership, LedgerTransaction, TransactionStatus, WalletCoin, WalletStateBalance } from './wallet-ledger.js';
@@ -178,7 +181,7 @@ export type CoinSource = { account: string } | { imported: string } | { xmss: st
 export interface SendOptions {
   recipients: readonly Recipient[];
   /** Grain per 1000 vbytes; the backend's estimate unless given. */
-  feeRate?: bigint;
+  feeRate?: FeeRate;
   /** The first signing account unless given. 'all' spends any signing account, imported key or XMSS key. */
   from?: CoinSource;
   /** Confirmations a coin needs. 1 unless given, as Oyster's sends use. */
@@ -348,7 +351,7 @@ function checkPositive(value: number, what: string): number {
 }
 
 function asRecord<T>(value: JsonValue | undefined, what: string): T {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error(`stored ${what} is not an object`);
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new StoreError('STORE_INVALID', `stored ${what} is not an object`);
   return value as unknown as T;
 }
 
@@ -358,7 +361,7 @@ function txToJson(entry: TxEntry): JsonValue {
     block: entry.block === null ? null : { height: entry.block.height, hash: entry.block.hash },
     status: entry.status,
     seenAt: entry.seenAt,
-    prevouts: entry.prevouts.map((prevout) => (prevout === null ? null : [encodeHex(prevout.script), encodeBigint(prevout.value)])),
+    prevouts: entry.prevouts.map((prevout) => (prevout === null ? null : [toHex(prevout.script), encodeBigint(prevout.value)])),
     broadcast: entry.broadcast,
     missing: entry.missing,
     label: entry.label ?? null,
@@ -381,7 +384,7 @@ function txFromJson(txid: string, value: JsonValue): TxEntry {
     changeOutput: number | null;
   }>(value, `transaction ${txid}`);
   const tx = parseTransaction(record.hex);
-  if (tx.getId() !== txid) throw new Error(`stored transaction ${txid} has another txid`);
+  if (tx.getId() !== txid) throw new StoreError('STORE_INVALID', `stored transaction ${txid} has another txid`);
   return {
     txid,
     tx,
@@ -420,15 +423,15 @@ function xmssTree(publicKeyHex: string): ScriptTree {
 // auxiliary randomness, as sweepKey makes it.
 function signKeyPath(tx: Transaction, inputIndex: number, privateKey: Uint8Array, prevouts: readonly { script: Uint8Array; value: bigint }[]): void {
   const publicKey = ecc.pointFromScalar(privateKey, true);
-  if (publicKey === null) throw new Error('imported key is not a valid private key');
+  if (publicKey === null) throw new PearlError('KEY_INVALID', 'imported key is not a valid private key');
   const even = publicKey[0] === 0x03 ? ecc.privateNegate(privateKey) : Uint8Array.from(privateKey);
   const tweaked = ecc.privateAdd(even, taggedHash('TapTweak', publicKey.slice(1)));
   even.fill(0);
-  if (tweaked === null) throw new Error('taproot tweak produced an invalid key');
+  if (tweaked === null) throw new PearlError('KEY_INVALID', 'taproot tweak produced an invalid key');
   try {
     const hash = tx.hashForWitnessV1(inputIndex, prevouts.map((p) => p.script), prevouts.map((p) => p.value), Transaction.SIGHASH_DEFAULT);
     const signature = ecc.signSchnorr(hash, tweaked, crypto.getRandomValues(new Uint8Array(32)));
-    if (!ecc.verifySchnorr(hash, prevouts[inputIndex]!.script.subarray(2), signature)) throw new Error(`invalid Taproot signature for input ${inputIndex}`);
+    if (!ecc.verifySchnorr(hash, prevouts[inputIndex]!.script.subarray(2), signature)) throw new SigningError('SIGNATURE_INVALID', `invalid Taproot signature for input ${inputIndex}`);
     tx.setWitness(inputIndex, [signature]);
   } finally {
     tweaked.fill(0);
@@ -490,7 +493,7 @@ export class PearlWallet {
    */
   static async create(options: CreateWalletOptions): Promise<PearlWallet> {
     const wallet = new PearlWallet(options);
-    if ((await options.store.list('')).length > 0) throw new Error('the store is not empty; open the wallet in it instead of creating one');
+    if ((await options.store.list('')).length > 0) throw new WalletError('WALLET_EXISTS', 'the store is not empty; open the wallet in it instead of creating one');
     const gapLimit = checkPositive(options.gapLimit ?? OYSTER_RECOVERY_WINDOW, 'gapLimit');
     const lookahead = checkPositive(options.lookahead ?? DEFAULT_LOOKAHEAD, 'lookahead');
     const reorgDepth = checkPositive(options.reorgDepth ?? DEFAULT_REORG_DEPTH, 'reorgDepth');
@@ -507,20 +510,20 @@ export class PearlWallet {
     wallet.#put('meta', wallet.#meta as unknown as JsonValue);
     if (options.watchOnly !== undefined) {
       if (options.passphrase !== undefined || options.mnemonic !== undefined || options.seed !== undefined) {
-        throw new Error('a watch-only wallet takes an extended public key and no secrets');
+        throw new WalletError('WALLET_WATCH_ONLY', 'a watch-only wallet takes an extended public key and no secrets');
       }
       const account = importWatchOnlyAccount(options.watchOnly, wallet.network);
       wallet.#addAccount({ id: 'watch-0', kind: 'xpub', number: null, xpub: account.extendedPublicKey(), label: null, receive: 0, change: 0 });
     } else {
-      if (options.passphrase === undefined) throw new Error('a wallet with keys needs a passphrase to encrypt them; pass watchOnly for a wallet without keys');
-      if (options.mnemonic !== undefined && options.seed !== undefined) throw new Error('give a mnemonic or a seed, not both');
+      if (options.passphrase === undefined) throw new KeystoreError('KEYSTORE_INVALID', 'a wallet with keys needs a passphrase to encrypt them; pass watchOnly for a wallet without keys');
+      if (options.mnemonic !== undefined && options.seed !== undefined) throw new PearlError('SEED_INVALID', 'give a mnemonic or a seed, not both');
       const keystore = await createKeystore(options.passphrase, options.kdf === undefined ? {} : { kdf: options.kdf });
       let seed: Uint8Array;
       if (options.seed !== undefined) {
         seed = Uint8Array.from(options.seed);
       } else {
         const mnemonic = normalizeMnemonic(options.mnemonic ?? generateMnemonic(24));
-        if (!validateMnemonic(mnemonic)) throw new Error('the mnemonic is not a valid BIP39 phrase');
+        if (!validateMnemonic(mnemonic)) throw new PearlError('MNEMONIC_INVALID', 'the mnemonic is not a valid BIP39 phrase');
         await keystore.addSecret('mnemonic', 'mnemonic', encoder.encode(mnemonic));
         seed = mnemonicToSeed(mnemonic, options.bip39Passphrase ?? '');
       }
@@ -542,12 +545,12 @@ export class PearlWallet {
   static async open(options: OpenWalletOptions): Promise<PearlWallet> {
     const wallet = new PearlWallet(options);
     const meta = await options.store.get('meta');
-    if (meta === undefined) throw new Error('the store holds no wallet; create or restore one');
+    if (meta === undefined) throw new WalletError('WALLET_NOT_FOUND', 'the store holds no wallet; create or restore one');
     const { version } = asRecord<MetaRecord>(meta, 'wallet metadata');
-    if (!Number.isSafeInteger(version)) throw new Error('stored wallet metadata has no schema version');
-    if (version > WALLET_SCHEMA_VERSION) throw new Error(`the wallet was written by a newer pearljs (schema ${version}); this one reads schema ${WALLET_SCHEMA_VERSION}`);
+    if (!Number.isSafeInteger(version)) throw new StoreError('STORE_INVALID', 'stored wallet metadata has no schema version');
+    if (version > WALLET_SCHEMA_VERSION) throw new WalletError('WALLET_SCHEMA', `the wallet was written by a newer pearljs (schema ${version}); this one reads schema ${WALLET_SCHEMA_VERSION}`);
     if (version < WALLET_SCHEMA_VERSION) {
-      if (options.migrate === undefined) throw new Error(`the wallet has schema ${version} and needs migrating to ${WALLET_SCHEMA_VERSION}; pass migrate`);
+      if (options.migrate === undefined) throw new WalletError('WALLET_SCHEMA', `the wallet has schema ${version} and needs migrating to ${WALLET_SCHEMA_VERSION}; pass migrate`);
       await options.migrate({ from: version, to: WALLET_SCHEMA_VERSION, store: options.store });
       const migrated = asRecord<MetaRecord>(await options.store.get('meta'), 'wallet metadata');
       await options.store.set('meta', { ...migrated, version: WALLET_SCHEMA_VERSION } as unknown as JsonValue);
@@ -564,15 +567,15 @@ export class PearlWallet {
    * have used. Run sync afterwards; the first one scans with the gap limit.
    */
   static async restore(options: RestoreWalletOptions): Promise<PearlWallet> {
-    if ((await options.store.list('')).length > 0) throw new Error('the store is not empty; restore into an empty store');
+    if ((await options.store.list('')).length > 0) throw new WalletError('WALLET_EXISTS', 'the store is not empty; restore into an empty store');
     const keystore = openKeystore(options.keystore);
     await keystore.unlock(options.passphrase);
     const operations: StoreOperation[] = [{ type: 'set', key: 'keystore', value: keystore.toJSON() as unknown as JsonValue }];
     const network = options.backend.network;
     if (options.backup !== undefined) {
       const backup = options.backup;
-      if (backup.format !== 'pearljs-wallet-backup' || backup.version !== 1) throw new Error('not a pearljs wallet backup');
-      if (backup.network !== network.name) throw new Error(`the backup is for ${backup.network}, the backend for ${network.name}`);
+      if (backup.format !== 'pearljs-wallet-backup' || backup.version !== 1) throw new WalletError('WALLET_BACKUP_INVALID', 'not a pearljs wallet backup');
+      if (backup.network !== network.name) throw new WalletError('WALLET_WRONG_NETWORK', `the backup is for ${backup.network}, the backend for ${network.name}`);
       for (const [key, value] of Object.entries(backup.entries)) {
         if (key === 'keystore') continue;
         const restored = key.startsWith('xmss:') ? { ...asRecord<XmssRecord>(value, key), frozen: 'restored' } : value;
@@ -680,7 +683,7 @@ export class PearlWallet {
   async addAccount(number: number, options: { label?: string } = {}): Promise<WalletAccount> {
     return this.#exclusive(async () => {
       const id = String(number);
-      if (this.#accounts.has(id)) throw new Error(`account ${id} already exists`);
+      if (this.#accounts.has(id)) throw new WalletError('WALLET_DUPLICATE', `account ${id} already exists`);
       const xpub = await this.#requireUnlocked().useSecret('seed', (seed) => deriveAccountFromSeed(seed, this.network, number).extendedPublicKey());
       this.#addAccount({ id, kind: 'seed', number, xpub, label: options.label ?? null, receive: 0, change: 0 });
       await this.#flush();
@@ -692,7 +695,7 @@ export class PearlWallet {
   async addWatchOnlyAccount(xpub: string, options: { label?: string } = {}): Promise<WalletAccount> {
     return this.#exclusive(async () => {
       const account = importWatchOnlyAccount(xpub, this.network);
-      if ([...this.#accounts.values()].some((record) => record.xpub === account.extendedPublicKey())) throw new Error('that account is already in the wallet');
+      if ([...this.#accounts.values()].some((record) => record.xpub === account.extendedPublicKey())) throw new WalletError('WALLET_DUPLICATE', 'that account is already in the wallet');
       let n = 0;
       while (this.#accounts.has(`watch-${n}`)) n += 1;
       const id = `watch-${n}`;
@@ -713,7 +716,8 @@ export class PearlWallet {
       const record = this.#account(options.account);
       const used = this.#lastUsed(record.id, false);
       if (record.receive - (used + 1) >= this.#meta.gapLimit) {
-        throw new Error(
+        throw new WalletError(
+          'WALLET_GAP_LIMIT',
           `account ${record.id} already has ${this.#meta.gapLimit} unused receive addresses in a row; ` +
             'a restore would not find payments past them. Reuse one of them (currentAddress) until one is paid',
         );
@@ -753,8 +757,8 @@ export class PearlWallet {
 
   async setLabel(address: string, label: string | null): Promise<void> {
     await this.#exclusive(async () => {
-      const owned = this.#owned.get(encodeHex(toOutputScript(address, this.network)));
-      if (owned === undefined || owned.owner.type !== 'account') throw new Error(`${address} is not an account address of this wallet`);
+      const owned = this.#owned.get(toHex(toOutputScript(address, this.network)));
+      if (owned === undefined || owned.owner.type !== 'account') throw new WalletError('WALLET_UNKNOWN', `${address} is not an account address of this wallet`);
       const { account, change, index } = owned.owner;
       const record = this.#addresses.get(address) ?? { account, change, index, label: null, issuedAt: this.#now() };
       this.#putAddress(address, { ...record, label });
@@ -765,7 +769,7 @@ export class PearlWallet {
   async setTransactionLabel(txid: string, label: string | null): Promise<void> {
     await this.#exclusive(async () => {
       const entry = this.#txs.get(txid);
-      if (entry === undefined) throw new Error(`transaction ${txid} is not in the wallet`);
+      if (entry === undefined) throw new WalletError('WALLET_UNKNOWN', `transaction ${txid} is not in the wallet`);
       if (label === null) delete entry.label;
       else entry.label = label;
       this.#putTx(entry);
@@ -780,7 +784,7 @@ export class PearlWallet {
       const { privateKey } = decodeWif(wif, this.network);
       const address = keyPathAddress(privateKey, this.network);
       privateKey.fill(0);
-      if (this.#imported.has(address)) throw new Error(`the key for ${address} is already imported`);
+      if (this.#imported.has(address)) throw new WalletError('WALLET_DUPLICATE', `the key for ${address} is already imported`);
       await keystore.addSecret(`wif:${address}`, 'wif', encoder.encode(wif));
       this.#imported.set(address, { address, label: options.label ?? null });
       this.#own(toOutputScript(address, this.network), { type: 'imported', id: address }, address);
@@ -803,9 +807,9 @@ export class PearlWallet {
     return this.#exclusive(async () => {
       const keystore = this.#requireUnlocked();
       const given = options.privateSeed !== undefined || options.publicSeed !== undefined;
-      if (given && (options.privateSeed === undefined || options.publicSeed === undefined)) throw new Error('give both XMSS seeds or neither');
+      if (given && (options.privateSeed === undefined || options.publicSeed === undefined)) throw new XmssError('XMSS_KEY_INVALID', 'give both XMSS seeds or neither');
       if (given && options.nextIndex === undefined) {
-        throw new Error('an imported XMSS key needs nextIndex, the first index it has never signed with; the wallet cannot learn it');
+        throw new XmssError('XMSS_KEY_INVALID', 'an imported XMSS key needs nextIndex, the first index it has never signed with; the wallet cannot learn it');
       }
       const next = options.nextIndex ?? 0;
       if (!Number.isSafeInteger(next) || next < 0 || next > XMSS_MAX_SIGNATURES) throw new RangeError(`nextIndex must be between 0 and ${XMSS_MAX_SIGNATURES}`);
@@ -819,8 +823,8 @@ export class PearlWallet {
       try {
         const pair = xmssKeygen(seeds.subarray(0, 64), seeds.subarray(64));
         pair.secretKey.fill(0);
-        const publicKey = encodeHex(pair.publicKey);
-        if (this.#xmss.has(publicKey)) throw new Error('that XMSS key is already in the wallet');
+        const publicKey = toHex(pair.publicKey);
+        if (this.#xmss.has(publicKey)) throw new WalletError('WALLET_DUPLICATE', 'that XMSS key is already in the wallet');
         await keystore.addSecret(`xmss:${publicKey}`, 'xmss', seeds);
         const record: XmssRecord = {
           publicKey,
@@ -856,11 +860,11 @@ export class PearlWallet {
   async burnXmssIndices(id: string, options: { nextIndex: number }): Promise<WalletXmssKey> {
     return this.#exclusive(async () => {
       const record = this.#xmss.get(id);
-      if (record === undefined) throw new Error(`no XMSS key ${id} in the wallet`);
+      if (record === undefined) throw new WalletError('WALLET_UNKNOWN', `no XMSS key ${id} in the wallet`);
       const { nextIndex } = options;
       if (!Number.isSafeInteger(nextIndex) || nextIndex > XMSS_MAX_SIGNATURES) throw new RangeError(`nextIndex must be an integer of at most ${XMSS_MAX_SIGNATURES}`);
-      if (nextIndex < record.next) throw new Error(`XMSS key ${id} is at index ${record.next}; an index never moves back`);
-      if (nextIndex <= record.seenOnChain) throw new Error(`XMSS key ${id} has signed with index ${record.seenOnChain} on chain; burn past it`);
+      if (nextIndex < record.next) throw new XmssError('XMSS_INDEX_REUSE', `XMSS key ${id} is at index ${record.next}; an index never moves back`);
+      if (nextIndex <= record.seenOnChain) throw new XmssError('XMSS_INDEX_REUSE', `XMSS key ${id} has signed with index ${record.seenOnChain} on chain; burn past it`);
       record.next = nextIndex;
       record.frozen = null;
       // Durable now, like a reservation.
@@ -912,7 +916,7 @@ export class PearlWallet {
     await this.#exclusive(async () => {
       const entry = this.#txs.get(outpoint.txid);
       const output = entry?.tx.outs[outpoint.vout];
-      if (output === undefined || this.#ownerOf(output.script) === undefined) throw new Error(`${outpoint.txid}:${outpoint.vout} is not an output of this wallet`);
+      if (output === undefined || this.#ownerOf(output.script) === undefined) throw new WalletError('WALLET_UNKNOWN', `${outpoint.txid}:${outpoint.vout} is not an output of this wallet`);
       const key = outpointKey(outpoint.txid, outpoint.vout);
       this.#locks.set(key, options.until ?? null);
       this.#put(`lock:${key}`, { until: options.until ?? null });
@@ -1090,25 +1094,25 @@ export class PearlWallet {
    * original input, and more inputs only if the change cannot cover the
    * fee. The fee is raised further if pearld's replacement rules need it.
    */
-  async bumpFee(txid: string, options: { feeRate: bigint }): Promise<SendResult> {
+  async bumpFee(txid: string, options: { feeRate: FeeRate }): Promise<SendResult> {
     return this.#exclusive(async (events) => {
       this.#requireUnlocked();
       const original = this.#txs.get(txid);
       const ledger = this.#ledger();
-      if (original === undefined || ledger.status.get(txid) !== 'pending') throw new Error(`transaction ${txid} is not a pending transaction of this wallet`);
-      if (original.changeOutput === null) throw new Error(`transaction ${txid} was not sent by this wallet`);
+      if (original === undefined || ledger.status.get(txid) !== 'pending') throw new WalletError('WALLET_NOT_REPLACEABLE', `transaction ${txid} is not a pending transaction of this wallet`);
+      if (original.changeOutput === null) throw new WalletError('WALLET_NOT_REPLACEABLE', `transaction ${txid} was not sent by this wallet`);
       if (!signalsReplacement(original.tx)) {
-        throw new Error(`transaction ${txid} did not signal replace-by-fee; speed it up with a child that spends its change instead`);
+        throw new WalletError('WALLET_NOT_REPLACEABLE', `transaction ${txid} did not signal replace-by-fee; speed it up with a child that spends its change instead`);
       }
       for (const [outpoint, spender] of ledger.spentBy) {
-        if (outpoint.startsWith(`${txid}:`)) throw new Error(`transaction ${spender} spends ${txid}; replacing ${txid} would evict it`);
+        if (outpoint.startsWith(`${txid}:`)) throw new WalletError('WALLET_NOT_REPLACEABLE', `transaction ${spender} spends ${txid}; replacing ${txid} would evict it`);
       }
       const originals: WalletCoin[] = original.tx.ins.map((input, i) => {
         const prevout = original.prevouts[i];
         const owned = prevout === null || prevout === undefined ? undefined : this.#ownerOf(prevout.script);
-        if (prevout === null || prevout === undefined || owned === undefined) throw new Error(`transaction ${txid} spends an output that is not this wallet's`);
+        if (prevout === null || prevout === undefined || owned === undefined) throw new WalletError('WALLET_NOT_REPLACEABLE', `transaction ${txid} spends an output that is not this wallet's`);
         const parent = this.#txs.get(prevTxid(input));
-        const confirmations = parent?.block === null || parent === undefined ? 0 : (this.#tip?.height ?? 0) - parent.block.height + 1;
+        const confirmations = confirmationsFromHeight(parent?.block?.height, this.#tip?.height ?? 0);
         return {
           txid: prevTxid(input),
           vout: input.index,
@@ -1116,7 +1120,7 @@ export class PearlWallet {
           script: prevout.script,
           address: owned.address,
           owner: owned.owner,
-          confirmations: Math.max(confirmations, 0),
+          confirmations,
           coinbase: parent?.tx.isCoinbase() ?? false,
           height: parent?.block?.height ?? null,
           locked: false,
@@ -1133,9 +1137,9 @@ export class PearlWallet {
       } else if (recipients.length === 1) {
         recipients[0]!.amount = 'max';
       } else {
-        throw new Error(`transaction ${txid} has no change output to take the higher fee from`);
+        throw new WalletError('WALLET_NOT_REPLACEABLE', `transaction ${txid} has no change output to take the higher fee from`);
       }
-      if (changeAddress === null && original.changeOutput >= 0) throw new Error(`the change of ${txid} is not this wallet's`);
+      if (changeAddress === null && original.changeOutput >= 0) throw new WalletError('WALLET_NOT_REPLACEABLE', `the change of ${txid} is not this wallet's`);
       // pearld refuses a replacement that adds unconfirmed inputs, and the original's own outputs vanish with it.
       const others = this.#spendable(this.#sourceOf(originals[0]!.owner)).filter((coin) => coin.txid !== txid && coin.confirmations >= 1);
       const originalFee = original.prevouts.reduce((sum, p) => sum + p!.value, 0n) - original.tx.outs.reduce((sum, o) => sum + o.value, 0n);
@@ -1164,7 +1168,7 @@ export class PearlWallet {
         feeRate = (needed * 1000n + BigInt(payment.vsize) - 1n) / BigInt(payment.vsize) + 1n;
         payment = undefined;
       }
-      if (payment === undefined) throw new Error(`could not reach the fee pearld needs to replace ${txid}`);
+      if (payment === undefined) throw new WalletError('WALLET_NOT_REPLACEABLE', `could not reach the fee pearld needs to replace ${txid}`);
       const result = await this.#signAndBroadcast(payment, { label: original.label, changeAddress, replaces: original }, events);
       return { ...result, replaces: txid };
     });
@@ -1175,13 +1179,13 @@ export class PearlWallet {
    * wallet's WIF, to a new receive address of the wallet. The key is used
    * once and not stored.
    */
-  async sweep(options: { wif: string; feeRate?: bigint; account?: string; label?: string }): Promise<SendResult> {
+  async sweep(options: { wif: string; feeRate?: FeeRate; account?: string; label?: string }): Promise<SendResult> {
     return this.#exclusive(async (events) => {
       const { privateKey } = decodeWif(options.wif, this.network);
       try {
         const source = keyPathAddress(privateKey, this.network);
         const utxos = await this.#backend.getUtxos([source]);
-        if (utxos.length === 0) throw new Error(`${source} holds nothing to sweep`);
+        if (utxos.length === 0) throw new PearlError('INSUFFICIENT_FUNDS', `${source} holds nothing to sweep`);
         const feeRate = options.feeRate ?? (await this.#backend.estimateFeeRate());
         const record = this.#account(options.account);
         const destination = this.#issue(record, false, options.label ?? 'sweep');
@@ -1213,7 +1217,7 @@ export class PearlWallet {
   async abandon(txid: string): Promise<void> {
     await this.#exclusive(async (events) => {
       const entry = this.#txs.get(txid);
-      if (entry === undefined || entry.status !== 'active' || entry.block !== null) throw new Error(`transaction ${txid} is not a pending transaction of this wallet`);
+      if (entry === undefined || entry.status !== 'active' || entry.block !== null) throw new WalletError('WALLET_NOT_REPLACEABLE', `transaction ${txid} is not a pending transaction of this wallet`);
       entry.status = 'abandoned';
       this.#putTx(entry);
       events.push(['conflict', { txid, status: 'abandoned', by: null }]);
@@ -1268,8 +1272,8 @@ export class PearlWallet {
     const entries = await this.#store.list('');
     const map = new Map(entries);
     this.#meta = asRecord<MetaRecord>(map.get('meta'), 'wallet metadata');
-    if (this.#meta.format !== 'pearljs-wallet') throw new Error('the store does not hold a pearljs wallet');
-    if (this.#meta.network !== this.network.name) throw new Error(`the wallet is for ${this.#meta.network}, the backend for ${this.network.name}`);
+    if (this.#meta.format !== 'pearljs-wallet') throw new WalletError('WALLET_NOT_FOUND', 'the store does not hold a pearljs wallet');
+    if (this.#meta.network !== this.network.name) throw new WalletError('WALLET_WRONG_NETWORK', `the wallet is for ${this.#meta.network}, the backend for ${this.network.name}`);
     const keystore = map.get('keystore');
     this.#keystore = keystore === undefined ? null : this.#keystore?.locked === false && JSON.stringify(this.#keystore.toJSON()) === JSON.stringify(keystore) ? this.#keystore : openKeystore(keystore);
     this.#accounts.clear();
@@ -1346,7 +1350,7 @@ export class PearlWallet {
    */
   async #exclusive<T>(run: (events: PendingEvent[]) => Promise<T>): Promise<T> {
     const result = this.#queue.then(async () => {
-      if (this.#closed) throw new Error('this wallet is closed');
+      if (this.#closed) throw new WalletError('WALLET_CLOSED', 'this wallet is closed');
       const events: PendingEvent[] = [];
       const before = this.#ledger().balance;
       try {
@@ -1371,13 +1375,13 @@ export class PearlWallet {
   }
 
   #requireKeystore(): Keystore {
-    if (this.#keystore === null) throw new Error('this wallet is watch-only and has no keystore');
+    if (this.#keystore === null) throw new WalletError('WALLET_WATCH_ONLY', 'this wallet is watch-only and has no keystore');
     return this.#keystore;
   }
 
   #requireUnlocked(): Keystore {
     const keystore = this.#requireKeystore();
-    if (keystore.locked) throw new Error('the wallet is locked; unlock it with the passphrase first');
+    if (keystore.locked) throw new WalletError('WALLET_LOCKED', 'the wallet is locked; unlock it with the passphrase first');
     return keystore;
   }
 
@@ -1394,20 +1398,20 @@ export class PearlWallet {
 
   #account(id: string | undefined): AccountRecord {
     const record = id === undefined ? [...this.#accounts.values()][0] : this.#accounts.get(id);
-    if (record === undefined) throw new Error(id === undefined ? 'the wallet has no accounts' : `no account ${id} in the wallet`);
+    if (record === undefined) throw new WalletError('WALLET_UNKNOWN', id === undefined ? 'the wallet has no accounts' : `no account ${id} in the wallet`);
     return record;
   }
 
   #firstSigningAccount(): AccountRecord {
     const record = [...this.#accounts.values()].find((item) => item.kind === 'seed');
-    if (record === undefined) throw new Error('the wallet has no signing account');
+    if (record === undefined) throw new WalletError('WALLET_WATCH_ONLY', 'the wallet has no signing account');
     return record;
   }
 
   #changeAccount(from: CoinSource | undefined): AccountRecord {
     if (from !== undefined && from !== 'all' && 'account' in from) {
       const record = this.#account(from.account);
-      if (record.kind !== 'seed') throw new Error(`account ${record.id} is watch-only and cannot sign`);
+      if (record.kind !== 'seed') throw new WalletError('WALLET_WATCH_ONLY', `account ${record.id} is watch-only and cannot sign`);
       return record;
     }
     return this.#firstSigningAccount();
@@ -1433,11 +1437,11 @@ export class PearlWallet {
   }
 
   #own(script: Uint8Array, owner: CoinOwner, address: string): void {
-    this.#owned.set(encodeHex(script), { owner, address });
+    this.#owned.set(toHex(script), { owner, address });
   }
 
   #ownerOf(script: Uint8Array): { owner: CoinOwner; address: string } | undefined {
-    return this.#owned.get(encodeHex(script));
+    return this.#owned.get(toHex(script));
   }
 
   #issue(record: AccountRecord, change: boolean, label: string | null): string {
@@ -1567,12 +1571,12 @@ export class PearlWallet {
     if (from !== 'all') {
       if ('account' in from) {
         const record = this.#account(from.account);
-        if (record.kind !== 'seed') throw new Error(`account ${record.id} is watch-only and cannot sign`);
+        if (record.kind !== 'seed') throw new WalletError('WALLET_WATCH_ONLY', `account ${record.id} is watch-only and cannot sign`);
       } else if ('imported' in from && !this.#imported.has(from.imported)) {
-        throw new Error(`no imported key ${from.imported} in the wallet`);
+        throw new WalletError('WALLET_UNKNOWN', `no imported key ${from.imported} in the wallet`);
       } else if ('xmss' in from) {
         const record = this.#xmss.get(from.xmss);
-        if (record === undefined) throw new Error(`no XMSS key ${from.xmss} in the wallet`);
+        if (record === undefined) throw new WalletError('WALLET_UNKNOWN', `no XMSS key ${from.xmss} in the wallet`);
         this.#checkXmssUsable(record);
       }
     }
@@ -1583,13 +1587,15 @@ export class PearlWallet {
 
   #checkXmssUsable(record: XmssRecord): void {
     if (record.frozen === 'restored') {
-      throw new Error(
+      throw new XmssError(
+        'XMSS_KEY_RESTORED',
         `XMSS key ${record.publicKey.slice(0, 16)} was restored from a backup and may have signed since it was taken; ` +
           'call burnXmssIndices with an index past every one it may have used before signing',
       );
     }
     if (record.frozen === 'behind') {
-      throw new Error(
+      throw new XmssError(
+        'XMSS_KEY_BEHIND',
         `XMSS key ${record.publicKey.slice(0, 16)} has signed on chain with index ${record.seenOnChain}, at or past its stored next index; ` +
           'the wallet state is older than the key. Call burnXmssIndices past every index it may have used',
       );
@@ -1613,17 +1619,23 @@ export class PearlWallet {
   // record is read back and must agree with memory, then advanced and written
   // before the index is returned.
   #xmssIndexStore(): XmssIndexStore {
+    const recordOf = (publicKey: Uint8Array): XmssRecord => {
+      const record = this.#xmss.get(toHex(publicKey));
+      if (record === undefined) throw new WalletError('WALLET_UNKNOWN', 'that XMSS key is not in the wallet');
+      return record;
+    };
     return {
+      peek: (publicKey) => recordOf(publicKey).next,
       reserve: async (publicKey) => {
-        const id = encodeHex(publicKey);
-        const record = this.#xmss.get(id);
-        if (record === undefined) throw new Error('that XMSS key is not in the wallet');
+        const id = toHex(publicKey);
+        const record = recordOf(publicKey);
         this.#checkXmssUsable(record);
         const stored = asRecord<XmssRecord>(await this.#store.get(`xmss:${id}`), 'XMSS state');
-        if (stored.next !== record.next) throw new Error('the stored XMSS index changed under this wallet; another writer is using the store');
+        if (stored.next !== record.next) throw new XmssError('XMSS_INDEX_REUSE', 'the stored XMSS index changed under this wallet; another writer is using the store');
         const index = record.next;
-        if (index >= XMSS_MAX_SIGNATURES) throw new Error(`this XMSS key has used all ${XMSS_MAX_SIGNATURES} of its signatures`);
-        if (index <= record.seenOnChain || index <= (this.#reserved.get(id) ?? -1)) throw new Error(`refusing to reuse XMSS index ${index}`);
+        // Index 30 is the last; past it nothing is recorded.
+        if (index > XMSS_LAST_INDEX) throw new XmssError('XMSS_INDEX_EXHAUSTED', `this XMSS key has used all ${XMSS_MAX_SIGNATURES} of its signatures`);
+        if (index <= record.seenOnChain || index <= (this.#reserved.get(id) ?? -1)) throw new XmssError('XMSS_INDEX_REUSE', `refusing to reuse XMSS index ${index}`);
         record.next = index + 1;
         await this.#store.set(`xmss:${id}`, record as unknown as JsonValue);
         this.#reserved.set(id, index);
@@ -1667,7 +1679,7 @@ export class PearlWallet {
     const raw = await this.#source.getRawTransaction(txid);
     if (raw === null) return null;
     const tx = typeof raw === 'string' ? parseTransaction(raw) : Transaction.fromBuffer(raw);
-    if (tx.getId() !== txid) throw new Error(`the transaction source returned ${tx.getId()} for ${txid}`);
+    if (tx.getId() !== txid) throw new PearlError('BACKEND_RESPONSE', `the transaction source returned ${tx.getId()} for ${txid}`);
     return tx;
   }
 
@@ -1950,7 +1962,7 @@ export class PearlWallet {
   ): Promise<SendResult> {
     for (const [id, count] of this.#xmssInputCounts(payment.inputs)) {
       const record = this.#xmss.get(id)!;
-      if (XMSS_MAX_SIGNATURES - record.next < count) throw new Error(`XMSS key ${id.slice(0, 16)} has ${XMSS_MAX_SIGNATURES - record.next} signatures left, and this payment needs ${count}`);
+      if (XMSS_MAX_SIGNATURES - record.next < count) throw new XmssError('XMSS_INDEX_EXHAUSTED', `XMSS key ${id.slice(0, 16)} has ${XMSS_MAX_SIGNATURES - record.next} signatures left, and this payment needs ${count}`);
     }
     const signed = await this.#sign(payment);
     const final = finalizePayment(payment, { signed });
@@ -1993,7 +2005,8 @@ export class PearlWallet {
     try {
       await this.#backend.broadcast(entry.tx.toHex());
     } catch (err) {
-      if ((err as { kind?: unknown }).kind === 'rpc') {
+      // An error reply from the node, or a policy check a backend ran itself, is a refusal: the transaction is not in its mempool.
+      if ((err instanceof PearlRpcError && err.code === 'RPC_ERROR') || err instanceof PolicyError) {
         this.#txs.delete(entry.txid);
         this.#del(`tx:${entry.txid}`);
         if (replaced !== null) {
@@ -2002,9 +2015,9 @@ export class PearlWallet {
           this.#putTx(replaced);
         }
         await this.#flush();
-        throw new Error(`the node refused transaction ${entry.txid}: ${(err as Error).message}`, { cause: err });
+        throw new WalletError('WALLET_BROADCAST_REFUSED', `the node refused transaction ${entry.txid}: ${(err as Error).message}`, { cause: err });
       }
-      throw new Error(`broadcasting ${entry.txid} failed; it stays recorded as not broadcast, so call rebroadcast or abandon: ${(err as Error).message}`, { cause: err });
+      throw new WalletError('WALLET_BROADCAST_UNCERTAIN', `broadcasting ${entry.txid} failed; it stays recorded as not broadcast, so call rebroadcast or abandon: ${(err as Error).message}`, { cause: err });
     }
     entry.broadcast = true;
     this.#putTx(entry);
@@ -2032,9 +2045,9 @@ export class PearlWallet {
           let signer = signers.get(owner.account);
           if (signer === undefined) {
             const record = this.#accounts.get(owner.account)!;
-            if (record.kind !== 'seed' || record.number === null) throw new Error(`account ${record.id} is watch-only and cannot sign`);
+            if (record.kind !== 'seed' || record.number === null) throw new WalletError('WALLET_WATCH_ONLY', `account ${record.id} is watch-only and cannot sign`);
             signer = await keystore.useSecret('seed', (seed) => deriveSigningAccountFromSeed(seed, this.network, record.number!));
-            if (signer.watchOnlyAccount().extendedPublicKey() !== record.xpub) throw new Error(`the keystore seed does not belong to account ${record.id}`);
+            if (signer.watchOnlyAccount().extendedPublicKey() !== record.xpub) throw new KeystoreError('KEYSTORE_TAMPERED', `the keystore seed does not belong to account ${record.id}`);
             signers.set(owner.account, signer);
           }
           signer.prepareInput(psbt, i, { index: owner.index, change: owner.change, value: coin.value });
@@ -2047,7 +2060,7 @@ export class PearlWallet {
         if (owner.type !== 'account') continue;
         signers.get(owner.account)!.signInput(psbt, i, { index: owner.index, change: owner.change });
         const signature = psbt.data.inputs[i]?.tapKeySig;
-        if (signature === undefined) throw new Error(`input ${i} was not signed`);
+        if (signature === undefined) throw new SigningError('SIGNATURES_MISSING', `input ${i} was not signed`);
         signed.setWitness(i, [Uint8Array.from(signature)]);
       }
     } finally {
@@ -2074,7 +2087,7 @@ export class PearlWallet {
         privateSeed.fill(0);
         publicSeed.fill(0);
         try {
-          if (encodeHex(signer.publicKey) !== id) throw new Error(`the keystore seeds do not belong to XMSS key ${id.slice(0, 16)}`);
+          if (toHex(signer.publicKey) !== id) throw new KeystoreError('KEYSTORE_TAMPERED', `the keystore seeds do not belong to XMSS key ${id.slice(0, 16)}`);
           const tree = xmssTree(id);
           for (const [i, coin] of inputs.entries()) {
             if (coin.owner.type !== 'xmss' || coin.owner.id !== id) continue;

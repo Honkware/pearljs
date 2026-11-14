@@ -12,8 +12,11 @@
       "DEFAULT_ANCESTOR_COUNT_LIMIT",
       "DEFAULT_ANCESTOR_SIZE_LIMIT",
       "DEFAULT_DESCENDANT_COUNT_LIMIT",
+      "DEFAULT_KEYSTORE_KDF",
+      "DEFAULT_LOOKAHEAD",
       "DEFAULT_MAX_FEE_RATE",
       "DEFAULT_RELAY_FEE_RATE",
+      "DEFAULT_REORG_DEPTH",
       "DEFAULT_RPC_TIMEOUT",
       "DESKTOP_OYSTER_URL",
       "EMISSION_LIMIT",
@@ -22,6 +25,8 @@
       "InvoiceMonitor",
       "JsonRpcClient",
       "JsonRpcWsClient",
+      "Keystore",
+      "KeystoreError",
       "LOCKTIME_THRESHOLD",
       "MAX_BLOCK_VSIZE",
       "MAX_EMBED_DATA_SIZE",
@@ -53,6 +58,7 @@
       "PUBLIC_DATA_SIZE_V1",
       "PearlError",
       "PearlRpcError",
+      "PearlWallet",
       "PearlWsClient",
       "PearldClient",
       "PearldRpc",
@@ -65,9 +71,13 @@
       "SEQUENCE_LOCKTIME_IS_SECONDS",
       "SEQUENCE_LOCKTIME_MASK",
       "SigningError",
+      "StoreError",
       "TAPROOT_ANNEX_TAG",
       "Transaction",
+      "WALLET_SCHEMA_VERSION",
       "WITNESS_PROGRAM_LENGTH",
+      "WalletEmitter",
+      "WalletError",
       "XMSS_LAST_INDEX",
       "XMSS_MAX_SIGNATURES",
       "XMSS_MESSAGE_LENGTH",
@@ -112,6 +122,8 @@
       "confirmationsFromHeight",
       "cpfpChildFee",
       "createInvoice",
+      "createKeystore",
+      "createMemoryStore",
       "createMemoryXmssIndexStore",
       "createPsbt",
       "createTransaction",
@@ -175,8 +187,11 @@
       "multiAStack",
       "networks",
       "normalizeMnemonic",
+      "openIndexedDbStore",
+      "openKeystore",
       "oysterBackend",
       "oysterMethods",
+      "oysterTransactionSource",
       "p2mr",
       "p2mrAddress",
       "p2mrControlBlock",
@@ -197,6 +212,7 @@
       "pearldBackend",
       "pearldChainClient",
       "pearldMethods",
+      "pearldTransactionSource",
       "prepareP2mrScriptPathInput",
       "prepareTaprootScriptPathInput",
       "prlAmount",
@@ -260,7 +276,8 @@
       "xmssLeafScript",
       "xmssScriptPathWitness",
       "xmssSign",
-      "xmssVerify"
+      "xmssVerify",
+      "xmssWalletScript"
     ],
     "types": [
       "AccountDiscovery",
@@ -290,10 +307,13 @@
       "ChainTransaction",
       "Checkpoint",
       "CoinArranger",
+      "CoinOwner",
       "CoinSelection",
       "CoinSelectionStrategy",
+      "CoinSource",
       "CompactFilter",
       "CreateInvoiceConfig",
+      "CreateWalletOptions",
       "DecodeScriptNumberOptions",
       "DecodedScript",
       "DecodedTransaction",
@@ -302,6 +322,8 @@
       "DiscoveredChain",
       "DiscoveryOptions",
       "EmbedPayment",
+      "EncryptedBox",
+      "EncryptedKeystore",
       "FallbackOptions",
       "FeeAndVsize",
       "FeeGuardOptions",
@@ -309,14 +331,19 @@
       "FilteredBlockEvent",
       "ForkHeights",
       "GcsParams",
+      "HistoryEntry",
       "HttpTransportOptions",
+      "IndexedDbStoreOptions",
       "InputSpend",
       "InspectedInput",
       "InspectedOutput",
       "InspectedTransaction",
       "Invoice",
       "InvoiceState",
+      "JsonValue",
       "KeyOrigin",
+      "KeystoreKdf",
+      "KeystoreOptions",
       "LeafKind",
       "ListSinceBlockResult",
       "ListUnspentResult",
@@ -331,6 +358,7 @@
       "NodeInfo",
       "ObservedPayment",
       "OpcodeName",
+      "OpenWalletOptions",
       "OutPointParam",
       "OutPointRef",
       "OysterBackendOptions",
@@ -375,6 +403,7 @@
       "ReplacementOptions",
       "RescanEvent",
       "RescannedBlock",
+      "RestoreWalletOptions",
       "RetryOptions",
       "Rpc",
       "RpcClass",
@@ -393,8 +422,11 @@
       "SearchAllOptions",
       "SearchOptions",
       "SearchRawTransactionsResult",
+      "SecretKind",
       "SelectCoinsOptions",
       "SendManyOptions",
+      "SendOptions",
+      "SendResult",
       "SighashFlag",
       "SignMessageOptions",
       "SignRawTransactionResult",
@@ -403,6 +435,7 @@
       "SpendStatus",
       "SpendableOptions",
       "StandardOptions",
+      "StoreOperation",
       "SweepOptions",
       "SyncProgress",
       "TaprootControlBlock",
@@ -414,21 +447,35 @@
       "TapscriptSigner",
       "TapscriptSignerAsync",
       "TestMempoolAcceptResult",
+      "TransactionSource",
+      "TransactionStatus",
       "TxAccepted",
       "TxNotification",
       "TxOutResult",
       "TxOutput",
       "TxRawResult",
       "TxSpendingPrevOut",
+      "UnlockOptions",
       "Utxo",
       "ValidateAddressResult",
+      "WalletAccount",
+      "WalletAddress",
       "WalletAddressInfo",
       "WalletBackend",
+      "WalletBackup",
       "WalletBalance",
+      "WalletCoin",
+      "WalletConnection",
+      "WalletEvents",
       "WalletInfo",
+      "WalletMigration",
+      "WalletNotifier",
+      "WalletStateBalance",
+      "WalletStore",
       "WalletTransaction",
       "WalletTransactionEntry",
       "WalletUtxo",
+      "WalletXmssKey",
       "Watched",
       "WitnessAddress",
       "WitnessProgram",
@@ -608,10 +655,13 @@
   "errors": {
     "values": [
       "AddressError",
+      "KeystoreError",
       "PearlError",
       "PearlRpcError",
       "PolicyError",
       "SigningError",
+      "StoreError",
+      "WalletError",
       "XmssError"
     ],
     "types": [
@@ -685,6 +735,22 @@
       "PearlScriptPathSignOptions",
       "PearlSignOptions",
       "PearlSigningAccount"
+    ]
+  },
+  "keystore": {
+    "values": [
+      "DEFAULT_KEYSTORE_KDF",
+      "Keystore",
+      "createKeystore",
+      "openKeystore"
+    ],
+    "types": [
+      "EncryptedBox",
+      "EncryptedKeystore",
+      "KeystoreKdf",
+      "KeystoreOptions",
+      "SecretKind",
+      "UnlockOptions"
     ]
   },
   "message": {
@@ -985,6 +1051,33 @@
       "TaprootControlBlock"
     ]
   },
+  "store": {
+    "values": [
+      "createMemoryStore"
+    ],
+    "types": [
+      "JsonValue",
+      "StoreOperation",
+      "WalletStore"
+    ]
+  },
+  "store-file": {
+    "values": [
+      "createFileStore"
+    ],
+    "types": [
+      "FileStore",
+      "FileStoreOptions"
+    ]
+  },
+  "store-indexeddb": {
+    "values": [
+      "openIndexedDbStore"
+    ],
+    "types": [
+      "IndexedDbStoreOptions"
+    ]
+  },
   "sweep": {
     "values": [
       "sweepKey",
@@ -1013,6 +1106,40 @@
     "types": [
       "PsbtOutput",
       "TxOutput"
+    ]
+  },
+  "wallet": {
+    "values": [
+      "DEFAULT_LOOKAHEAD",
+      "DEFAULT_REORG_DEPTH",
+      "PearlWallet",
+      "WALLET_SCHEMA_VERSION",
+      "WalletEmitter",
+      "oysterTransactionSource",
+      "pearldTransactionSource",
+      "xmssWalletScript"
+    ],
+    "types": [
+      "CoinOwner",
+      "CoinSource",
+      "CreateWalletOptions",
+      "HistoryEntry",
+      "OpenWalletOptions",
+      "RestoreWalletOptions",
+      "SendOptions",
+      "SendResult",
+      "TransactionSource",
+      "TransactionStatus",
+      "WalletAccount",
+      "WalletAddress",
+      "WalletBackup",
+      "WalletCoin",
+      "WalletConnection",
+      "WalletEvents",
+      "WalletMigration",
+      "WalletNotifier",
+      "WalletStateBalance",
+      "WalletXmssKey"
     ]
   },
   "wif": {

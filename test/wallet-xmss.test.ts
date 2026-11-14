@@ -68,7 +68,7 @@ describe('wallet XMSS keys', () => {
     const { chain, wallet, key } = await xmssWallet();
     chain.broadcast = async () => {
       const { PearlRpcError } = await import('../src/index.js');
-      throw new PearlRpcError('rpc', 'sendrawtransaction', 'rejected', { code: -26 });
+      throw new PearlRpcError('rpc', 'sendrawtransaction', 'rejected', { rpcCode: -26 });
     };
     await expect(wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n, from: { xmss: key.id } })).rejects.toThrow('refused');
     expect(wallet.xmssKeys()[0]!.nextIndex).toBe(1);

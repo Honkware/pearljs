@@ -24,6 +24,9 @@
  */
 
 import { scryptAsync } from '@noble/hashes/scrypt';
+import { KeystoreError } from './errors.js';
+import type { PearlErrorCode } from './errors.js';
+import { toHex } from './internal/bytes.js';
 
 /** What a keystore secret is. */
 export type SecretKind = 'mnemonic' | 'seed' | 'wif' | 'xmss';
@@ -92,14 +95,10 @@ function buf(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   return bytes as Uint8Array<ArrayBuffer>;
 }
 
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
 function fromHex(text: unknown, what: string, length?: number): Uint8Array {
-  if (typeof text !== 'string' || text.length % 2 !== 0 || !/^[0-9a-f]*$/.test(text)) throw new Error(`keystore ${what} is not hex`);
+  if (typeof text !== 'string' || text.length % 2 !== 0 || !/^[0-9a-f]*$/.test(text)) throw new KeystoreError('KEYSTORE_INVALID', `keystore ${what} is not hex`);
   const bytes = Uint8Array.from(text.match(/../g) ?? [], (byte) => parseInt(byte, 16));
-  if (length !== undefined && bytes.length !== length) throw new Error(`keystore ${what} must be ${length} bytes`);
+  if (length !== undefined && bytes.length !== length) throw new KeystoreError('KEYSTORE_INVALID', `keystore ${what} must be ${length} bytes`);
   return bytes;
 }
 
@@ -109,17 +108,17 @@ function defaultRandom(length: number): Uint8Array {
 
 function passphraseBytes(passphrase: string | Uint8Array): Uint8Array {
   const bytes = typeof passphrase === 'string' ? encoder.encode(passphrase.normalize('NFKD')) : Uint8Array.from(passphrase);
-  if (bytes.length === 0) throw new Error('the keystore passphrase must not be empty');
+  if (bytes.length === 0) throw new KeystoreError('KEYSTORE_INVALID', 'the keystore passphrase must not be empty');
   return bytes;
 }
 
 function checkKdf(kdf: Partial<KeystoreKdf>): void {
   const { N, r, p } = kdf;
-  if (kdf.name !== 'scrypt') throw new Error('keystore KDF must be scrypt');
-  if (!Number.isSafeInteger(N) || N! < MIN_N || (N! & (N! - 1)) !== 0) throw new Error(`keystore scrypt N must be a power of two of at least ${MIN_N}`);
-  if (!Number.isSafeInteger(r) || r! < 1 || r! > 32) throw new Error('keystore scrypt r must be between 1 and 32');
-  if (!Number.isSafeInteger(p) || p! < 1 || p! > 16) throw new Error('keystore scrypt p must be between 1 and 16');
-  if (128 * N! * r! > MAX_MEMORY) throw new Error('keystore scrypt parameters need more than 1 GiB');
+  if (kdf.name !== 'scrypt') throw new KeystoreError('KEYSTORE_INVALID', 'keystore KDF must be scrypt');
+  if (!Number.isSafeInteger(N) || N! < MIN_N || (N! & (N! - 1)) !== 0) throw new KeystoreError('KEYSTORE_INVALID', `keystore scrypt N must be a power of two of at least ${MIN_N}`);
+  if (!Number.isSafeInteger(r) || r! < 1 || r! > 32) throw new KeystoreError('KEYSTORE_INVALID', 'keystore scrypt r must be between 1 and 32');
+  if (!Number.isSafeInteger(p) || p! < 1 || p! > 16) throw new KeystoreError('KEYSTORE_INVALID', 'keystore scrypt p must be between 1 and 16');
+  if (128 * N! * r! > MAX_MEMORY) throw new KeystoreError('KEYSTORE_INVALID', 'keystore scrypt parameters need more than 1 GiB');
   fromHex(kdf.salt, 'salt', SALT_BYTES);
 }
 
@@ -151,43 +150,43 @@ async function deriveKek(passphrase: string | Uint8Array, kdf: KeystoreKdf): Pro
 
 async function seal(key: CryptoKey, plaintext: Uint8Array, aad: Uint8Array, random: (length: number) => Uint8Array): Promise<EncryptedBox> {
   const nonce = random(NONCE_BYTES);
-  if (!(nonce instanceof Uint8Array) || nonce.length !== NONCE_BYTES) throw new Error('random source returned the wrong length');
+  if (!(nonce instanceof Uint8Array) || nonce.length !== NONCE_BYTES) throw new RangeError('random source returned the wrong length');
   const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: buf(nonce), additionalData: buf(aad) }, key, buf(plaintext)));
   return { nonce: toHex(nonce), ciphertext: toHex(ciphertext) };
 }
 
-// Rejects with `failure` for any authentication error; the cause is left
+// Rejects with KeystoreError `code` for any authentication error; the cause is left
 // out, since it says nothing a caller can use.
-async function open(key: CryptoKey, box: EncryptedBox, aad: Uint8Array, failure: string): Promise<Uint8Array> {
+async function open(key: CryptoKey, box: EncryptedBox, aad: Uint8Array, code: PearlErrorCode, failure: string): Promise<Uint8Array> {
   const nonce = fromHex(box.nonce, 'nonce', NONCE_BYTES);
   const ciphertext = fromHex(box.ciphertext, 'ciphertext');
-  if (ciphertext.length < TAG_BYTES) throw new Error(failure);
+  if (ciphertext.length < TAG_BYTES) throw new KeystoreError(code, failure);
   try {
     return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf(nonce), additionalData: buf(aad) }, key, buf(ciphertext)));
   } catch {
-    throw new Error(failure);
+    throw new KeystoreError(code, failure);
   }
 }
 
 function parseKeystore(data: unknown): EncryptedKeystore {
   const value = data as Partial<EncryptedKeystore> | null;
-  if (value === null || typeof value !== 'object' || value.format !== 'pearljs-keystore') throw new Error('not a pearljs keystore');
-  if (value.version !== 1) throw new Error(`keystore version ${String(value.version)} is not supported; this pearljs reads version 1`);
-  if (value.cipher !== 'aes-256-gcm') throw new Error('keystore cipher must be aes-256-gcm');
+  if (value === null || typeof value !== 'object' || value.format !== 'pearljs-keystore') throw new KeystoreError('KEYSTORE_INVALID', 'not a pearljs keystore');
+  if (value.version !== 1) throw new KeystoreError('KEYSTORE_INVALID', `keystore version ${String(value.version)} is not supported; this pearljs reads version 1`);
+  if (value.cipher !== 'aes-256-gcm') throw new KeystoreError('KEYSTORE_INVALID', 'keystore cipher must be aes-256-gcm');
   checkKdf(value.kdf ?? {});
   const box = (item: unknown, what: string): EncryptedBox => {
     const b = item as Partial<EncryptedBox> | null;
-    if (b === null || typeof b !== 'object') throw new Error(`keystore ${what} is missing`);
+    if (b === null || typeof b !== 'object') throw new KeystoreError('KEYSTORE_INVALID', `keystore ${what} is missing`);
     fromHex(b.nonce, `${what} nonce`, NONCE_BYTES);
     fromHex(b.ciphertext, `${what} ciphertext`);
     return { nonce: b.nonce!, ciphertext: b.ciphertext! };
   };
   const key = box(value.key, 'key');
-  if (value.secrets === null || typeof value.secrets !== 'object' || Array.isArray(value.secrets)) throw new Error('keystore secrets are missing');
+  if (value.secrets === null || typeof value.secrets !== 'object' || Array.isArray(value.secrets)) throw new KeystoreError('KEYSTORE_INVALID', 'keystore secrets are missing');
   const secrets: EncryptedKeystore['secrets'] = {};
   for (const [id, item] of Object.entries(value.secrets)) {
     const kind = (item as { kind?: unknown }).kind;
-    if (kind !== 'mnemonic' && kind !== 'seed' && kind !== 'wif' && kind !== 'xmss') throw new Error(`keystore secret ${id} has an unknown kind`);
+    if (kind !== 'mnemonic' && kind !== 'seed' && kind !== 'wif' && kind !== 'xmss') throw new KeystoreError('KEYSTORE_INVALID', `keystore secret ${id} has an unknown kind`);
     secrets[id] = { kind, ...box(item, `secret ${id}`) };
   }
   return { format: 'pearljs-keystore', version: 1, kdf: { ...value.kdf! }, cipher: 'aes-256-gcm', key, secrets };
@@ -231,17 +230,17 @@ export class Keystore {
 
   /**
    * Derives the key from the passphrase and unwraps the data key. Rejects
-   * with "wrong passphrase" when the passphrase, or anything the data key is
-   * bound to, is not what the keystore was made with.
+   * with KEYSTORE_BAD_PASSPHRASE when the passphrase, or anything the data
+   * key is bound to, is not what the keystore was made with.
    */
   async unlock(passphrase: string | Uint8Array, options: UnlockOptions = {}): Promise<void> {
     const { timeoutMs } = options;
     if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) throw new RangeError('timeoutMs must be a positive number');
     const kek = await deriveKek(passphrase, this.#data.kdf);
-    const raw = await open(kek, this.#data.key, keyAad(this.#data.kdf), 'wrong passphrase for this keystore');
+    const raw = await open(kek, this.#data.key, keyAad(this.#data.kdf), 'KEYSTORE_BAD_PASSPHRASE', 'wrong passphrase for this keystore');
     if (raw.length !== KEY_BYTES) {
       raw.fill(0);
-      throw new Error('the keystore data key has the wrong length');
+      throw new KeystoreError('KEYSTORE_TAMPERED', 'the keystore data key has the wrong length');
     }
     this.#key = await importAesKey(raw, ['encrypt', 'decrypt']);
     this.#schedule(timeoutMs);
@@ -269,7 +268,7 @@ export class Keystore {
    */
   async changePassphrase(oldPassphrase: string | Uint8Array, newPassphrase: string | Uint8Array, options: KeystoreOptions = {}): Promise<void> {
     const oldKek = await deriveKek(oldPassphrase, this.#data.kdf);
-    const raw = await open(oldKek, this.#data.key, keyAad(this.#data.kdf), 'wrong passphrase for this keystore');
+    const raw = await open(oldKek, this.#data.key, keyAad(this.#data.kdf), 'KEYSTORE_BAD_PASSPHRASE', 'wrong passphrase for this keystore');
     try {
       const kdf = newKdf(options, this.#random);
       const kek = await deriveKek(newPassphrase, kdf);
@@ -295,14 +294,15 @@ export class Keystore {
 
   /**
    * Decrypts one secret, hands it to use, and overwrites it when use
-   * settles. use must not keep the bytes. Rejects when locked, when there is
-   * no such secret, and when its ciphertext fails authentication.
+   * settles. use must not keep the bytes. Rejects with KEYSTORE_LOCKED,
+   * KEYSTORE_NO_SECRET, or KEYSTORE_TAMPERED when its ciphertext fails
+   * authentication.
    */
   async useSecret<T>(id: string, use: (secret: Uint8Array, kind: SecretKind) => T | Promise<T>): Promise<T> {
     const key = this.#unlocked();
     const box = this.#data.secrets[id];
-    if (box === undefined) throw new Error(`the keystore has no secret ${id}`);
-    const secret = await open(key, box, secretAad(id, box.kind), `keystore secret ${id} failed authentication; the keystore has been altered or damaged`);
+    if (box === undefined) throw new KeystoreError('KEYSTORE_NO_SECRET', `the keystore has no secret ${id}`);
+    const secret = await open(key, box, secretAad(id, box.kind), 'KEYSTORE_TAMPERED', `keystore secret ${id} failed authentication; the keystore has been altered or damaged`);
     try {
       return await use(secret, box.kind);
     } finally {
@@ -311,7 +311,7 @@ export class Keystore {
   }
 
   #unlocked(): CryptoKey {
-    if (this.#key === null) throw new Error('the keystore is locked; unlock it with the passphrase first');
+    if (this.#key === null) throw new KeystoreError('KEYSTORE_LOCKED', 'the keystore is locked; unlock it with the passphrase first');
     return this.#key;
   }
 
@@ -327,7 +327,7 @@ export class Keystore {
 
 function newKdf(options: KeystoreOptions, random: (length: number) => Uint8Array): KeystoreKdf {
   const salt = random(SALT_BYTES);
-  if (!(salt instanceof Uint8Array) || salt.length !== SALT_BYTES) throw new Error('random source returned the wrong length');
+  if (!(salt instanceof Uint8Array) || salt.length !== SALT_BYTES) throw new RangeError('random source returned the wrong length');
   const kdf: KeystoreKdf = { name: 'scrypt', ...DEFAULT_KEYSTORE_KDF, ...options.kdf, salt: toHex(salt) };
   checkKdf(kdf);
   return kdf;
@@ -340,7 +340,7 @@ export async function createKeystore(passphrase: string | Uint8Array, options: K
   const kek = await deriveKek(passphrase, kdf);
   const raw = Uint8Array.from(random(KEY_BYTES));
   try {
-    if (raw.length !== KEY_BYTES) throw new Error('random source returned the wrong length');
+    if (raw.length !== KEY_BYTES) throw new RangeError('random source returned the wrong length');
     const key = await seal(kek, raw, keyAad(kdf), random);
     const data: EncryptedKeystore = { format: 'pearljs-keystore', version: 1, kdf, cipher: 'aes-256-gcm', key, secrets: {} };
     return new Keystore(data, await importAesKey(raw, ['encrypt', 'decrypt']), random);
@@ -349,7 +349,7 @@ export async function createKeystore(passphrase: string | Uint8Array, options: K
   }
 }
 
-/** Reads a stored keystore, checking its shape and parameters. It starts locked. */
+/** Reads a stored keystore, checking its shape and parameters (KEYSTORE_INVALID). It starts locked. */
 export function openKeystore(data: unknown, options: Pick<KeystoreOptions, 'random'> = {}): Keystore {
   return new Keystore(parseKeystore(data), null, options.random ?? defaultRandom);
 }
