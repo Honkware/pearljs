@@ -31,6 +31,10 @@
       "types": "./dist/client.d.ts",
       "default": "./dist/client.js"
     },
+    "./consensus": {
+      "types": "./dist/consensus.d.ts",
+      "default": "./dist/consensus.js"
+    },
     "./crypto": {
       "types": "./dist/crypto.d.ts",
       "default": "./dist/crypto.js"
@@ -51,6 +55,10 @@
       "types": "./dist/mnemonic.d.ts",
       "default": "./dist/mnemonic.js"
     },
+    "./multia": {
+      "types": "./dist/multia.d.ts",
+      "default": "./dist/multia.js"
+    },
     "./networks": {
       "types": "./dist/networks.d.ts",
       "default": "./dist/networks.js"
@@ -62,6 +70,10 @@
     "./policy": {
       "types": "./dist/policy.d.ts",
       "default": "./dist/policy.js"
+    },
+    "./rbf": {
+      "types": "./dist/rbf.d.ts",
+      "default": "./dist/rbf.js"
     },
     "./rpc": {
       "types": "./dist/rpc.d.ts",
