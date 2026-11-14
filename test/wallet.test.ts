@@ -108,6 +108,29 @@ describe('wallet: sending', () => {
     await expect(wallet.send({ recipients: [{ address: STRANGER, amount: prl('4') }], feeRate: 2000n })).rejects.toThrow('insufficient funds');
   });
 
+  it('sends while a sync waits on the network, and the sync then counts the send', async () => {
+    const { chain, wallet } = await funded(['10']);
+    chain.pay(await wallet.receiveAddress(), prl('1'));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const getHistory = chain.getHistory.bind(chain);
+    let waiting!: () => void;
+    const reached = new Promise<void>((resolve) => (waiting = resolve));
+    chain.getHistory = async (watched) => {
+      waiting();
+      await gate;
+      return getHistory(watched);
+    };
+    const syncing = wallet.sync();
+    await reached;
+    const sent = await wallet.send({ recipients: [{ address: STRANGER, amount: prl('2') }], feeRate: 2000n });
+    release();
+    await syncing;
+    expect(wallet.transaction(sent.txid)).toMatchObject({ status: 'pending', missing: false });
+    expect(wallet.balance()).toMatchObject({ unconfirmed: sent.change + prl('1'), confirmed: 0n });
+    expect(wallet.balance().total).toBe(wallet.coins().reduce((sum, coin) => sum + coin.value, 0n));
+  });
+
   it('spends unconfirmed change only when asked to', async () => {
     const { wallet } = await funded(['10']);
     await wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n });
