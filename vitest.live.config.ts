@@ -1,10 +1,16 @@
 import { defineConfig } from 'vitest/config';
 import { BaseSequencer, type TestSpecification } from 'vitest/node';
 
-// The fresh-chain tests need a node that has seen no transaction, and the
-// reorg replaces blocks under whatever runs after it.
-const rank = (spec: TestSpecification): number =>
-  spec.moduleId.endsWith('fresh-chain.test.ts') ? 0 : spec.moduleId.endsWith('reorg.test.ts') ? 2 : 1;
+// The fresh-chain tests need a node that has seen no transaction. The
+// timelock tests come next, while the median time past is still that of the
+// setup blocks. The files that walk every block run after the ones that make
+// them, the reorg replaces blocks under whatever follows it, and the Oyster
+// feed test leaves Oyster without block notifications.
+const ORDER = ['fresh-chain', 'timelocks', '', 'consensus', 'filters', 'reorg', 'oyster-feed'];
+const rank = (spec: TestSpecification): number => {
+  const name = spec.moduleId.slice(spec.moduleId.lastIndexOf('/') + 1).replace('.test.ts', '');
+  return ORDER.includes(name) ? ORDER.indexOf(name) : ORDER.indexOf('');
+};
 
 class InOrder extends BaseSequencer {
   override async sort(files: TestSpecification[]): Promise<TestSpecification[]> {

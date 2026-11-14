@@ -12,6 +12,7 @@ import {
   mnemonicToSeed,
   networks,
   parseBlock,
+  parseTransaction,
   serializeTransaction,
   toOutputScript,
   transactionId,
@@ -150,6 +151,34 @@ export function addChange(tx: Transaction, inputValue: bigint, spends: readonly 
   const spent = tx.outs.reduce((sum, output) => sum + output.value, 0n);
   tx.outs[index]!.value = inputValue - spent - feeForVsize(vsize, FEE_RATE);
   return vsize;
+}
+
+/** Polls until done or a minute has passed; Oyster follows pearld by notification, a moment behind. */
+export async function eventually<T>(read: () => Promise<T>, done: (value: T) => boolean, timeout = 60_000): Promise<T> {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const value = await read();
+    if (done(value) || Date.now() > deadline) return value;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
+const fetched = new Map<string, Transaction>();
+
+/** The outputs a mined or mempool transaction spends, looked up by txid in pearld's transaction index. */
+export async function spentOutputs(tx: Transaction): Promise<Prevout[]> {
+  const prevouts: Prevout[] = [];
+  for (const input of tx.ins) {
+    const txid = Buffer.from(input.hash).reverse().toString('hex');
+    let source = fetched.get(txid);
+    if (source === undefined) {
+      source = parseTransaction(await pearld.getRawTransactionHex(txid));
+      fetched.set(txid, source);
+    }
+    const output = source.outs[input.index]!;
+    prevouts.push({ script: output.script, value: output.value });
+  }
+  return prevouts;
 }
 
 export { changeScript, minerScript };

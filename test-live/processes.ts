@@ -114,10 +114,16 @@ export interface PearldOptions {
   exe: string;
   dir: string;
   miningAddress: string;
+  /** A fixed RPC port, for a node that is stopped and started again. */
+  rpcPort?: number;
+  /** Leave --txindex and --addrindex off. */
+  withoutIndexes?: boolean;
+  /** More flags, such as --rejectreplacement. */
+  extraArgs?: readonly string[];
 }
 
 export async function startPearld(options: PearldOptions): Promise<RunningPearld> {
-  const [rpcPort, p2pPort] = [await freePort(), await freePort()];
+  const [rpcPort, p2pPort] = [options.rpcPort ?? (await freePort()), await freePort()];
   await mkdir(options.dir, { recursive: true });
   const logFile = join(options.dir, 'pearld.log');
   const certFile = join(options.dir, 'rpc.cert');
@@ -138,10 +144,10 @@ export async function startPearld(options: PearldOptions): Promise<RunningPearld
       `--listen=127.0.0.1:${p2pPort}`,
       '--nodnsseed',
       `--miningaddr=${options.miningAddress}`,
-      '--txindex',
-      '--addrindex',
+      ...(options.withoutIndexes === true ? [] : ['--txindex', '--addrindex']),
       // Regtest relays non-standard transactions by default; mainnet does not.
       '--rejectnonstd',
+      ...(options.extraArgs ?? []),
     ],
     logFile,
   );
@@ -174,6 +180,8 @@ export interface OysterOptions {
   pearld: LiveEndpoint;
   mnemonic: string;
   passphrase: string;
+  /** host:port of a pearld P2P listener: follow the chain in SPV mode through it instead of over RPC. */
+  spvPeer?: string;
 }
 
 export async function startOyster(options: OysterOptions): Promise<RunningProcess<OysterClient>> {
@@ -201,10 +209,14 @@ export async function startOyster(options: OysterOptions): Promise<RunningProces
     options.exe,
     [
       ...common,
-      `--rpcconnect=${new URL(options.pearld.url).host}`,
-      `--cafile=${pearldCert}`,
-      `--pearldusername=${options.pearld.username}`,
-      `--pearldpassword=${options.pearld.password}`,
+      ...(options.spvPeer === undefined
+        ? [
+            `--rpcconnect=${new URL(options.pearld.url).host}`,
+            `--cafile=${pearldCert}`,
+            `--pearldusername=${options.pearld.username}`,
+            `--pearldpassword=${options.pearld.password}`,
+          ]
+        : ['--usespv', `--connect=${options.spvPeer}`]),
       `--rpclisten=127.0.0.1:${rpcPort}`,
       `--rpccert=${certFile}`,
       `--rpckey=${join(options.dir, 'rpc.key')}`,
@@ -219,7 +231,8 @@ export async function startOyster(options: OysterOptions): Promise<RunningProces
       child,
       certFile,
       (pem) => oysterClient({ url, ca: pem, ...ADMIN }),
-      'getinfo',
+      // getinfo needs a pearld RPC connection, which an SPV wallet has none of.
+      options.spvPeer === undefined ? 'getinfo' : 'walletislocked',
       logFile,
     );
     return { endpoint: { url, ca, ...ADMIN }, client, logFile, stop: stopper(child, client) };
