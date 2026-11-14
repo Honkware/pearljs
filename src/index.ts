@@ -12,6 +12,7 @@ export * from './multia.js';
 export * from './networks.js';
 export * from './payments.js';
 export * from './policy.js';
+export * from './rbf.js';
 export * from './rpc.js';
 export * from './script.js';
 export * from './scriptpath.js';
