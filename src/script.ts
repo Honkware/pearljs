@@ -6,26 +6,10 @@
 
 import { sha256 } from '@noble/hashes/sha2';
 
-// Opcodes used by Pearl script classification and push construction.
-export const OP_CODES = {
-  OP_0: 0x00,
-  OP_PUSHDATA1: 0x4c,
-  OP_PUSHDATA2: 0x4d,
-  OP_PUSHDATA4: 0x4e,
-  OP_1NEGATE: 0x4f,
-  OP_1: 0x51,
-  OP_2: 0x52,
-  OP_16: 0x60,
-  OP_RETURN: 0x6a,
-  OP_CAT: 0x7e,
-  OP_CHECKSIG: 0xac,
-  OP_CHECKLOCKTIMEVERIFY: 0xb1,
-  OP_CHECKSEQUENCEVERIFY: 0xb2,
-  OP_CHECKMULTISIG: 0xae,
-  OP_CHECKMULTISIGVERIFY: 0xaf,
-  OP_CHECKSIGADD: 0xba,
-  OP_CHECKXMSSSIG: 0xde,
-} as const;
+import { OP_CODES } from './opcodes.js';
+
+export { OP_CODES, OPCODE_NAMES } from './opcodes.js';
+export type { OpcodeName } from './opcodes.js';
 
 // Locktime and sequence constants from the Pearl wire format.
 export const LOCKTIME_THRESHOLD = 500000000;
