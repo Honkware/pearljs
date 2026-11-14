@@ -9,7 +9,9 @@
 
 import type { AddressPayment, BlockRef, ChainClient, ChainTransaction } from '../src/client.js';
 import type { Invoice } from '../src/invoice.js';
+import { encodeAddress } from '../src/address.js';
 import { InvoiceMonitor } from '../src/invoice.js';
+import { networks } from '../src/networks.js';
 
 /** In-memory fake chain for simulation only; not a node integration. */
 class SimulatedInMemoryChain implements ChainClient {
@@ -66,14 +68,14 @@ function printTransition(step: string, invoice: Invoice): void {
 async function main(): Promise<void> {
   console.log('Simulated invoice demo (in-memory fake chain, not a node integration)');
   const chain = new SimulatedInMemoryChain();
-  const monitor = new InvoiceMonitor(chain);
+  const monitor = new InvoiceMonitor(chain, networks.regtest);
   chain.mineBlock();
   chain.mineBlock();
 
   let now = 1_700_000_000;
   let invoice = monitor.createInvoice({
     id: 'demo-invoice-1',
-    address: 'bc1p-demo-address',
+    address: encodeAddress({ version: 1, program: new Uint8Array(32).fill(1) }, networks.regtest),
     amount: 250_000n,
     createdAt: now,
     expiresAt: now + 3_600,

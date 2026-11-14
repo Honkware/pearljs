@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import type { AddressPayment, BlockRef, ChainClient, ChainTransaction } from '../src/client.js';
 import type { CreateInvoiceConfig, Invoice } from '../src/invoice.js';
+import { encodeAddress } from '../src/address.js';
+import { MAX_GRAIN } from '../src/amount.js';
 import { InvoiceMonitor, createInvoice, refreshInvoice } from '../src/invoice.js';
+import { networks } from '../src/networks.js';
 
 /** Controllable in-memory chain view for tests. */
 class FakeChain implements ChainClient {
@@ -40,7 +43,8 @@ class FakeChain implements ChainClient {
   }
 }
 
-const ADDRESS = 'bc1p-invoice-address';
+const NETWORK = networks.regtest;
+const ADDRESS = encodeAddress({ version: 1, program: new Uint8Array(32).fill(7) }, NETWORK);
 
 function config(overrides: Partial<CreateInvoiceConfig> = {}): CreateInvoiceConfig {
   return {
@@ -56,7 +60,7 @@ function config(overrides: Partial<CreateInvoiceConfig> = {}): CreateInvoiceConf
 
 describe('createInvoice', () => {
   it('creates an awaiting invoice with no payments', () => {
-    const invoice = createInvoice(config());
+    const invoice = createInvoice(config(), NETWORK);
     expect(invoice.state).toBe('awaiting');
     expect(invoice.paidAmount).toBe(0n);
     expect(invoice.confirmations).toBe(0);
@@ -64,28 +68,46 @@ describe('createInvoice', () => {
   });
 
   it('rejects invalid config', () => {
-    expect(() => createInvoice(config({ id: '' }))).toThrow(/id/);
-    expect(() => createInvoice(config({ address: '' }))).toThrow(/address/);
-    expect(() => createInvoice(config({ amount: 0n }))).toThrow(/amount/);
-    expect(() => createInvoice(config({ amount: -1n }))).toThrow(/amount/);
+    expect(() => createInvoice(config({ id: '' }), NETWORK)).toThrow(/id/);
+    expect(() => createInvoice(config({ address: '' }), NETWORK)).toThrow(/address/);
+    expect(() => createInvoice(config({ amount: 0n }), NETWORK)).toThrow(/amount/);
+    expect(() => createInvoice(config({ amount: -1n }), NETWORK)).toThrow(/amount/);
     expect(() =>
-      createInvoice(config({ amount: 100 as unknown as bigint })),
+      createInvoice(config({ amount: 100 as unknown as bigint }), NETWORK),
     ).toThrow(/amount/);
-    expect(() => createInvoice(config({ createdAt: 1.5 }))).toThrow(/createdAt/);
-    expect(() => createInvoice(config({ expiresAt: 1_000 }))).toThrow(/expiresAt/);
-    expect(() => createInvoice(config({ requiredConfirmations: 0 }))).toThrow(
+    expect(() => createInvoice(config({ createdAt: 1.5 }), NETWORK)).toThrow(/createdAt/);
+    expect(() => createInvoice(config({ expiresAt: 1_000 }), NETWORK)).toThrow(/expiresAt/);
+    expect(() => createInvoice(config({ requiredConfirmations: 0 }), NETWORK)).toThrow(
       /requiredConfirmations/,
     );
-    expect(() => createInvoice(config({ requiredConfirmations: 2.5 }))).toThrow(
+    expect(() => createInvoice(config({ requiredConfirmations: 2.5 }), NETWORK)).toThrow(
       /requiredConfirmations/,
     );
+  });
+
+  it('rejects an address that is not a Pearl address on the network', () => {
+    expect(() => createInvoice(config({ address: 'not an address' }), NETWORK)).toThrow(
+      'invoice address is not valid on regtest',
+    );
+    expect(() => createInvoice(config(), networks.mainnet)).toThrow('invoice address is not valid on mainnet');
+    const mixedCase = ADDRESS.replace('1p', '1P');
+    expect(() => createInvoice(config({ address: mixedCase }), NETWORK)).toThrow('not valid on regtest');
+    expect(() => createInvoice(config(), undefined as unknown as typeof NETWORK)).toThrow(TypeError);
+    expect(() => new InvoiceMonitor(new FakeChain(), networks.mainnet).createInvoice(config())).toThrow(
+      'not valid on mainnet',
+    );
+  });
+
+  it('rejects an amount above the largest Pearl amount', () => {
+    expect(createInvoice(config({ amount: MAX_GRAIN }), NETWORK).amount).toBe(MAX_GRAIN);
+    expect(() => createInvoice(config({ amount: MAX_GRAIN + 1n }), NETWORK)).toThrow('above the largest Pearl amount');
   });
 });
 
 describe('refreshInvoice', () => {
   it('stays awaiting with no payment before expiry', async () => {
     const chain = new FakeChain();
-    const invoice = await refreshInvoice(createInvoice(config()), chain, 1_500);
+    const invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500);
     expect(invoice.state).toBe('awaiting');
     expect(invoice.paidAmount).toBe(0n);
   });
@@ -93,7 +115,7 @@ describe('refreshInvoice', () => {
   it('exact unconfirmed payment is pending', async () => {
     const chain = new FakeChain();
     chain.pay('tx-exact', 100_000n, null);
-    const invoice = await refreshInvoice(createInvoice(config()), chain, 1_500);
+    const invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500);
     expect(invoice.state).toBe('pending');
     expect(invoice.paidAmount).toBe(100_000n);
     expect(invoice.confirmations).toBe(0);
@@ -103,7 +125,7 @@ describe('refreshInvoice', () => {
   it('underpaid stays awaiting before expiry and expires after', async () => {
     const chain = new FakeChain();
     chain.pay('tx-under', 50_000n, 100);
-    let invoice = await refreshInvoice(createInvoice(config()), chain, 1_500);
+    let invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500);
     expect(invoice.state).toBe('awaiting');
     expect(invoice.paidAmount).toBe(50_000n);
     invoice = await refreshInvoice(invoice, chain, 2_000);
@@ -112,7 +134,7 @@ describe('refreshInvoice', () => {
 
   it('expires with no payment at expiry', async () => {
     const chain = new FakeChain();
-    const invoice = await refreshInvoice(createInvoice(config()), chain, 2_000);
+    const invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 2_000);
     expect(invoice.state).toBe('expired');
   });
 
@@ -120,7 +142,7 @@ describe('refreshInvoice', () => {
     const chain = new FakeChain();
     chain.pay('tx-a', 70_000n, 100);
     chain.pay('tx-b', 80_000n, 100);
-    const invoice = await refreshInvoice(createInvoice(config()), chain, 1_500);
+    const invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500);
     expect(invoice.state).toBe('confirming');
     expect(invoice.paidAmount).toBe(150_000n);
   });
@@ -129,7 +151,7 @@ describe('refreshInvoice', () => {
     const chain = new FakeChain();
     chain.pay('tx-dup', 60_000n, 100);
     chain.pay('tx-dup', 60_000n, 100);
-    const invoice = await refreshInvoice(createInvoice(config()), chain, 1_500);
+    const invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500);
     expect(invoice.paidAmount).toBe(60_000n);
     expect(invoice.state).toBe('awaiting');
     expect(invoice.observedPayments).toEqual([{ txid: 'tx-dup', firstSeenAt: 1_500 }]);
@@ -138,7 +160,7 @@ describe('refreshInvoice', () => {
   it('tracks confirmation depth until confirmed', async () => {
     const chain = new FakeChain();
     chain.pay('tx-conf', 100_000n, 100);
-    const monitor = new InvoiceMonitor(chain);
+    const monitor = new InvoiceMonitor(chain, NETWORK);
     let invoice = monitor.createInvoice(config());
 
     chain.tip = { height: 100, hash: 'hash-100' };
@@ -161,7 +183,7 @@ describe('refreshInvoice', () => {
     const chain = new FakeChain();
     chain.pay('tx-one', 100_000n, 100);
     const invoice = await refreshInvoice(
-      createInvoice(config({ requiredConfirmations: 1 })),
+      createInvoice(config({ requiredConfirmations: 1 }), NETWORK),
       chain,
       1_500,
     );
@@ -172,7 +194,7 @@ describe('refreshInvoice', () => {
     const chain = new FakeChain();
     chain.pay('tx-reorg', 100_000n, 100);
     chain.tip = { height: 102, hash: 'hash-102' };
-    let invoice = await refreshInvoice(createInvoice(config()), chain, 1_500);
+    let invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500);
     expect(invoice.state).toBe('confirmed');
 
     // Reorg: the payment now sits in a deeper block relative to the tip.
@@ -192,7 +214,7 @@ describe('refreshInvoice', () => {
     const chain = new FakeChain();
     chain.pay('tx-move', 100_000n, 100);
     chain.tip = { height: 110, hash: 'hash-110' };
-    let invoice = await refreshInvoice(createInvoice(config()), chain, 1_500);
+    let invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500);
     expect(invoice.state).toBe('confirmed');
     expect(invoice.confirmations).toBe(11);
 
@@ -206,7 +228,7 @@ describe('refreshInvoice', () => {
     const chain = new FakeChain();
     chain.pay('tx-gone', 100_000n, 100);
     chain.tip = { height: 110, hash: 'hash-110' };
-    let invoice = await refreshInvoice(createInvoice(config()), chain, 1_500);
+    let invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500);
     expect(invoice.state).toBe('confirmed');
 
     chain.drop('tx-gone');
@@ -222,7 +244,7 @@ describe('refreshInvoice', () => {
     const chain = new FakeChain();
     chain.pay('tx-mempool', 100_000n, 100);
     chain.tip = { height: 102, hash: 'hash-102' };
-    let invoice = await refreshInvoice(createInvoice(config()), chain, 1_500);
+    let invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500);
     expect(invoice.state).toBe('confirmed');
 
     // Reorged back into the mempool: no longer in address activity per a
@@ -236,7 +258,7 @@ describe('refreshInvoice', () => {
   it('mempool payment first seen at expiry does not count', async () => {
     const chain = new FakeChain();
     chain.pay('tx-late', 100_000n, null);
-    const invoice = await refreshInvoice(createInvoice(config()), chain, 2_000);
+    const invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 2_000);
     expect(invoice.paidAmount).toBe(0n);
     expect(invoice.state).toBe('expired');
     expect(invoice.observedPayments).toEqual([{ txid: 'tx-late', firstSeenAt: 2_000 }]);
@@ -245,7 +267,7 @@ describe('refreshInvoice', () => {
   it('payment first seen one second before expiry counts', async () => {
     const chain = new FakeChain();
     chain.pay('tx-boundary', 100_000n, null);
-    const invoice = await refreshInvoice(createInvoice(config()), chain, 1_999);
+    const invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_999);
     expect(invoice.paidAmount).toBe(100_000n);
     expect(invoice.state).toBe('pending');
   });
@@ -253,7 +275,7 @@ describe('refreshInvoice', () => {
   it('payment first seen before expiry stays valid after confirming late', async () => {
     const chain = new FakeChain();
     chain.pay('tx-lateconf', 100_000n, null);
-    let invoice = await refreshInvoice(createInvoice(config()), chain, 1_999);
+    let invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_999);
     expect(invoice.state).toBe('pending');
 
     // Expiry passes while unconfirmed, then it confirms.
@@ -266,7 +288,7 @@ describe('refreshInvoice', () => {
   it('conflicted wins over expired', async () => {
     const chain = new FakeChain();
     chain.pay('tx-partial', 50_000n, 100);
-    let invoice = await refreshInvoice(createInvoice(config()), chain, 1_500);
+    let invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500);
     chain.drop('tx-partial');
     invoice = await refreshInvoice(invoice, chain, 2_500);
     expect(invoice.state).toBe('conflicted');
@@ -275,7 +297,7 @@ describe('refreshInvoice', () => {
   it('uses persisted firstSeenAt across refreshes', async () => {
     const chain = new FakeChain();
     chain.pay('tx-persist', 100_000n, null);
-    let invoice = await refreshInvoice(createInvoice(config()), chain, 1_200);
+    let invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_200);
     chain.pay('tx-second', 10_000n, null);
     invoice = await refreshInvoice(invoice, chain, 1_300);
     expect(invoice.observedPayments).toEqual([
@@ -286,7 +308,7 @@ describe('refreshInvoice', () => {
 
   it('rejects a non-integer now', async () => {
     const chain = new FakeChain();
-    const invoice: Invoice = createInvoice(config());
+    const invoice: Invoice = createInvoice(config(), NETWORK);
     await expect(refreshInvoice(invoice, chain, 1.5)).rejects.toThrow(/now/);
   });
 });
@@ -298,13 +320,13 @@ describe('chain view inconsistencies and late payments', () => {
     chain.pay('tx-dup', 60_000n, 100);
     chain.pay('tx-dup', 70_000n, 100);
     await expect(
-      refreshInvoice(createInvoice(config()), chain, 1_500),
+      refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500),
     ).rejects.toThrow('conflicting entries');
   });
 
   it('does not conflict an expired invoice when a late payment vanishes', async () => {
     const chain = new FakeChain();
-    let invoice = await refreshInvoice(createInvoice(config()), chain, 2_000);
+    let invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 2_000);
     expect(invoice.state).toBe('expired');
 
     chain.pay('tx-late', 100_000n, null);
@@ -315,5 +337,52 @@ describe('chain view inconsistencies and late payments', () => {
     chain.drop('tx-late');
     invoice = await refreshInvoice(invoice, chain, 2_002);
     expect(invoice.state).toBe('expired');
+  });
+});
+
+describe('chain backends that return bad data', () => {
+  const paidAt = (block: unknown, tip: unknown = { height: 100, hash: 'hash-100' }): FakeChain => {
+    const chain = new FakeChain();
+    chain.tip = tip as BlockRef;
+    chain.activity = [{ txid: 'tx-bad', amount: 100_000n, block: block as BlockRef | null }];
+    return chain;
+  };
+  const refresh = (chain: FakeChain): Promise<Invoice> =>
+    refreshInvoice(createInvoice(config({ requiredConfirmations: 2 }), NETWORK), chain, 1_500);
+
+  it('throws instead of confirming a payment whose block has no usable height', async () => {
+    for (const height of [Number.NaN, undefined, null, '98', 98.5, -1, Number.POSITIVE_INFINITY, 2 ** 60]) {
+      await expect(refresh(paidAt({ height, hash: 'hash' }))).rejects.toThrow(
+        'a block for tx-bad without a valid height',
+      );
+    }
+    await expect(refresh(paidAt(undefined))).rejects.toThrow('no block field for tx-bad');
+  });
+
+  it('throws instead of confirming against a tip with no usable height', async () => {
+    for (const tip of [{ hash: 'hash' }, { height: Number.NaN, hash: 'hash' }, { height: '100', hash: 'hash' }, null]) {
+      await expect(refresh(paidAt({ height: 99, hash: 'hash-99' }, tip))).rejects.toThrow(
+        'a tip without a valid height',
+      );
+      // Also with nothing paid, so a broken backend shows up at once.
+      const idle = new FakeChain();
+      idle.tip = tip as unknown as BlockRef;
+      await expect(refresh(idle)).rejects.toThrow('a tip without a valid height');
+    }
+  });
+
+  it('throws on an amount that is negative, too large or not a bigint', async () => {
+    for (const amount of [-150_000n, MAX_GRAIN + 1n, 100_000, '100000', undefined]) {
+      const chain = new FakeChain();
+      chain.pay('tx-good', 250_000n, 99);
+      chain.activity.push({ txid: 'tx-odd', amount: amount as bigint, block: { height: 99, hash: 'hash-99' } });
+      await expect(refresh(chain)).rejects.toThrow('invalid amount for tx-odd');
+    }
+  });
+
+  it('still counts confirmations from valid heights', async () => {
+    const invoice = await refresh(paidAt({ height: 99, hash: 'hash-99' }));
+    expect(invoice.confirmations).toBe(2);
+    expect(invoice.state).toBe('confirmed');
   });
 });

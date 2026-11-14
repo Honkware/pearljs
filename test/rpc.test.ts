@@ -538,7 +538,7 @@ describe('pearldChainClient', () => {
       createdAt: 1000,
       expiresAt: 2000,
       requiredConfirmations: 6,
-    });
+    }, networks.regtest);
     const refreshed = await refreshInvoice(invoice, pearldChainClient(client), 1500);
     const paid = ['confirmedAmount', 'pendingAmount'].map((k) => BigInt(expected('searchrawtransactions', k) as string));
     expect(refreshed.paidAmount).toBe(paid[0]! + paid[1]!);

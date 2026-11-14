@@ -28,7 +28,10 @@
  *   never counted toward the invoice do not cause a conflict.
  */
 
-import type { ChainClient } from './client.js';
+import { decodeAddress } from './address.js';
+import { MAX_GRAIN } from './amount.js';
+import type { BlockRef, ChainClient } from './client.js';
+import type { PearlNetwork } from './networks.js';
 
 /** Lifecycle states of a watch-only invoice. */
 export type InvoiceState =
@@ -74,15 +77,26 @@ export interface Invoice extends CreateInvoiceConfig {
   readonly state: InvoiceState;
 }
 
-function assertValidConfig(config: CreateInvoiceConfig): void {
+function assertValidConfig(config: CreateInvoiceConfig, network: PearlNetwork): void {
   if (typeof config.id !== 'string' || config.id.length === 0) {
     throw new Error('invoice id must be a non-empty string');
   }
   if (typeof config.address !== 'string' || config.address.length === 0) {
     throw new Error('invoice address must be a non-empty string');
   }
+  if (network === null || typeof network !== 'object' || typeof network.bech32Hrp !== 'string') {
+    throw new TypeError('createInvoice needs the PearlNetwork the invoice address belongs to');
+  }
+  try {
+    decodeAddress(config.address, network);
+  } catch (error) {
+    throw new Error(`invoice address is not valid on ${network.name}: ${(error as Error).message}`);
+  }
   if (typeof config.amount !== 'bigint' || config.amount <= 0n) {
     throw new Error('invoice amount must be a positive bigint');
+  }
+  if (config.amount > MAX_GRAIN) {
+    throw new Error('invoice amount is above the largest Pearl amount');
   }
   if (!Number.isSafeInteger(config.createdAt) || config.createdAt < 0) {
     throw new Error('invoice createdAt must be a non-negative integer of epoch seconds');
@@ -95,10 +109,24 @@ function assertValidConfig(config: CreateInvoiceConfig): void {
   }
 }
 
-/** Create a new invoice in the "awaiting" state. Throws on invalid config. */
-export function createInvoice(config: CreateInvoiceConfig): Invoice {
-  assertValidConfig(config);
+/**
+ * Create a new invoice in the "awaiting" state. Throws on invalid config,
+ * which includes an address that is not a Pearl address on network and an
+ * amount above MAX_GRAIN.
+ */
+export function createInvoice(config: CreateInvoiceConfig, network: PearlNetwork): Invoice {
+  assertValidConfig(config, network);
   return { ...config, observedPayments: [], paidAmount: 0n, confirmations: 0, state: 'awaiting' };
+}
+
+// A height that is missing or not a number must never count as confirmed:
+// every comparison with NaN is false, so it has to be refused outright.
+function blockHeight(block: BlockRef, what: string): number {
+  const height = (block as BlockRef | null | undefined)?.height;
+  if (!Number.isSafeInteger(height) || height! < 0) {
+    throw new Error(`chain backend returned ${what} without a valid height`);
+  }
+  return height!;
 }
 
 /**
@@ -106,6 +134,10 @@ export function createInvoice(config: CreateInvoiceConfig): Invoice {
  * view. Pure with respect to the invoice: the input is not mutated and a
  * new record is returned. `now` is epoch seconds and defaults to the
  * current time; inject it for deterministic evaluation.
+ *
+ * What the chain backend returns is checked, not trusted: a tip or block
+ * without an integer height, or a payment whose amount is not a bigint from
+ * 0 to MAX_GRAIN, throws instead of producing a state.
  */
 export async function refreshInvoice(
   invoice: Invoice,
@@ -120,26 +152,37 @@ export async function refreshInvoice(
     client.getAddressActivity(invoice.address),
   ]);
 
+  const tipHeight = blockHeight(tip, 'a tip');
+
   // Entries sharing a txid are the same payment reported more than once.
   const current = new Map<
     string,
     { amount: bigint; blockHeight: number | null; blockHash: string | null }
   >();
   for (const payment of activity) {
-    const blockHeight = payment.block === null ? null : payment.block.height;
+    if (typeof payment.txid !== 'string' || payment.txid.length === 0) {
+      throw new Error('chain backend returned a payment without a txid');
+    }
+    if (typeof payment.amount !== 'bigint' || payment.amount < 0n || payment.amount > MAX_GRAIN) {
+      throw new Error(`chain backend returned an invalid amount for ${payment.txid}`);
+    }
+    if (payment.block === undefined) {
+      throw new Error(`chain backend returned no block field for ${payment.txid}; unconfirmed is null`);
+    }
+    const height = payment.block === null ? null : blockHeight(payment.block, `a block for ${payment.txid}`);
     const blockHash = payment.block === null ? null : payment.block.hash;
     const previous = current.get(payment.txid);
     if (previous !== undefined) {
       if (
         previous.amount !== payment.amount ||
-        previous.blockHeight !== blockHeight ||
+        previous.blockHeight !== height ||
         previous.blockHash !== blockHash
       ) {
         throw new Error(`chain backend returned conflicting entries for ${payment.txid}`);
       }
       continue;
     }
-    current.set(payment.txid, { amount: payment.amount, blockHeight, blockHash });
+    current.set(payment.txid, { amount: payment.amount, blockHeight: height, blockHash });
   }
 
   // Merge with persisted observations, stamping new txids as first seen now.
@@ -175,7 +218,7 @@ export async function refreshInvoice(
     for (const [, payment] of counted) {
       paidAmount += payment.amount;
       const c =
-        payment.blockHeight === null ? 0 : Math.max(0, tip.height - payment.blockHeight + 1);
+        payment.blockHeight === null ? 0 : Math.max(0, tipHeight - payment.blockHeight + 1);
       if (c < confirmations) confirmations = c;
     }
   }
@@ -201,13 +244,16 @@ export async function refreshInvoice(
  */
 export class InvoiceMonitor {
   readonly #client: ChainClient;
+  readonly #network: PearlNetwork;
 
-  constructor(client: ChainClient) {
+  /** network is the one invoice addresses must belong to. */
+  constructor(client: ChainClient, network: PearlNetwork) {
     this.#client = client;
+    this.#network = network;
   }
 
   createInvoice(config: CreateInvoiceConfig): Invoice {
-    return createInvoice(config);
+    return createInvoice(config, this.#network);
   }
 
   refreshInvoice(invoice: Invoice, now?: number): Promise<Invoice> {
