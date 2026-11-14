@@ -13,4 +13,5 @@ export * from './scriptpath.js';
 export * from './scripttools.js';
 export * from './scripttree.js';
 export * from './transaction.js';
+export * from './wif.js';
 export * from './xmss.js';

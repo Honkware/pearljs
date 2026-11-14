@@ -19,6 +19,7 @@ import (
 	"github.com/pearl-research-labs/pearl/node/btcec"
 	"github.com/pearl-research-labs/pearl/node/btcec/schnorr"
 	"github.com/pearl-research-labs/pearl/node/btcutil"
+	"github.com/pearl-research-labs/pearl/node/btcutil/base58"
 	"github.com/pearl-research-labs/pearl/node/btcutil/hdkeychain"
 	"github.com/pearl-research-labs/pearl/node/btcutil/psbt"
 	"github.com/pearl-research-labs/pearl/node/chaincfg"
@@ -214,7 +215,26 @@ type Vectors struct {
 	Messages         []MessageVector         `json:"messages"`
 	MultiASpends     []MultiASpendVector     `json:"multiASpends"`
 	ScriptToolkit    ScriptToolkitVectors    `json:"scriptToolkit"`
+	WIF              []WIFVector             `json:"wif"`
+	BadWIF           []BadWIFVector          `json:"badWif"`
 	BadBlocks        []BadBlockVector        `json:"badBlocks"`
+}
+
+// WIFVector is a private key as btcutil.NewWIF encodes it. Address is the
+// BIP86 key-path P2TR address Oyster's importprivkey gives the key.
+type WIFVector struct {
+	Network    string `json:"network"`
+	PrivateKey string `json:"privateKey"`
+	Compressed bool   `json:"compressed"`
+	WIF        string `json:"wif"`
+	Address    string `json:"address"`
+}
+
+// BadWIFVector is a string btcutil.DecodeWIF rejects, with its error.
+type BadWIFVector struct {
+	Name  string `json:"name"`
+	WIF   string `json:"wif"`
+	Error string `json:"error"`
 }
 
 // OpcodeVector describes one byte value. Disasm is DisasmString of the
@@ -1178,6 +1198,61 @@ func main() {
 			vector.Value = int64(value)
 		}
 		vectors.ScriptToolkit.Numbers = append(vectors.ScriptToolkit.Numbers, vector)
+	}
+
+	// WIF private keys, as dumpprivkey writes them and importprivkey reads them.
+	curveOrderMinusOne := mustHex("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140")
+	keyOne := append(make([]byte, 31), 1)
+	childKey, err := derive(account, 0, 0).ECPrivKey()
+	check(err)
+	for _, net := range []*chaincfg.Params{&chaincfg.MainNetParams, &chaincfg.TestNetParams, &chaincfg.SimNetParams} {
+		for _, raw := range [][]byte{childKey.Serialize(), keyOne, curveOrderMinusOne} {
+			priv, _ := btcec.PrivKeyFromBytes(raw)
+			addr, err := btcutil.NewAddressTaproot(
+				schnorr.SerializePubKey(txscript.ComputeTaprootKeyNoScript(priv.PubKey())), net,
+			)
+			check(err)
+			for _, compressed := range []bool{true, false} {
+				wif, err := btcutil.NewWIF(priv, net, compressed)
+				check(err)
+				decoded, err := btcutil.DecodeWIF(wif.String())
+				check(err)
+				if !decoded.IsForNet(net) || decoded.CompressPubKey != compressed {
+					panic("WIF does not round-trip")
+				}
+				vectors.WIF = append(vectors.WIF, WIFVector{
+					Network: net.Name, PrivateKey: hex.EncodeToString(raw), Compressed: compressed,
+					WIF: wif.String(), Address: addr.String(),
+				})
+			}
+		}
+	}
+	goodWIF := vectors.WIF[0].WIF
+	encodeRaw := func(payload []byte) string {
+		return base58.Encode(append(payload, chainhash.DoubleHashB(payload)[:4]...))
+	}
+	flipped := []byte(goodWIF)
+	if flipped[len(flipped)-1] == 'a' {
+		flipped[len(flipped)-1] = 'b'
+	} else {
+		flipped[len(flipped)-1] = 'a'
+	}
+	for _, item := range []struct {
+		name string
+		wif  string
+	}{
+		{"checksum", string(flipped)},
+		{"truncated", goodWIF[:len(goodWIF)-4]},
+		{"bad-compress-flag", encodeRaw(append(append([]byte{0x80}, childKey.Serialize()...), 0x02))},
+		{"zero-key", encodeRaw(append([]byte{0x80}, make([]byte, 32)...))},
+		{"key-equals-curve-order", encodeRaw(append([]byte{0x80}, mustHex("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141")...))},
+		{"not-base58", "0" + goodWIF[1:]},
+	} {
+		_, err := btcutil.DecodeWIF(item.wif)
+		if err == nil {
+			panic(item.name + ": Pearl accepted a bad WIF")
+		}
+		vectors.BadWIF = append(vectors.BadWIF, BadWIFVector{Name: item.name, WIF: item.wif, Error: err.Error()})
 	}
 
 	// Message signing as Oyster does it, with BIP86 mainnet keys.

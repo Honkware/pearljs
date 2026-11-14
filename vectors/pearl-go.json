@@ -3278,6 +3278,166 @@
       }
     ]
   },
+  "wif": [
+    {
+      "network": "mainnet",
+      "privateKey": "c08fd707b99840f22096faaee33e4f13b8b9e2a684951d2828f178a62d2d6fe9",
+      "compressed": true,
+      "wif": "L3g2TjAyBKhpG2qBb2m739hy3qvSgeD1C6HeMnXM9AQbZgSit17a",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74"
+    },
+    {
+      "network": "mainnet",
+      "privateKey": "c08fd707b99840f22096faaee33e4f13b8b9e2a684951d2828f178a62d2d6fe9",
+      "compressed": false,
+      "wif": "5KH6KHofZFCy297qcocpb24qx27fu2dhppsSgbnPgut7URacP93",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74"
+    },
+    {
+      "network": "mainnet",
+      "privateKey": "0000000000000000000000000000000000000000000000000000000000000001",
+      "compressed": true,
+      "wif": "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn",
+      "address": "prl1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5sse9xfq3"
+    },
+    {
+      "network": "mainnet",
+      "privateKey": "0000000000000000000000000000000000000000000000000000000000000001",
+      "compressed": false,
+      "wif": "5HpHagT65TZzG1PH3CSu63k8DbpvD8s5ip4nEB3kEsreAnchuDf",
+      "address": "prl1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5sse9xfq3"
+    },
+    {
+      "network": "mainnet",
+      "privateKey": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140",
+      "compressed": true,
+      "wif": "L5oLkpV3aqBjhki6LmvChTCV6odsp4SXM6FfU2Gppt5kFLaHLuZ9",
+      "address": "prl1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5sse9xfq3"
+    },
+    {
+      "network": "mainnet",
+      "privateKey": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140",
+      "compressed": false,
+      "wif": "5Km2kuu7vtFDPpxywn4u3NLpbr5jKpTB3jsuDU2KYEqetqj84qw",
+      "address": "prl1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5sse9xfq3"
+    },
+    {
+      "network": "testnet",
+      "privateKey": "c08fd707b99840f22096faaee33e4f13b8b9e2a684951d2828f178a62d2d6fe9",
+      "compressed": true,
+      "wif": "cU31veApcPQ5RUJSySaEQUD2g5DrM6JhG8S7UCyreH4bpRUk6tiB",
+      "address": "tprl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqr394pq"
+    },
+    {
+      "network": "testnet",
+      "privateKey": "c08fd707b99840f22096faaee33e4f13b8b9e2a684951d2828f178a62d2d6fe9",
+      "compressed": false,
+      "wif": "933iu2dD9UH6zCd8F9WjTccobgUP4CAuAmjPmE8u2edAFQsL53f",
+      "address": "tprl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqr394pq"
+    },
+    {
+      "network": "testnet",
+      "privateKey": "0000000000000000000000000000000000000000000000000000000000000001",
+      "compressed": true,
+      "wif": "cMahea7zqjxrtgAbB7LSGbcQUr1uX1ojuat9jZodMN87JcbXMTcA",
+      "address": "tprl1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ssj2zhly"
+    },
+    {
+      "network": "testnet",
+      "privateKey": "0000000000000000000000000000000000000000000000000000000000000001",
+      "compressed": false,
+      "wif": "91avARGdfge8E4tZfYLoxeJ5sGBdNJQH4kvjJoQFacbgwmaKkrx",
+      "address": "tprl1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ssj2zhly"
+    },
+    {
+      "network": "testnet",
+      "privateKey": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140",
+      "compressed": true,
+      "wif": "cWALDjUu1tszsCBMjBjL4mhYj2wHUWYDR8Q8aSjLKzjkW5eBtpzu",
+      "address": "tprl1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ssj2zhly"
+    },
+    {
+      "network": "testnet",
+      "privateKey": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140",
+      "compressed": false,
+      "wif": "93XfLeifX7KMMtUGa7xouxtnFWSSUyzNPgjrJ6Npsyahfqjy7oJ",
+      "address": "tprl1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ssj2zhly"
+    },
+    {
+      "network": "simnet",
+      "privateKey": "c08fd707b99840f22096faaee33e4f13b8b9e2a684951d2828f178a62d2d6fe9",
+      "compressed": true,
+      "wif": "FuSNTD5nH23xyYTg6ui6kH4L5gJBJvcediqzh4phPmJfgQu9mUa1",
+      "address": "rprl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqegedyg"
+    },
+    {
+      "network": "simnet",
+      "privateKey": "c08fd707b99840f22096faaee33e4f13b8b9e2a684951d2828f178a62d2d6fe9",
+      "compressed": false,
+      "wif": "4NrFNoEmhLGdFAr6EaEqt3HAJpsZhK3BnvtRrQXHrZhFf1U14Dm",
+      "address": "rprl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqegedyg"
+    },
+    {
+      "network": "simnet",
+      "privateKey": "0000000000000000000000000000000000000000000000000000000000000001",
+      "compressed": true,
+      "wif": "Fnz4B92xWNckSkKpJaUJcQThtT6EUr7hHBJ2xReU6rNBAbvAt4zY",
+      "address": "rprl1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ssgn706v"
+    },
+    {
+      "network": "simnet",
+      "privateKey": "0000000000000000000000000000000000000000000000000000000000000001",
+      "compressed": false,
+      "wif": "4MPSeBtCDYdeV37Xey4vP4xSaQap1RGZgv5mPyneQXfnMLR28SV",
+      "address": "rprl1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ssgn706v"
+    },
+    {
+      "network": "simnet",
+      "privateKey": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140",
+      "compressed": true,
+      "wif": "FwZgkJPrgXXtRGLaresCQaYr8e1cSLrAnip1oJaB5UypN54C7Cms",
+      "address": "rprl1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ssgn706v"
+    },
+    {
+      "network": "simnet",
+      "privateKey": "fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364140",
+      "compressed": false,
+      "wif": "4PLBpRLE4yJscrhEZYgvLPZ8xeqd86rf1qttPGmDhteo5RmYrTP",
+      "address": "rprl1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ssgn706v"
+    }
+  ],
+  "badWif": [
+    {
+      "name": "checksum",
+      "wif": "L3g2TjAyBKhpG2qBb2m739hy3qvSgeD1C6HeMnXM9AQbZgSit17b",
+      "error": "checksum mismatch"
+    },
+    {
+      "name": "truncated",
+      "wif": "L3g2TjAyBKhpG2qBb2m739hy3qvSgeD1C6HeMnXM9AQbZgSi",
+      "error": "malformed private key"
+    },
+    {
+      "name": "bad-compress-flag",
+      "wif": "L3g2TjAyBKhpG2qBb2m739hy3qvSgeD1C6HeMnXM9AQbZgYuZZ11",
+      "error": "malformed private key"
+    },
+    {
+      "name": "zero-key",
+      "wif": "5HpHagT65TZzG1PH3CSu63k8DbpvD8s5ip4nEB3kEsreAbuatmU",
+      "error": "malformed private key"
+    },
+    {
+      "name": "key-equals-curve-order",
+      "wif": "5Km2kuu7vtFDPpxywn4u3NLpbr5jKpTB3jsuDU2KYEqetwr388P",
+      "error": "malformed private key"
+    },
+    {
+      "name": "not-base58",
+      "wif": "03g2TjAyBKhpG2qBb2m739hy3qvSgeD1C6HeMnXM9AQbZgSit17a",
+      "error": "malformed private key"
+    }
+  ],
   "badBlocks": [
     {
       "name": "unknown-certificate-version",
