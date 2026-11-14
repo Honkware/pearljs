@@ -13,6 +13,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/pearl-research-labs/pearl/node/blockchain"
 	"github.com/pearl-research-labs/pearl/node/btcec"
 	"github.com/pearl-research-labs/pearl/node/btcec/schnorr"
 	"github.com/pearl-research-labs/pearl/node/btcutil"
@@ -204,6 +205,139 @@ type Vectors struct {
 	Scripts          ScriptVectors           `json:"scripts"`
 	ScriptTrees      []ScriptTreeVector      `json:"scriptTrees"`
 	ScriptPathSpends []ScriptPathSpendVector `json:"scriptPathSpends"`
+	Blocks           []BlockVector           `json:"blocks"`
+	BadBlocks        []BadBlockVector        `json:"badBlocks"`
+}
+
+type BlockVector struct {
+	Name                   string   `json:"name"`
+	Hex                    string   `json:"hex"`
+	Hash                   string   `json:"hash"`
+	CertificateVersion     uint32   `json:"certificateVersion"`
+	CertificateHex         string   `json:"certificateHex"`
+	ProofCommitment        string   `json:"proofCommitment"`
+	IsMoE                  bool     `json:"isMoE"`
+	CertificateHashMatches bool     `json:"certificateHashMatches"`
+	CommitmentMatches      bool     `json:"commitmentMatches"`
+	TxIDs                  []string `json:"txids"`
+	MerkleRoot             string   `json:"merkleRoot"`
+	WitnessMerkleRoot      string   `json:"witnessMerkleRoot"`
+	WitnessError           string   `json:"witnessError"`
+	Size                   int      `json:"size"`
+	StrippedSize           int      `json:"strippedSize"`
+	NoWitnessSize          int      `json:"noWitnessSize"`
+	Vsize                  int64    `json:"vsize"`
+}
+
+type BadBlockVector struct {
+	Name  string `json:"name"`
+	Hex   string `json:"hex"`
+	Error string `json:"error"`
+}
+
+func serializeBlock(block *wire.MsgBlock) []byte {
+	var buf bytes.Buffer
+	check(block.Serialize(&buf))
+	return buf.Bytes()
+}
+
+// makeBlockVector records what Pearl itself computes for a block, so the
+// TypeScript side is compared against the node instead of against itself.
+func makeBlockVector(name string, block *wire.MsgBlock) BlockVector {
+	raw := serializeBlock(block)
+	var decoded wire.MsgBlock
+	check(decoded.Deserialize(bytes.NewReader(raw)))
+	if !bytes.Equal(serializeBlock(&decoded), raw) {
+		panic(name + ": block does not round-trip")
+	}
+	utilBlock := btcutil.NewBlock(block)
+	header := block.BlockHeader()
+	vector := BlockVector{
+		Name: name, Hex: hex.EncodeToString(raw), Hash: header.BlockHash().String(),
+		MerkleRoot:        blockchain.CalcMerkleRoot(utilBlock.Transactions(), false).String(),
+		WitnessMerkleRoot: blockchain.CalcMerkleRoot(utilBlock.Transactions(), true).String(),
+		Size:              block.SerializeSize(), StrippedSize: block.SerializeSizeStripped(),
+		NoWitnessSize: block.SerializeSizeNoWitness(), Vsize: blockchain.GetBlockVsize(utilBlock),
+	}
+	for _, tx := range block.Transactions {
+		vector.TxIDs = append(vector.TxIDs, tx.TxID())
+	}
+	if err := blockchain.ValidateWitnessCommitment(utilBlock); err != nil {
+		vector.WitnessError = err.Error()
+	}
+	var certBuf bytes.Buffer
+	check(block.MsgHeader.MsgCertificate.PrlEncode(&certBuf, 0))
+	vector.CertificateHex = hex.EncodeToString(certBuf.Bytes())
+	if cert := block.BlockCertificate(); cert != nil {
+		blockHash, commitment := header.BlockHash(), cert.ProofCommitment()
+		certHash := cert.BlockHash()
+		vector.CertificateVersion = uint32(cert.Version())
+		vector.ProofCommitment = hex.EncodeToString(commitment[:])
+		vector.IsMoE = cert.IsMoE()
+		vector.CertificateHashMatches = certHash == blockHash
+		vector.CommitmentMatches = header.ProofCommitment == commitment
+	}
+	return vector
+}
+
+// coinbaseTx pays to payScript and, when txs carry witnesses, commits to them
+// the way Pearl's miner does: a 32-byte witness nonce and an OP_RETURN output
+// with the witness magic bytes.
+func coinbaseTx(height int64, payScript []byte, withNonce bool) *wire.MsgTx {
+	tx := wire.NewMsgTx(wire.TxVersion)
+	sigScript, err := txscript.NewScriptBuilder().AddInt64(height).AddData([]byte("pearljs")).Script()
+	check(err)
+	in := wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{}, wire.MaxPrevOutIndex), sigScript, nil)
+	if withNonce {
+		in.SetWitness(wire.TxWitness{make([]byte, blockchain.CoinbaseWitnessDataLen)})
+	}
+	tx.AddTxIn(in)
+	tx.AddTxOut(wire.NewTxOut(5_000_000_000, payScript))
+	return tx
+}
+
+func addWitnessCommitment(block *wire.MsgBlock, corrupt bool) {
+	coinbase := block.Transactions[0]
+	nonce := coinbase.TxIn[0].DecodeWitness()[0]
+	txs := btcutil.NewBlock(block).Transactions()
+	root := blockchain.CalcMerkleRoot(txs, true)
+	commitment := chainhash.DoubleHashB(append(root[:], nonce...))
+	if corrupt {
+		commitment[0] ^= 0xff
+	}
+	script := append(append([]byte{}, blockchain.WitnessMagicBytes...), commitment...)
+	coinbase.AddTxOut(wire.NewTxOut(0, script))
+}
+
+// sealBlock fills in the merkle root and, given a certificate, binds header
+// and certificate the way Pearl's verifier expects: the header carries the
+// certificate's proof commitment and the certificate carries the header hash.
+func sealBlock(block *wire.MsgBlock, cert wire.BlockCertificate) {
+	header := block.BlockHeader()
+	header.MerkleRoot = blockchain.CalcMerkleRoot(btcutil.NewBlock(block).Transactions(), false)
+	if cert == nil {
+		block.MsgHeader.MsgCertificate.Certificate = nil
+		return
+	}
+	header.ProofCommitment = cert.ProofCommitment()
+	hash := header.BlockHash()
+	switch c := cert.(type) {
+	case *wire.CertificateV1:
+		c.Hash = hash
+	case *wire.CertificateV2:
+		c.Hash = hash
+	case *wire.CertificateV3:
+		c.Hash = hash
+	}
+	block.MsgHeader.MsgCertificate.Certificate = cert
+}
+
+func patternBytes(n int, seed byte) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = seed + byte(i)
+	}
+	return out
 }
 
 // leafKeyScripts returns n tapscript leaves, leaf i being
@@ -709,6 +843,96 @@ func main() {
 		vector.TxID = finalTx.TxID()
 		vector.WTxID = finalTx.WitnessHash().String()
 		vectors.ScriptPathSpends = append(vectors.ScriptPathSpends, vector)
+	}
+
+	for _, net := range nets {
+		vectors.Blocks = append(vectors.Blocks, makeBlockVector(net.Name+"-genesis", net.GenesisBlock))
+	}
+
+	// Synthetic blocks cover every certificate version, the MoE size
+	// threshold, odd transaction counts and witness commitments. Spends are
+	// taken from the script-path vectors above so the blocks carry real
+	// witness transactions.
+	var spends []*wire.MsgTx
+	for _, vector := range vectors.ScriptPathSpends {
+		raw, err := hex.DecodeString(vector.FinalTxHex)
+		check(err)
+		var tx wire.MsgTx
+		check(tx.Deserialize(bytes.NewReader(raw)))
+		spends = append(spends, &tx)
+	}
+	v1Public := [wire.PublicDataSizeV1]byte{}
+	copy(v1Public[:], patternBytes(wire.PublicDataSizeV1, 0x10))
+	newV2 := func(publicLen int, seed byte) wire.CertificateV2 {
+		c := wire.CertificateV2{PublicDataLen: uint32(publicLen), ProofData: patternBytes(97, seed)}
+		copy(c.PublicData[:], patternBytes(publicLen, seed))
+		return c
+	}
+	v2Dense, v2MoE, v3 := newV2(wire.PublicDataSizeDenseV2, 0x20), newV2(wire.PublicDataSizeDenseV2+1, 0x30), newV2(300, 0x40)
+	v2BadCommit, v2NoCommit := newV2(200, 0x50), newV2(180, 0x70)
+	for i, item := range []struct {
+		name      string
+		cert      wire.BlockCertificate
+		spends    int
+		commit    bool
+		corrupt   bool
+		withNonce bool
+	}{
+		{"no-certificate-coinbase-only", nil, 0, false, false, false},
+		{"v1-one-spend", &wire.CertificateV1{PublicData: v1Public, ProofData: patternBytes(150, 0x01)}, 1, true, false, true},
+		{"v2-dense-two-spends", &v2Dense, 2, true, false, true},
+		{"v2-moe-three-spends", &v2MoE, 3, true, false, true},
+		{"v3-four-spends", &wire.CertificateV3{CertificateV2: v3}, 4, true, false, true},
+		{"v2-wrong-witness-commitment", &v2BadCommit, 1, true, true, true},
+		{"v2-witness-without-commitment", &v2NoCommit, 1, false, false, false},
+	} {
+		block := &wire.MsgBlock{}
+		block.MsgHeader.BlockHeader = wire.BlockHeader{
+			Version: 1, PrevBlock: chainhash.Hash{byte(0x60 + i)},
+			Timestamp: time.Unix(int64(1_760_000_000+i*600), 0), Bits: 0x1d00ffff,
+		}
+		block.AddTransaction(coinbaseTx(int64(100+i), script, item.withNonce))
+		for _, spend := range spends[:item.spends] {
+			block.AddTransaction(spend)
+		}
+		if item.commit {
+			addWitnessCommitment(block, item.corrupt)
+		}
+		sealBlock(block, item.cert)
+		vectors.Blocks = append(vectors.Blocks, makeBlockVector(item.name, block))
+	}
+
+	// Encodings Pearl's decoder rejects, built by editing a valid block.
+	base, err := hex.DecodeString(vectors.Blocks[len(nets)+2].Hex)
+	check(err)
+	badCert := func(edit func(b []byte) []byte) []byte {
+		return edit(append([]byte{}, base...))
+	}
+	for _, item := range []struct {
+		name string
+		raw  []byte
+	}{
+		{"unknown-certificate-version", badCert(func(b []byte) []byte { b[0] = 4; return b })},
+		{"public-data-over-limit", badCert(func(b []byte) []byte {
+			binary.LittleEndian.PutUint32(b[36:], wire.PublicDataMaxSizeV2+1)
+			return b
+		})},
+		{"proof-over-limit", badCert(func(b []byte) []byte {
+			at := 40 + wire.PublicDataSizeDenseV2
+			binary.LittleEndian.PutUint32(b[at:], wire.MaxZKProofSize+1)
+			return b
+		})},
+		{"truncated-header", base[:4+32+4+wire.PublicDataSizeDenseV2+4+97+50]},
+		{"truncated-transactions", base[:len(base)-10]},
+	} {
+		var block wire.MsgBlock
+		err := block.Deserialize(bytes.NewReader(item.raw))
+		if err == nil {
+			panic(item.name + ": Pearl accepted a bad block")
+		}
+		vectors.BadBlocks = append(vectors.BadBlocks, BadBlockVector{
+			Name: item.name, Hex: hex.EncodeToString(item.raw), Error: err.Error(),
+		})
 	}
 
 	data, err := json.MarshalIndent(vectors, "", "  ")
