@@ -236,6 +236,14 @@ describe('wallet XMSS keys', () => {
     expect(xmssIndexOf(sent.hex)).toBe(1);
   });
 
+  it('counts a frozen key\'s coins as held back, not as missing, when a send falls short', async () => {
+    const { chain, wallet, key } = await xmssWallet();
+    const restored = await PearlWallet.restore({ store: createMemoryStore(), backend: chain, transactions: chain, keystore: wallet.exportKeystore(), passphrase: PASSPHRASE, backup: await wallet.exportState() });
+    const [estimate] = restored.estimateSend({ recipients: [{ address: STRANGER, amount: prl('1') }], from: 'all' }, [2000n]);
+    expect(estimate!.error).toMatchObject({ name: 'WalletInsufficientFundsError', available: 0n, frozen: prl('10'), locked: 0n });
+    void key;
+  });
+
   it('needs the next index of an XMSS key that comes with its seeds', async () => {
     const chain = new FakeChain();
     const wallet = await newWallet(chain);
