@@ -7,6 +7,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  type AddedNodeInfo,
+  type ChainName,
+  type ChainTipStatus,
+  type NetworkInfo,
+  type ScriptType,
+  type SoftForkStatus,
   OysterClient,
   PEARLD_LIMITED_METHODS,
   PearldClient,
@@ -197,5 +203,30 @@ describe('method coverage', () => {
 
   it('agrees with pearld on what its limited user may call', () => {
     expect([...PEARLD_LIMITED_METHODS].sort()).toEqual(tables.limited);
+  });
+});
+
+// Each union as a record with one key per member, so the compiler checks the
+// list is the whole union and the test checks it is the whole Go set.
+const unions = {
+  scriptType: { nonstandard: 1, nulldata: 1, witness_v1_taproot: 1, witness_v2_merkleroot: 1 } satisfies Record<ScriptType, 1>,
+  chain: { mainnet: 1, testnet: 1, testnet2: 1, regtest: 1, simnet: 1, signet: 1 } satisfies Record<ChainName, 1>,
+  chainTipStatus: { active: 1, invalid: 1, 'valid-fork': 1 } satisfies Record<Exclude<ChainTipStatus, `unknown: ${string}`>, 1>,
+  softForkStatus: { defined: 1, started: 1, lockedin: 1, active: 1, failed: 1 } satisfies Record<SoftForkStatus, 1>,
+  addedNodeConnected: { inbound: 1, outbound: 1, false: 1 } satisfies Record<NonNullable<AddedNodeInfo['addresses']>[number]['connected'], 1>,
+};
+
+describe('result string unions', () => {
+  it('hold exactly the strings Pearl\'s code can put in each field', () => {
+    const sets = fixture('string-sets').expect as Record<keyof typeof unions, string[]>;
+    for (const [field, members] of Object.entries(unions)) {
+      expect(Object.keys(members).sort(), field).toEqual([...sets[field as keyof typeof unions]].sort());
+    }
+  });
+
+  it('name the networks pearld lists in getnetworkinfo', async () => {
+    const names = { ipv4: 1, ipv6: 1, onion: 1 } satisfies Record<NetworkInfo['networks'][number]['name'], 1>;
+    const { client } = pearld({ getnetworkinfo: 'getnetworkinfo' });
+    expect((await client.getNetworkInfo()).networks.map((network) => network.name).sort()).toEqual(Object.keys(names).sort());
   });
 });

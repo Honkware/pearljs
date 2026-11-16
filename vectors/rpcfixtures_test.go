@@ -301,6 +301,7 @@ func TestPearljsRPCFixtures(t *testing.T) {
 	backendFixtures(t, params, s, reply)
 	laterFixtures(t, params, reply, priv)
 	fixtures["handler-tables"] = rpcFixture{Body: "", Expect: handlerTables(t)}
+	fixtures["string-sets"] = rpcFixture{Body: "", Expect: stringSets(t)}
 
 	data, err := json.MarshalIndent(fixtures, "", "  ")
 	must(err)
@@ -931,5 +932,51 @@ func handlerTables(t *testing.T) map[string]any {
 	return map[string]any{
 		"pearld": keys(pearld), "websocket": keys(websocket), "limited": keys(rpcLimited),
 		"unimplemented": keys(rpcUnimplemented), "oyster": keys(oyster), "oysterRefused": keys(refused),
+	}
+}
+
+// stringSets holds the strings RPC results take from fixed sets in Pearl's
+// code, for the unions pearljs types those fields with.
+func stringSets(t *testing.T) map[string]any {
+	t.Helper()
+	var scriptTypes []string
+	for class := 0; ; class++ {
+		name := func() (name string) {
+			// ScriptClass.String indexes past its table for the first
+			// value after the last class.
+			defer func() {
+				if recover() != nil {
+					name = "Invalid"
+				}
+			}()
+			return txscript.ScriptClass(class).String()
+		}()
+		if name == "Invalid" {
+			break
+		}
+		scriptTypes = append(scriptTypes, name)
+	}
+	var softForks []string
+	for _, state := range []blockchain.ThresholdState{
+		blockchain.ThresholdDefined, blockchain.ThresholdStarted, blockchain.ThresholdLockedIn,
+		blockchain.ThresholdActive, blockchain.ThresholdFailed,
+	} {
+		name, err := softForkStatus(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		softForks = append(softForks, name)
+	}
+	return map[string]any{
+		"scriptType": scriptTypes,
+		"chainTipStatus": []string{
+			blockchain.StatusActive.String(), blockchain.StatusInvalid.String(), blockchain.StatusValidFork.String(),
+		},
+		"chain": []string{
+			chaincfg.MainNetParams.Name, chaincfg.TestNetParams.Name, chaincfg.TestNet2Params.Name,
+			chaincfg.RegressionNetParams.Name, chaincfg.SimNetParams.Name, chaincfg.SigNetParams.Name,
+		},
+		"softForkStatus":     softForks,
+		"addedNodeConnected": []string{directionString(true), directionString(false), "false"},
 	}
 }

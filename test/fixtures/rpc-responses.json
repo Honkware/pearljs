@@ -762,6 +762,42 @@
   "stop": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":\"pearld stopping.\",\"error\":null,\"id\":128}\n"
   },
+  "string-sets": {
+    "body": "",
+    "expect": {
+      "addedNodeConnected": [
+        "inbound",
+        "outbound",
+        "false"
+      ],
+      "chain": [
+        "mainnet",
+        "testnet",
+        "testnet2",
+        "regtest",
+        "simnet",
+        "signet"
+      ],
+      "chainTipStatus": [
+        "active",
+        "invalid",
+        "valid-fork"
+      ],
+      "scriptType": [
+        "nonstandard",
+        "nulldata",
+        "witness_v1_taproot",
+        "witness_v2_merkleroot"
+      ],
+      "softForkStatus": [
+        "defined",
+        "started",
+        "lockedin",
+        "active",
+        "failed"
+      ]
+    }
+  },
   "submitblock-accepted": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":null,\"id\":122}\n"
   },

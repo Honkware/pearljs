@@ -603,13 +603,25 @@ function splitJsonArray(text: string): string[] | null {
 
 // pearld results
 
+/** The script classes pearld names (scriptClassToName, node/txscript/standard.go). */
+export type ScriptType = 'nonstandard' | 'nulldata' | 'witness_v1_taproot' | 'witness_v2_merkleroot';
+
+/** The network a node runs on, as getblockchaininfo names it (chaincfg Params.Name). pearld can run signet; pearljs has no network object for it. */
+export type ChainName = PearlNetworkName | 'signet';
+
+/** A chain tip's status (blockchain.TipStatus); anything else Pearl prints as "unknown: " and the flag bits. */
+export type ChainTipStatus = 'active' | 'invalid' | 'valid-fork' | `unknown: ${string}`;
+
+/** A BIP9 deployment's state, as getblockchaininfo names it (softForkStatus, node/rpcserver.go). */
+export type SoftForkStatus = 'defined' | 'started' | 'lockedin' | 'active' | 'failed';
+
 /** An output script as pearld decodes it. */
 export interface ScriptPubKeyResult {
   readonly asm: string;
   readonly hex?: string;
   /** Deprecated in Bitcoin Core, still sent by Pearl. */
   readonly reqSigs?: number;
-  readonly type: string;
+  readonly type: ScriptType;
   readonly address?: string;
   readonly addresses?: string[];
 }
@@ -670,7 +682,7 @@ export interface SearchRawTransactionsResult {
 
 /** A BIP9 deployment in getblockchaininfo. */
 export interface Bip9SoftForkDescription {
-  readonly status: string;
+  readonly status: SoftForkStatus;
   readonly bit: number;
   readonly startTime: number;
   readonly start_time: number;
@@ -681,7 +693,7 @@ export interface Bip9SoftForkDescription {
 
 /** getblockchaininfo (btcjson.GetBlockChainInfoResult). */
 export interface BlockchainInfo {
-  readonly chain: string;
+  readonly chain: ChainName;
   readonly blocks: number;
   /** Pearl reports its own tip height here, not the best known header. */
   readonly headers: number;
@@ -809,8 +821,8 @@ export interface ChainTip {
   readonly hash: string;
   /** Blocks between this tip and the best chain; 0 for the best chain itself. */
   readonly branchlen: number;
-  /** "active", "valid-fork", "valid-headers", "headers-only" or "invalid". */
-  readonly status: string;
+  /** "active" for the best chain, "valid-fork" for a branch with its blocks stored, "invalid" for one containing an invalid block. */
+  readonly status: ChainTipStatus;
 }
 
 /** gettxspendingprevout. pearld looks in the mempool only, so a spend that has confirmed is not reported. */
@@ -871,7 +883,8 @@ export interface NetworkInfo {
   readonly connections_out: number;
   readonly networkactive: boolean;
   readonly networks: {
-    readonly name: string;
+    /** The three pearld lists (node/rpcserver.go, handleGetNetworkInfo). */
+    readonly name: 'ipv4' | 'ipv6' | 'onion';
     readonly limited: boolean;
     readonly reachable: boolean;
     readonly proxy: string;
@@ -1016,8 +1029,8 @@ export interface NodeAddress {
 export interface AddedNodeInfo {
   readonly addednode: string;
   readonly connected?: boolean;
-  /** The addresses the name resolved to, each "inbound", "outbound" or "false". */
-  readonly addresses?: { readonly address: string; readonly connected: string }[];
+  /** The addresses the name resolved to, with the direction of the connection to each, or "false" for none. */
+  readonly addresses?: { readonly address: string; readonly connected: 'inbound' | 'outbound' | 'false' }[];
 }
 
 /** A class whose instances can `call`: what pearldMethods and oysterMethods extend. */
