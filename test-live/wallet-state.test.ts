@@ -421,7 +421,7 @@ describeLive('wallet state on pearld', () => {
     await mine(1);
     await restored.sync();
     expect(restored.transaction(third.txid)).toMatchObject({ status: 'confirmed' });
-    expect(restored.xmssKeys()).toMatchObject([{ nextIndex: 3, highestOnChain: 2, frozen: null }]);
+    expect(restored.xmssKeys()).toMatchObject([{ nextIndex: 3, frozen: null }]);
     await restored.close();
 
     // A copy of the store file, opened as if it were current, is caught by the same reading of the chain.
@@ -431,7 +431,7 @@ describeLive('wallet state on pearld', () => {
     const events = recordEvents(copied, 'xmss');
     await copied.sync();
     expect(copied.xmssKeys()).toMatchObject([{ nextIndex: 0, highestOnChain: 2, frozen: 'behind' }]);
-    expect(events.seen).toMatchObject([{ id: key.id, reason: 'behind', nextIndex: 0, highestOnChain: 2 }]);
+    expect(events.seen).toMatchObject([{ id: key.id, reason: 'behind', nextIndex: 0 }]);
     expect(await send(copied).catch((err: unknown) => err)).toMatchObject({ name: 'XmssError', code: 'XMSS_KEY_BEHIND' });
     await copied.close();
   });

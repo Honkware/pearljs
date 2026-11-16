@@ -138,6 +138,12 @@ describeOyster('wallet state beside Oyster', () => {
       expect(wallet.tip).toEqual(await nodeBackend.getTip());
     };
     await agree();
+    // Oyster watches only the addresses it has derived. The wallet pays change to the next
+    // address of the change chain, so Oyster is asked for that address before each send.
+    const oysterDerivesChange = async (sends: number): Promise<void> => {
+      const next = wallet.accounts()[0]!.nextChangeIndex;
+      for (let i = 0; i < sends; i += 1) expect(await oyster.getRawChangeAddress()).toBe(watching.deriveAddress(next + i, true));
+    };
 
     // Receive at an address Oyster hands out: Oyster only watches addresses it has derived itself.
     const address = await oyster.getNewAddress();
@@ -151,6 +157,7 @@ describeOyster('wallet state beside Oyster', () => {
 
     // Send through Oyster's connection to its pearld.
     const recipients = [{ address: elsewhere(10), amount: 4_000_000n }];
+    await oysterDerivesChange(1);
     const sent = await wallet.send({ recipients, feeRate: FEE_RATE });
     await expectSendMatchesNode(wallet, sent, recipients);
     expect(await eventually(() => oyster.getTransaction(sent.txid).catch(() => null), (tx) => tx !== null)).toMatchObject({ txid: sent.txid, fee: sent.fee });
@@ -158,6 +165,7 @@ describeOyster('wallet state beside Oyster', () => {
     await agree();
     expect(wallet.transaction(sent.txid)).toMatchObject({ status: 'confirmed', fee: sent.fee });
 
+    await oysterDerivesChange(2);
     const pair = await Promise.all([11, 12].map((n) => wallet.send({ recipients: [{ address: elsewhere(n), amount: 2_000_000n }], feeRate: FEE_RATE })));
     const spent = pair.flatMap((result) => result.inputs.map(outpoint));
     expect(new Set(spent).size).toBe(spent.length);
@@ -165,6 +173,7 @@ describeOyster('wallet state beside Oyster', () => {
     await mine(1);
     await agree();
 
+    await oysterDerivesChange(1);
     const original = await wallet.send({ recipients: [{ address: elsewhere(13), amount: 1_000_000n }], feeRate: FEE_RATE, rbf: true });
     const bumped = await wallet.bumpFee(original.txid, { feeRate: 6000n });
     expect(await pearld.getRawMempool()).toContain(bumped.txid);
