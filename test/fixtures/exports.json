@@ -163,6 +163,7 @@
       "feeRateFromPearlPerKvB",
       "feeRateToGrainPerVbyte",
       "feeRateToPearlPerKvB",
+      "fetchPayerInputs",
       "filterHash",
       "filterHeader",
       "filterHeaderHex",
@@ -225,6 +226,7 @@
       "parseTaprootControlBlock",
       "parseTransaction",
       "payFromAccount",
+      "payerInputs",
       "pearldBackend",
       "pearldChainClient",
       "pearldMethods",
@@ -401,6 +403,7 @@
       "PackageLimitOptions",
       "PackageLimits",
       "ParsedSeedInput",
+      "PayerInput",
       "Payment",
       "PaymentOptions",
       "PearlAccount",
@@ -773,10 +776,12 @@
     "values": [
       "InvoiceMonitor",
       "createInvoice",
+      "fetchPayerInputs",
       "invoiceFromJson",
       "invoicePaymentFromJson",
       "invoicePaymentToJson",
       "invoiceToJson",
+      "payerInputs",
       "refreshInvoice"
     ],
     "types": [
@@ -786,7 +791,8 @@
       "InvoicePayment",
       "InvoicePaymentJson",
       "InvoicePaymentStatus",
-      "InvoiceState"
+      "InvoiceState",
+      "PayerInput"
     ]
   },
   "keys": {

@@ -8,7 +8,9 @@ import type { AddressPayment, BlockRef, ChainClient, ChainTransaction } from '..
 import type { CreateInvoiceConfig, Invoice } from '../src/invoice.js';
 import { encodeAddress } from '../src/address.js';
 import { MAX_GRAIN } from '../src/amount.js';
-import { InvoiceMonitor, createInvoice, invoiceFromJson, invoicePaymentFromJson, invoiceToJson, refreshInvoice } from '../src/invoice.js';
+import { InvoiceMonitor, createInvoice, fetchPayerInputs, invoiceFromJson, invoicePaymentFromJson, invoiceToJson, payerInputs, refreshInvoice } from '../src/invoice.js';
+import { createTransaction, transactionId } from '../src/transaction.js';
+import { toOutputScript } from '../src/address.js';
 import { PearlError } from '../src/errors.js';
 import { networks } from '../src/networks.js';
 import { ScriptedChain } from './invoice-helpers.js';
@@ -621,5 +623,69 @@ describe('JSON codecs', () => {
       expect((caught as PearlError).code, what).toBe('INVOICE_JSON_INVALID');
     }
     expect(() => invoicePaymentFromJson({ ...json.payments[0]!, status: 'lost' })).toThrow('status is not one of');
+  });
+});
+
+describe('refunds', () => {
+  const payer = (n: number) => encodeAddress({ version: 1, program: new Uint8Array(32).fill(n) }, NETWORK);
+  const hashOf = (txid: string) => Uint8Array.from(Buffer.from(txid, 'hex')).reverse();
+
+  // Two funding transactions and a payment spending three of their outputs, one with no address.
+  function payment() {
+    const first = createTransaction(2);
+    first.addInput(new Uint8Array(32).fill(1), 0);
+    first.addOutput(toOutputScript(payer(2), NETWORK), 300_000n);
+    first.addOutput(Uint8Array.from([0x00, 0x14, ...new Uint8Array(20).fill(9)]), 50_000n);
+    const second = createTransaction(2);
+    second.addInput(new Uint8Array(32).fill(2), 0);
+    second.addOutput(toOutputScript(payer(3), NETWORK), 80_000n);
+    const pay = createTransaction(2);
+    pay.addInput(hashOf(transactionId(first)), 0);
+    pay.addInput(hashOf(transactionId(second)), 0);
+    pay.addInput(hashOf(transactionId(first)), 1);
+    pay.addOutput(toOutputScript(ADDRESS, NETWORK), 400_000n);
+    const txs = new Map([first, second, pay].map((tx) => [transactionId(tx), tx.toHex()]));
+    let fetches = 0;
+    const source = {
+      getRawTransaction: (txid: string) => {
+        fetches++;
+        return Promise.resolve(txs.get(txid) ?? null);
+      },
+    };
+    return { first, second, pay, txs, source, fetches: () => fetches };
+  }
+
+  it('lists the address and value each input of a payment spent', () => {
+    const { first, second, pay } = payment();
+    const prevouts = [first.outs[0]!, second.outs[0]!, first.outs[1]!].map((o) => ({ script: Uint8Array.from(o.script), value: o.value }));
+    expect(payerInputs(pay, prevouts, NETWORK)).toEqual([
+      { txid: transactionId(first), vout: 0, amount: 300_000n, address: payer(2) },
+      { txid: transactionId(second), vout: 0, amount: 80_000n, address: payer(3) },
+      { txid: transactionId(first), vout: 1, amount: 50_000n, address: null },
+    ]);
+    expect(() => payerInputs(pay, prevouts.slice(1), NETWORK)).toThrow(RangeError);
+  });
+
+  it('fetches the payment and each transaction it spends once', async () => {
+    const { pay, source, fetches } = payment();
+    const inputs = await fetchPayerInputs(transactionId(pay), source, NETWORK);
+    expect(inputs.map((input) => [input.address, input.amount])).toEqual([[payer(2), 300_000n], [payer(3), 80_000n], [null, 50_000n]]);
+    expect(fetches()).toBe(3);
+  });
+
+  it('names what the source does not know, and refuses a transaction that is not the one asked for', async () => {
+    const { pay, first, txs, source } = payment();
+    txs.delete(transactionId(first));
+    await expect(fetchPayerInputs(transactionId(pay), source, NETWORK)).rejects.toMatchObject({ code: 'INVOICE_PAYER_UNKNOWN' });
+    await expect(fetchPayerInputs('00'.repeat(32), source, NETWORK)).rejects.toThrow('does not know the payment');
+    const liar = { getRawTransaction: () => Promise.resolve(pay.toHex()) };
+    await expect(fetchPayerInputs('11'.repeat(32), liar, NETWORK)).rejects.toMatchObject({ code: 'BACKEND_RESPONSE' });
+  });
+
+  it('keeps a refund address on the invoice, checked for the network and through JSON', () => {
+    const invoice = createInvoice(config({ refundAddress: payer(4) }), NETWORK);
+    expect(invoice.refundAddress).toBe(payer(4));
+    expect(invoiceFromJson(JSON.parse(JSON.stringify(invoiceToJson(invoice))), NETWORK)).toEqual(invoice);
+    expect(() => createInvoice(config({ refundAddress: 'nope' }), NETWORK)).toThrow('refundAddress is not valid on regtest');
   });
 });

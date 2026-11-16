@@ -28,10 +28,15 @@
  * @module
  */
 
-import { decodeAddress } from './address.js';
+import type { Transaction } from 'bitcoinjs-lib';
+import { decodeAddress, fromOutputScript } from './address.js';
 import { MAX_GRAIN } from './amount.js';
 import type { AddressPayment, BlockRef, ChainClient } from './client.js';
 import type { PearlNetwork } from './networks.js';
+import { parseTransaction } from './transaction.js';
+import type { TxOutput } from './transaction.js';
+import type { TransactionSource } from './wallet.js';
+import { toHex } from './internal/bytes.js';
 import { PearlError } from './errors.js';
 
 /**
@@ -92,6 +97,8 @@ export interface CreateInvoiceConfig {
   readonly expiresAt: number;
   /** Confirmations required for "confirmed"; a positive integer. */
   readonly requiredConfirmations: number;
+  /** Where the customer asked to be refunded, if they gave an address. */
+  readonly refundAddress?: string;
 }
 
 /**
@@ -139,6 +146,13 @@ function assertValidConfig(config: CreateInvoiceConfig, network: PearlNetwork): 
   }
   if (!Number.isSafeInteger(config.requiredConfirmations) || config.requiredConfirmations < 1) {
     throw new PearlError('INVOICE_INVALID', 'invoice requiredConfirmations must be a positive integer');
+  }
+  if (config.refundAddress !== undefined) {
+    try {
+      decodeAddress(config.refundAddress, network);
+    } catch (error) {
+      throw new PearlError('INVOICE_INVALID', `invoice refundAddress is not valid on ${network.name}: ${(error as Error).message}`);
+    }
   }
 }
 
@@ -349,6 +363,7 @@ export interface InvoiceJson {
   createdAt: number;
   expiresAt: number;
   requiredConfirmations: number;
+  refundAddress?: string;
   payments: InvoicePaymentJson[];
   paidAmount: string;
   uncountedAmount: string;
@@ -386,6 +401,7 @@ export function invoiceToJson(invoice: Invoice): InvoiceJson {
     createdAt: invoice.createdAt,
     expiresAt: invoice.expiresAt,
     requiredConfirmations: invoice.requiredConfirmations,
+    ...(invoice.refundAddress === undefined ? {} : { refundAddress: invoice.refundAddress }),
     payments: invoice.payments.map(invoicePaymentToJson),
     paidAmount: invoice.paidAmount.toString(),
     uncountedAmount: invoice.uncountedAmount.toString(),
@@ -473,6 +489,7 @@ export function invoiceFromJson(value: unknown, network: PearlNetwork): Invoice 
     createdAt: json.createdAt as number,
     expiresAt: json.expiresAt as number,
     requiredConfirmations: json.requiredConfirmations as number,
+    ...(json.refundAddress === undefined ? {} : { refundAddress: json.refundAddress as string }),
   };
   try {
     assertValidConfig(config, network);
@@ -496,6 +513,64 @@ export function invoiceFromJson(value: unknown, network: PearlNetwork): Invoice 
     throw bad('invoice totals do not match its payments');
   }
   return invoice;
+}
+
+/** An input of a payment and the output it spent: where the money came from. */
+export interface PayerInput {
+  readonly txid: string;
+  readonly vout: number;
+  /** Value of the spent output, in grain. */
+  readonly amount: bigint;
+  /** Address of the spent output, or null when its script has none. */
+  readonly address: string | null;
+}
+
+/**
+ * The inputs of a payment with the address and value each spent, given the
+ * outputs it spends in input order. A hint for a refund, not a way to reach
+ * the payer: an exchange or a custodial wallet pays from addresses its
+ * customer does not control. A coinbase has none.
+ */
+export function payerInputs(tx: Transaction, prevouts: readonly TxOutput[], network: PearlNetwork): PayerInput[] {
+  if (tx.isCoinbase()) return [];
+  if (prevouts.length !== tx.ins.length) throw new RangeError('prevouts must match the transaction inputs');
+  return tx.ins.map((input, i) => {
+    const prevout = prevouts[i]!;
+    let address: string | null;
+    try {
+      address = fromOutputScript(prevout.script, network);
+    } catch {
+      address = null;
+    }
+    return { txid: toHex(Uint8Array.from(input.hash).reverse()), vout: input.index, amount: prevout.value, address };
+  });
+}
+
+async function fetchTransaction(source: TransactionSource, txid: string, what: string): Promise<Transaction> {
+  const raw = await source.getRawTransaction(txid);
+  if (raw === null) throw new PearlError('INVOICE_PAYER_UNKNOWN', `the transaction source does not know ${what} ${txid}`);
+  const tx = parseTransaction(typeof raw === 'string' ? raw : toHex(raw));
+  if (tx.getId() !== txid) throw new PearlError('BACKEND_RESPONSE', `the transaction source returned ${tx.getId()} for ${txid}`);
+  return tx;
+}
+
+/**
+ * payerInputs for a payment fetched by txid, with the transactions it
+ * spends, each fetched once. Throws INVOICE_PAYER_UNKNOWN when the source
+ * does not know one of them; pearld needs --txindex for confirmed ones.
+ */
+export async function fetchPayerInputs(txid: string, source: TransactionSource, network: PearlNetwork): Promise<PayerInput[]> {
+  const tx = await fetchTransaction(source, txid, 'the payment');
+  if (tx.isCoinbase()) return [];
+  const spent = [...new Set(tx.ins.map((input) => toHex(Uint8Array.from(input.hash).reverse())))];
+  const parents = new Map(await Promise.all(spent.map(async (id) => [id, await fetchTransaction(source, id, 'the spent transaction')] as const)));
+  const prevouts = tx.ins.map((input) => {
+    const parent = parents.get(toHex(Uint8Array.from(input.hash).reverse()))!;
+    const output = parent.outs[input.index];
+    if (output === undefined) throw new PearlError('BACKEND_RESPONSE', `${parent.getId()} has no output ${input.index} for ${txid} to spend`);
+    return { script: Uint8Array.from(output.script), value: output.value };
+  });
+  return payerInputs(tx, prevouts, network);
 }
 
 /**
