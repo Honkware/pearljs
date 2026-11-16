@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  customNetwork,
   mainnet,
   networks,
   regtest,
@@ -116,5 +117,46 @@ describe('networks', () => {
       expect(n).not.toHaveProperty('pubKeyHash');
       expect(n).not.toHaveProperty('scriptHash');
     }
+  });
+
+  it('freezes every network, its nested values and the table itself', () => {
+    'use strict';
+    const loose = networks as unknown as Record<string, Record<string, unknown>>;
+    for (const n of Object.values(networks)) {
+      expect(Object.isFrozen(n)).toBe(true);
+      expect(Object.isFrozen(n.forkHeights)).toBe(true);
+      expect(Object.isFrozen(n.checkpoints)).toBe(true);
+      expect(Object.isFrozen(n.dnsSeeds)).toBe(true);
+      expect(n.checkpoints.every((checkpoint) => Object.isFrozen(checkpoint))).toBe(true);
+    }
+    expect(Object.isFrozen(networks)).toBe(true);
+    expect(() => { loose.mainnet!.bech32Hrp = 'x'; }).toThrow(TypeError);
+    expect(() => { (loose.mainnet!.forkHeights as Record<string, number>).moe = 1; }).toThrow(TypeError);
+    expect(() => { (loose.mainnet!.checkpoints as { hash: string }[])[0]!.hash = '00'; }).toThrow(TypeError);
+    expect(() => { (loose.mainnet!.dnsSeeds as string[]).push('evil.example'); }).toThrow(TypeError);
+    expect(() => { loose.mainnet = loose.regtest!; }).toThrow(TypeError);
+    expect(networks.mainnet.bech32Hrp).toBe('prl');
+    expect(networks.mainnet).toBe(mainnet);
+  });
+
+  it('makes a custom network as a new frozen object and leaves its base alone', () => {
+    const quick = customNetwork(regtest, { coinbaseMaturity: 5, forkHeights: { saltedSeed: 10 }, dnsSeeds: ['seed.example'] });
+    expect(quick).toMatchObject({ name: 'regtest', bech32Hrp: 'rprl', coinbaseMaturity: 5, dnsSeeds: ['seed.example'] });
+    expect(quick.forkHeights).toEqual({ ...regtest.forkHeights, saltedSeed: 10 });
+    expect(quick).not.toBe(regtest);
+    expect(Object.isFrozen(quick) && Object.isFrozen(quick.forkHeights) && Object.isFrozen(quick.dnsSeeds) && Object.isFrozen(quick.checkpoints)).toBe(true);
+    expect(regtest.coinbaseMaturity).toBe(100);
+    expect(regtest.forkHeights.saltedSeed).toBe(1);
+    expect(regtest.dnsSeeds).toEqual([]);
+
+    // The caller's own arrays stay usable, and changing them later changes nothing.
+    const checkpoints = [{ height: 1, hash: 'aa'.repeat(32) }];
+    const pinned = customNetwork(mainnet, { checkpoints });
+    checkpoints[0]!.hash = 'bb'.repeat(32);
+    checkpoints.push({ height: 2, hash: 'cc'.repeat(32) });
+    expect(pinned.checkpoints).toEqual([{ height: 1, hash: 'aa'.repeat(32) }]);
+    expect(mainnet.checkpoints).toHaveLength(12);
+    // The name is not among the things a variant can change.
+    expect(customNetwork(simnet, { name: 'mainnet' } as object).name).toBe('simnet');
   });
 });

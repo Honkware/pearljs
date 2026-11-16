@@ -4,7 +4,8 @@
 // rather than filled with Bitcoin defaults.
 
 /**
- * The five Pearl networks and their parameters, from Pearl's Go source.
+ * The five Pearl networks and their parameters, from Pearl's Go source, and
+ * `customNetwork` for a variant of one.
  *
  * @module
  */
@@ -12,71 +13,74 @@
 /** The name of a Pearl network, a key of `networks`. */
 export type PearlNetworkName = 'mainnet' | 'testnet' | 'testnet2' | 'regtest' | 'simnet';
 
-/** Parameters of one Pearl network, from Pearl's chaincfg. */
+/**
+ * Parameters of one Pearl network, from Pearl's chaincfg. The five exported
+ * objects are frozen; customNetwork makes a variant of one.
+ */
 export interface PearlNetwork {
   /** Lowercase canonical name, e.g. "mainnet". */
-  name: PearlNetworkName;
+  readonly name: PearlNetworkName;
   /** P2P message magic, wire.PearlNet. */
-  magic: number;
+  readonly magic: number;
   /** Default peer-to-peer port. */
-  defaultPort: number;
+  readonly defaultPort: number;
   /** Bech32m human-readable part for witness addresses. */
-  bech32Hrp: string;
+  readonly bech32Hrp: string;
   /** First byte of a WIF private key. */
-  wif: number;
+  readonly wif: number;
   /** 4-byte version prefix of an HD private key, big-endian. */
-  hdPrivateKeyId: number;
+  readonly hdPrivateKeyId: number;
   /** 4-byte version prefix of an HD public key, big-endian. */
-  hdPublicKeyId: number;
+  readonly hdPublicKeyId: number;
   /** BIP-44 coin type. */
-  coinType: number;
+  readonly coinType: number;
   /** Genesis block hash as display-order hex (reversed from wire order). */
-  genesisHash: string;
+  readonly genesisHash: string;
   /**
    * Header used by Pearl's signed-message format, from
    * messageSignatureHeader in rpcserver.go. Pearl does not vary it per
    * network.
    */
-  messagePrefix: string;
+  readonly messagePrefix: string;
   /**
    * Heights at which Pearl's forks activate, 0 where a fork is disabled. MoE
    * and SaltedSeed are hard forks to V2 and V3 certificates; DenseOnly and
    * RankPenalty are soft forks that tighten what a certificate may carry.
    */
-  forkHeights: ForkHeights;
+  readonly forkHeights: ForkHeights;
   /** Known-good blocks, oldest first, hashes as display-order hex. */
-  checkpoints: readonly Checkpoint[];
+  readonly checkpoints: readonly Checkpoint[];
   /** DNS seed hostnames. Empty on regtest and simnet. */
-  dnsSeeds: readonly string[];
+  readonly dnsSeeds: readonly string[];
   /** TargetTimePerBlock in seconds; also sets the emission curve. */
-  targetSpacing: number;
+  readonly targetSpacing: number;
   /** WTEMAHalfLife of the per-block difficulty filter, in seconds. */
-  wtemaHalfLife: number;
+  readonly wtemaHalfLife: number;
   /** The highest target a block may have. */
-  powLimit: bigint;
+  readonly powLimit: bigint;
   /** powLimit in compact form, the bits getdifficulty divides by. */
-  powLimitBits: number;
+  readonly powLimitBits: number;
   /** Confirmations before a coinbase output can be spent. 100 on every network. */
-  coinbaseMaturity: number;
+  readonly coinbaseMaturity: number;
 }
 
 /** Activation heights of Pearl's forks on one network, 0 where a fork is off. */
 export interface ForkHeights {
   /** From this height blocks need a V2 certificate. */
-  moe: number;
+  readonly moe: number;
   /** From this height MoE proofs are refused. */
-  denseOnly: number;
+  readonly denseOnly: number;
   /** From this height the rank-penalty rule applies. pearljs does not check that rule. */
-  rankPenalty: number;
+  readonly rankPenalty: number;
   /** From this height blocks need a V3 certificate. */
-  saltedSeed: number;
+  readonly saltedSeed: number;
 }
 
 /** A known-good block. */
 export interface Checkpoint {
-  height: number;
+  readonly height: number;
   /** Display-order hex. */
-  hash: string;
+  readonly hash: string;
 }
 
 const MESSAGE_PREFIX = 'Pearl Signed Message:\n';
@@ -88,8 +92,17 @@ const PUBLIC_POW_LIMIT = (1n << 208n) - 1n;
 const LOCAL_POW_LIMIT = (1n << 233n) - 1n;
 const seeds = (domain: string): string[] => ['reef', 'tide', 'stream'].map((name) => `${name}.seeder.${domain}`);
 
+// Every module trusts these values, so nothing that holds a network may change it for the others.
+function frozen(network: PearlNetwork): PearlNetwork {
+  Object.freeze(network.forkHeights);
+  network.checkpoints.forEach((checkpoint) => Object.freeze(checkpoint));
+  Object.freeze(network.checkpoints);
+  Object.freeze(network.dnsSeeds);
+  return Object.freeze(network);
+}
+
 /** Pearl mainnet. Addresses start with prl1, coin type 808276. */
-export const mainnet: PearlNetwork = {
+export const mainnet: PearlNetwork = frozen({
   name: 'mainnet',
   magic: 0x50524c4d, // "PRLM"
   defaultPort: 44108,
@@ -122,10 +135,10 @@ export const mainnet: PearlNetwork = {
   powLimit: PUBLIC_POW_LIMIT,
   powLimitBits: 0x1b00ffff,
   coinbaseMaturity: COINBASE_MATURITY,
-};
+});
 
 /** The first test network. Shares its address prefix (tprl), WIF byte and HD versions with testnet2. */
-export const testnet: PearlNetwork = {
+export const testnet: PearlNetwork = frozen({
   name: 'testnet',
   magic: 0x50524c31, // "PRL1"
   defaultPort: 44110,
@@ -145,11 +158,11 @@ export const testnet: PearlNetwork = {
   powLimit: PUBLIC_POW_LIMIT,
   powLimitBits: 0x1b00ffff,
   coinbaseMaturity: COINBASE_MATURITY,
-};
+});
 
 // Testnet2 is a fresh chain that keeps the testnet address and HD params.
 /** The test network v2, a fresh chain with testnet's address and key parameters. Pearl's desktop wallet uses it for its Testnet setting. */
-export const testnet2: PearlNetwork = {
+export const testnet2: PearlNetwork = frozen({
   name: 'testnet2',
   magic: 0x50524c32, // "PRL2"
   defaultPort: 44112,
@@ -169,10 +182,10 @@ export const testnet2: PearlNetwork = {
   powLimit: PUBLIC_POW_LIMIT,
   powLimitBits: 0x1b00ffff,
   coinbaseMaturity: COINBASE_MATURITY,
-};
+});
 
 /** The regression test network, for local nodes. Shares its address prefix (rprl) with simnet. */
-export const regtest: PearlNetwork = {
+export const regtest: PearlNetwork = frozen({
   name: 'regtest',
   magic: 0x50524c52, // "PRLR"
   defaultPort: 18444,
@@ -192,12 +205,12 @@ export const regtest: PearlNetwork = {
   powLimit: LOCAL_POW_LIMIT,
   powLimitBits: 0x1e010000,
   coinbaseMaturity: COINBASE_MATURITY,
-};
+});
 
 // Simnet shares the regtest genesis block but has its own magic, port,
 // WIF byte and HD key IDs (sprv/spub).
 /** The simulation test network. Shares regtest's genesis block and address prefix; has its own WIF byte and HD versions. */
-export const simnet: PearlNetwork = {
+export const simnet: PearlNetwork = frozen({
   name: 'simnet',
   magic: 0x50524c53, // "PRLS"
   defaultPort: 18555,
@@ -217,15 +230,34 @@ export const simnet: PearlNetwork = {
   powLimit: LOCAL_POW_LIMIT,
   powLimitBits: 0x1e010000,
   coinbaseMaturity: COINBASE_MATURITY,
-};
+});
 
 /** The five Pearl networks by name. */
-export const networks: Readonly<Record<PearlNetworkName, PearlNetwork>> = {
+export const networks: Readonly<Record<PearlNetworkName, PearlNetwork>> = Object.freeze({
   mainnet,
   testnet,
   testnet2,
   regtest,
   simnet,
-};
+});
+
+/** What customNetwork may change: anything but the name. Fork heights left out keep the base's. */
+export type NetworkChanges = Partial<Omit<PearlNetwork, 'name' | 'forkHeights'>> & { readonly forkHeights?: Partial<ForkHeights> };
+
+/**
+ * A new frozen network that differs from `base` in the fields given, for a
+ * private chain or a test: a regtest whose coinbases mature after 5 blocks is
+ * `customNetwork(networks.regtest, { coinbaseMaturity: 5 })`. The base is not
+ * touched. The variant keeps the base's name, since the name is how the port
+ * tables and Oyster's backups tell networks apart.
+ */
+export function customNetwork(base: PearlNetwork, changes: NetworkChanges): PearlNetwork {
+  const merged = { ...base, ...changes, name: base.name, forkHeights: { ...base.forkHeights, ...changes.forkHeights } };
+  return frozen({
+    ...merged,
+    checkpoints: merged.checkpoints.map((checkpoint) => ({ ...checkpoint })),
+    dnsSeeds: [...merged.dnsSeeds],
+  });
+}
 
 
