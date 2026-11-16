@@ -135,6 +135,9 @@ export type PearlErrorCode =
   | 'INVOICE_GAP_LIMIT'
   // Reading the chain
   | 'INSPECT_PREVOUTS'
+  | 'PREVOUT_NOT_FOUND'
+  | 'FOLLOW_REORG_TOO_DEEP'
+  | 'FOLLOW_START_UNKNOWN'
   // The test kit
   | 'SIMULATION_INVALID'
   | 'REGTEST_FAILED'

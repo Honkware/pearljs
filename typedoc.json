@@ -16,6 +16,7 @@
     "src/crypto.ts",
     "src/discovery.ts",
     "src/errors.ts",
+    "src/follow.ts",
     "src/gcs.ts",
     "src/inspect.ts",
     "src/interpreter.ts",

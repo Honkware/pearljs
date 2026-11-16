@@ -19,6 +19,7 @@ export * from './consensus.js';
 export * from './crypto.js';
 export * from './discovery.js';
 export * from './errors.js';
+export * from './follow.js';
 export * from './gcs.js';
 export * from './inspect.js';
 export * from './interpreter.js';
