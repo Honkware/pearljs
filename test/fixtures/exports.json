@@ -113,6 +113,7 @@
       "checkFilterHeaders",
       "checkMerkleRoot",
       "checkPackageLimits",
+      "checkPsbtPayment",
       "checkReplacement",
       "checkSanity",
       "checkStandard",
@@ -414,6 +415,8 @@
       "PeerInfo",
       "PsbtKeyPathSighashOptions",
       "PsbtOutput",
+      "PsbtPaymentExpectations",
+      "PsbtPaymentSummary",
       "PsbtSighashOptions",
       "RawTxInput",
       "ReceivedByAddress",
@@ -1153,6 +1156,7 @@
       "Psbt",
       "Transaction",
       "addPearlOutput",
+      "checkPsbtPayment",
       "createPsbt",
       "createTransaction",
       "finalizePsbt",
@@ -1167,6 +1171,8 @@
     ],
     "types": [
       "PsbtOutput",
+      "PsbtPaymentExpectations",
+      "PsbtPaymentSummary",
       "ScriptPathFinalizeOptions",
       "ScriptPathStack",
       "TxOutput"

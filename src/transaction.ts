@@ -19,8 +19,10 @@ import { classifyOutputScript, tapLeafHash } from './script.js';
 import { tapscriptSighash } from './scriptpath.js';
 import { decompileScript } from './scripttools.js';
 import { verifyP2mrLeafCommitment, verifyTaprootLeafCommitment } from './scripttree.js';
+import type { AccountChild, PearlAccount } from './keys.js';
 import type { PearlNetwork } from './networks.js';
-import { fromBase64, toHex, varInt } from './internal/bytes.js';
+import { p2tr } from './payments.js';
+import { equalBytes, fromBase64, toHex, varInt } from './internal/bytes.js';
 import { ensureEcc } from './internal/ecc.js';
 import { PearlError, SigningError } from './errors.js';
 
@@ -466,19 +468,130 @@ export function serializeWitness(witness: readonly Uint8Array[]): Uint8Array {
 export interface PsbtOutput extends TxOutput {
   /** The Pearl address the script pays, or null for an OP_RETURN or any other script. */
   address: string | null;
+  /**
+   * With an account: whether the output pays one of its children. True only
+   * when a derivation record on the output names a child and the key derived
+   * for that child makes this output's script.
+   */
+  mine?: boolean;
+  /** The child that holds the output, when `mine` is true. */
+  child?: AccountChild;
 }
 
 /**
  * The outputs of a PSBT with their Pearl addresses. `psbt.txOutputs` reports
  * addresses for Bitcoin mainnet (`bc1p...`), since the Psbt class knows no
  * other network; read them here.
+ *
+ * Pass an account to learn which outputs are its own. The derivation records
+ * on an output only say where to look: the key is derived again from the
+ * account and the script compared, so a record copied onto another output,
+ * or edited, proves nothing. An output of the account without a record (see
+ * prepareOutput) is reported as not `mine`.
  */
-export function psbtOutputs(psbt: Psbt, network: PearlNetwork): PsbtOutput[] {
-  return psbt.txOutputs.map((output) => {
+export function psbtOutputs(psbt: Psbt, network: PearlNetwork, account?: PearlAccount): PsbtOutput[] {
+  return psbt.txOutputs.map((output, index) => {
     const script = Uint8Array.from(output.script);
     const kind = classifyOutputScript(script);
-    return { script, value: output.value, address: kind === 'p2tr' || kind === 'p2mr' ? fromOutputScript(script, network) : null };
+    const address = kind === 'p2tr' || kind === 'p2mr' ? fromOutputScript(script, network) : null;
+    if (account === undefined) return { script, value: output.value, address };
+    const fields = psbt.data.outputs[index]!;
+    const child = account.findChild([...(fields.tapBip32Derivation ?? []), ...(fields.bip32Derivation ?? [])]);
+    const mine = child !== null && equalBytes(script, p2tr({ internalPubkey: account.derivePublicKey(child.index, child.change) }).output);
+    return { script, value: output.value, address, mine, ...(mine ? { child } : {}) };
   });
+}
+
+/** What a PSBT is meant to do, for checkPsbtPayment. */
+export interface PsbtPaymentExpectations {
+  network: PearlNetwork;
+  /** Every payment the PSBT is meant to make, each matched to one output of exactly that amount. */
+  recipients: readonly { address: string; amount: bigint }[];
+  /** The highest fee to accept, in grain. No limit unless given. */
+  maxFee?: bigint;
+}
+
+/** What checkPsbtPayment found. Amounts are in grain. */
+export interface PsbtPaymentSummary {
+  /** Total paid to the expected recipients. */
+  sent: bigint;
+  /** Total returning to the account in outputs proven to be its own. */
+  change: bigint;
+  /** Inputs minus outputs. */
+  fee: bigint;
+  /** Every output, as psbtOutputs reports it for the account. */
+  outputs: PsbtOutput[];
+}
+
+/**
+ * The check an offline signer makes before it signs: the PSBT pays the
+ * expected recipients, and every other output is proven to return to the
+ * account (see psbtOutputs), so nothing leaves but the payments and the fee.
+ * Returns the totals to show the person approving.
+ *
+ * The input values are read from the PSBT. A key-path signature commits to
+ * all of them, so a PSBT that understates or overstates one yields a
+ * transaction no node accepts, not a larger fee.
+ *
+ * Throws a SigningError: PSBT_RECIPIENT_MISSING when no output pays a
+ * recipient its amount, PSBT_OUTPUT_UNEXPECTED for an output that is neither
+ * a recipient nor the account's own, INPUT_UNPREPARED and PREVOUT_MISMATCH
+ * for the inputs, OUTPUTS_EXCEED_INPUTS, and FEE_TOO_HIGH above maxFee.
+ */
+export function checkPsbtPayment(psbt: Psbt, account: PearlAccount, expectations: PsbtPaymentExpectations): PsbtPaymentSummary {
+  const { network, maxFee } = expectations;
+  if (maxFee !== undefined && (typeof maxFee !== 'bigint' || maxFee < 0n)) {
+    throw new TypeError('maxFee must be a non-negative bigint of grain');
+  }
+  const outputs = psbtOutputs(psbt, network, account);
+  const unmatched = new Set(outputs.keys());
+  let sent = 0n;
+  for (const recipient of expectations.recipients) {
+    const script = toOutputScript(recipient.address, network);
+    const found = [...unmatched].find((i) => outputs[i]!.value === recipient.amount && equalBytes(outputs[i]!.script, script));
+    if (found === undefined) {
+      throw new SigningError('PSBT_RECIPIENT_MISSING', `no output of the PSBT pays ${recipient.amount} grain to ${recipient.address}`);
+    }
+    unmatched.delete(found);
+    sent += recipient.amount;
+  }
+  let change = 0n;
+  for (const i of unmatched) {
+    const output = outputs[i]!;
+    if (output.mine !== true) {
+      throw new SigningError(
+        'PSBT_OUTPUT_UNEXPECTED',
+        `PSBT output ${i} pays ${output.value} grain to ${output.address ?? 'a script without an address'}, ` +
+          'which is not an expected recipient and is not proven to belong to the account',
+      );
+    }
+    change += output.value;
+  }
+
+  let inputTotal = 0n;
+  psbt.txInputs.forEach((txInput, index) => {
+    const input = psbt.data.inputs[index]!;
+    const previous = input.nonWitnessUtxo === undefined ? undefined : Transaction.fromBuffer(input.nonWitnessUtxo);
+    const spent = previous?.outs[txInput.index];
+    const utxo = input.witnessUtxo ?? spent;
+    if (utxo === undefined) throw new SigningError('INPUT_UNPREPARED', `PSBT input ${index} has no UTXO to read its value from`);
+    if (
+      previous !== undefined &&
+      (!equalBytes(previous.getHash(), txInput.hash) || spent === undefined || spent.value !== utxo.value || !equalBytes(spent.script, utxo.script))
+    ) {
+      throw new SigningError('PREVOUT_MISMATCH', `PSBT input ${index} does not match the previous transaction it carries`);
+    }
+    inputTotal += utxo.value;
+  });
+  const outputTotal = outputs.reduce((sum, output) => sum + output.value, 0n);
+  if (outputTotal > inputTotal) {
+    throw new SigningError('OUTPUTS_EXCEED_INPUTS', `PSBT outputs (${outputTotal} grain) exceed its inputs (${inputTotal} grain)`);
+  }
+  const fee = inputTotal - outputTotal;
+  if (maxFee !== undefined && fee > maxFee) {
+    throw new SigningError('FEE_TOO_HIGH', `the PSBT pays a fee of ${fee} grain, above the ${maxFee} grain allowed`);
+  }
+  return { sent, change, fee, outputs };
 }
 
 /**

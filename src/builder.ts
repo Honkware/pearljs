@@ -16,7 +16,7 @@ import { formatPearl } from './amount.js';
 import { toOutputScript } from './address.js';
 import { InsufficientFundsError, selectCoins, spendableUtxos } from './coinselect.js';
 import type { CoinSelectionStrategy, SpendableOptions, Utxo } from './coinselect.js';
-import type { PearlSigningAccount } from './keys.js';
+import type { PearlAccount, PearlSigningAccount } from './keys.js';
 import type { PearlNetwork } from './networks.js';
 import { checkStandard, estimateVsize, MAX_STANDARD_TX_VSIZE, minRelayFee } from './policy.js';
 import { classifyOutputScript } from './script.js';
@@ -59,8 +59,15 @@ export interface PaymentOptions<T extends Utxo = Utxo> extends SpendableOptions 
   recipients: readonly Recipient[];
   /** Grain per 1000 vbytes. */
   feeRate: FeeRate;
-  /** Needed unless a recipient takes `max`. */
+  /** Needed unless a recipient takes `max` or changeFrom is given. */
   changeAddress?: string;
+  /**
+   * Take the change address from an account, at {index} on its change chain,
+   * and record that derivation on the PSBT's change output (see
+   * prepareOutput) so a signer elsewhere can prove the change is its own.
+   * Give this or changeAddress, not both.
+   */
+  changeFrom?: { account: PearlAccount | PearlSigningAccount; index: number };
   /** Signal replace-by-fee. Oyster never does, so this is off unless asked for. */
   rbf?: boolean;
   /** `largest` unless given. A `max` payment always spends every output. */
@@ -126,7 +133,10 @@ export function buildPayment<T extends Utxo>(options: PaymentOptions<T>): Paymen
     .map((recipient) => ({ script: recipientScript(recipient, network), value: recipient.amount as bigint }));
   let remainderScript: Uint8Array;
   if (maxIndex >= 0) remainderScript = recipientScript(recipients[maxIndex]!, network);
-  else if (options.changeAddress !== undefined) remainderScript = toOutputScript(options.changeAddress, network);
+  else if (options.changeFrom !== undefined) {
+    if (options.changeAddress !== undefined) throw new PearlError('PAYMENT_INVALID', 'give changeAddress or changeFrom, not both');
+    remainderScript = toOutputScript(options.changeFrom.account.deriveAddress(options.changeFrom.index, true), network);
+  } else if (options.changeAddress !== undefined) remainderScript = toOutputScript(options.changeAddress, network);
   else throw new PearlError('PAYMENT_INVALID', 'a change address is needed unless a recipient takes the maximum');
 
   const spendable = spendableUtxos(options.utxos, options);
@@ -167,6 +177,9 @@ export function buildPayment<T extends Utxo>(options: PaymentOptions<T>): Paymen
   for (const output of outputs) tx.addOutput(output.script, output.value);
   const prevouts = selection.inputs.map((input) => ({ script: input.script, value: input.value }));
   const psbt = createPsbt(tx);
+  if (changeIndex >= 0 && options.changeFrom !== undefined) {
+    options.changeFrom.account.prepareOutput(psbt, changeIndex, { index: options.changeFrom.index, change: true });
+  }
 
   const fee = selection.totalInput - outputs.reduce((sum, output) => sum + output.value, 0n);
   const vsize = estimateVsize(tx, selection.inputs.map((input) => input.spend ?? { type: 'keyPath' }));

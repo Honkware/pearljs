@@ -255,6 +255,18 @@ type CustomLeafVector struct {
 	TxID           string          `json:"txid"`
 }
 
+// ChangeOutputVector is a PSBT whose output OutputIndex carries the
+// derivation Oyster records for a change output of its own.
+type ChangeOutputVector struct {
+	Name          string `json:"name"`
+	Change        bool   `json:"change"`
+	Index         uint32 `json:"index"`
+	OutputIndex   int    `json:"outputIndex"`
+	Path          string `json:"path"`
+	UnsignedTxHex string `json:"unsignedTxHex"`
+	PSBT          string `json:"psbt"`
+}
+
 type Vectors struct {
 	Source           string                  `json:"source"`
 	Networks         []NetworkVector         `json:"networks"`
@@ -284,6 +296,7 @@ type Vectors struct {
 	CoinSelection    CoinSelectionVectors    `json:"coinSelection"`
 	TapscriptExtras  []TapscriptExtraVector  `json:"tapscriptExtras"`
 	CustomLeaves     []CustomLeafVector      `json:"customLeaves"`
+	ChangeOutputs    []ChangeOutputVector    `json:"changeOutputs"`
 }
 
 // CoinVector is an unspent output offered to coin selection.
@@ -1194,6 +1207,46 @@ func main() {
 	}
 	vectors.TapscriptExtras = tapscriptExtraVectors(account, internalPub, script)
 	vectors.CustomLeaves = customLeafVectors(account, script)
+
+	// The fields wallet.createOutputInfo (wallet/wallet/psbt.go:321) puts on
+	// a change output: both derivation records and the internal key. The
+	// function is unexported and needs a wallet database, so its struct is
+	// rebuilt here and serialized by the psbt package.
+	for _, item := range []struct {
+		name   string
+		branch uint32
+		index  uint32
+	}{
+		{"change-chain", 1, 7},
+		{"receive-chain", 0, 2147483647},
+	} {
+		pub, err := derive(account, item.branch, item.index).ECPubKey()
+		check(err)
+		changeScript, err := txscript.PayToTaprootScript(txscript.ComputeTaprootKeyNoScript(pub))
+		check(err)
+		tx := wire.NewMsgTx(wire.TxVersion)
+		tx.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x0d}, 0), nil, nil))
+		tx.AddTxOut(wire.NewTxOut(150000000, script))
+		tx.AddTxOut(wire.NewTxOut(49990000, changeScript))
+		packet, err := psbt.NewFromUnsignedTx(tx)
+		check(err)
+		path := []uint32{86 + h, chaincfg.MainNetParams.HDCoinType + h, h, item.branch, item.index}
+		compressed := pub.SerializeCompressed()
+		packet.Outputs[1] = psbt.POutput{
+			Bip32Derivation: []*psbt.Bip32Derivation{{
+				PubKey: compressed, MasterKeyFingerprint: masterFingerprint, Bip32Path: path,
+			}},
+			TaprootBip32Derivation: []*psbt.TaprootBip32Derivation{{
+				XOnlyPubKey: compressed[1:], MasterKeyFingerprint: masterFingerprint, Bip32Path: path,
+			}},
+			TaprootInternalKey: compressed[1:],
+		}
+		vectors.ChangeOutputs = append(vectors.ChangeOutputs, ChangeOutputVector{
+			Name: item.name, Change: item.branch == 1, Index: item.index, OutputIndex: 1,
+			Path:          fmt.Sprintf("%s/%d/%d", accountPath, item.branch, item.index),
+			UnsignedTxHex: serializeTx(tx, false), PSBT: encodePSBT(packet),
+		})
+	}
 
 	// Synthetic blocks cover every certificate version, the MoE size
 	// threshold, odd transaction counts and witness commitments. Spends are

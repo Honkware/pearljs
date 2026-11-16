@@ -106,6 +106,16 @@ export interface PearlAccount {
    */
   prepareInput(psbt: Psbt, inputIndex: number, options: PearlInputOptions): void;
   /**
+   * Records on a PSBT output that it pays a child of this account: the
+   * internal key and both BIP32 derivation records, the fields Oyster writes
+   * on its own change. A signer holding the account then proves the output is
+   * its own with psbtOutputs or checkPsbtPayment instead of trusting the
+   * address. `change` is false unless given.
+   *
+   * Throws OUTPUT_MISMATCH when the output does not pay that child.
+   */
+  prepareOutput(psbt: Psbt, outputIndex: number, child: { index: number; change?: boolean }): void;
+  /**
    * The child of this account that a PSBT's BIP32 derivation records name, or
    * null when none does. A record is a claim by whoever wrote the PSBT, so it
    * counts only when the key derived at its path is the key it carries.
@@ -230,6 +240,8 @@ export interface PearlSigningAccount {
   deriveAddress(index: number, change?: boolean): string;
   /** Prepares a key-path PSBT input; see PearlAccount.prepareInput. */
   prepareInput(psbt: Psbt, inputIndex: number, options: PearlInputOptions): void;
+  /** Records that a PSBT output pays a child of this account; see PearlAccount.prepareOutput. */
+  prepareOutput(psbt: Psbt, outputIndex: number, child: { index: number; change?: boolean }): void;
   /**
    * Signs a BIP86 key-path PSBT input. Without options.index the child is the
    * one the input's tapBip32Derivation names; either way the input's witness
@@ -447,6 +459,31 @@ function toWatchOnlyAccount(
         psbt.updateInput(inputIndex, { sighashType });
       }
     },
+    prepareOutput(psbt: Psbt, outputIndex: number, options: { index: number; change?: boolean }): void {
+      const output = psbt.txOutputs[outputIndex];
+      if (!Number.isInteger(outputIndex) || output === undefined) {
+        throw new RangeError(`PSBT output index ${outputIndex} is out of range`);
+      }
+      const change = options.change ?? false;
+      const node = deriveChild(options.index, change);
+      const internalPubkey = internalPublicKey(node);
+      if (!equalBytes(output.script, p2tr({ internalPubkey }).output)) {
+        throw new SigningError(
+          'OUTPUT_MISMATCH',
+          `PSBT output ${outputIndex} does not pay the account's child ${change ? 1 : 0}/${options.index}`,
+        );
+      }
+      const record = {
+        masterFingerprint: Uint8Array.from(origin?.masterFingerprint ?? accountNode.fingerprint),
+        path: `${origin?.path ?? 'm'}/${change ? 1 : 0}/${options.index}`,
+      };
+      // The three fields of wallet.createOutputInfo in Oyster; BIP371 asks for the last two.
+      psbt.updateOutput(outputIndex, {
+        bip32Derivation: [{ ...record, pubkey: Uint8Array.from(node.publicKey) }],
+        tapInternalKey: Uint8Array.from(internalPubkey),
+        tapBip32Derivation: [{ ...record, pubkey: internalPubkey, leafHashes: [] }],
+      });
+    },
     findChild(derivations: readonly DerivationRecord[]): AccountChild | null {
       return findChild(account, derivations);
     },
@@ -583,6 +620,9 @@ export function deriveSigningAccountFromSeed(
     },
     prepareInput(psbt: Psbt, inputIndex: number, options: PearlInputOptions): void {
       watchOnly.prepareInput(psbt, inputIndex, options);
+    },
+    prepareOutput(psbt: Psbt, outputIndex: number, child: { index: number; change?: boolean }): void {
+      watchOnly.prepareOutput(psbt, outputIndex, child);
     },
     signInput(psbt: Psbt, inputIndex: number, options: PearlPsbtSignOptions = {}): void {
       const input = psbt.data.inputs[inputIndex];
