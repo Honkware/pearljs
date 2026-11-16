@@ -6,8 +6,16 @@ import { describe, expect, it } from 'vitest';
 import {
   MissingIndexError,
   OYSTER_DEFAULT_FEE_RATE,
+  PearlRpcError,
+  assembleScriptTree,
+  buildFilter,
+  checksigScript,
   createInvoice,
+  encodeFilter,
+  filterKey,
+  fromOutputScript,
   networks,
+  p2mr,
   oysterBackend,
   pearldBackend,
   refreshInvoice,
@@ -182,6 +190,111 @@ describe('pearld backend', () => {
   });
 });
 
+describe('pearld backend and P2MR addresses', () => {
+  // pearld's address index holds Taproot addresses only and answers a P2MR
+  // address with an internal error, so the backend scans block filters.
+  const tree = assembleScriptTree([checksigScript(new Uint8Array(32).fill(3))]);
+  const script = p2mr({ merkleRoot: tree.root }).output;
+  const address = fromOutputScript(script, network);
+  const other = toOutputScript(receive0, network);
+  const hashOf = (height: number): string => height.toString(16).padStart(64, '0');
+  const vout = (n: number, to: Uint8Array, value: bigint) => ({ n, value, scriptPubKey: { hex: Buffer.from(to).toString('hex'), address: fromOutputScript(to, network) } });
+  const tx = (txid: string, spends: [string, number][], pays: [Uint8Array, bigint][]) => ({
+    txid,
+    vin: spends.map(([prev, n]) => ({ txid: prev, vout: n, sequence: 0 })),
+    vout: pays.map(([to, value], n) => vout(n, to, value)),
+  });
+  const [funding, spend, pending] = ['a1'.repeat(32), 'b2'.repeat(32), 'c3'.repeat(32)];
+
+  function chain() {
+    // Blocks 1 and 3 touch the address: one pays it twice, the other spends the first output.
+    const blocks: ReturnType<typeof tx>[][] = [[], [tx(funding, [['ff'.repeat(32), 0]], [[script, 700n], [script, 300n], [other, 5n]])], [tx('d4'.repeat(32), [], [[other, 9n]])], [tx(spend, [[funding, 0]], [[other, 650n]])]];
+    const mempool = [tx(pending, [[funding, 1]], [[script, 250n]])];
+    const calls: string[] = [];
+    // A replaced block gets another hash at its height.
+    const renamed = new Map<number, string>();
+    const hashAt = (height: number): string => renamed.get(height) ?? hashOf(height);
+    const heightOf = (hash: string): number => [...renamed].find(([, name]) => name === hash)?.[0] ?? parseInt(hash, 16);
+    const rpc = {
+      async call<T>(method: string, params: readonly unknown[] = []): Promise<T> {
+        calls.push(method);
+        const answer = (): unknown => {
+          switch (method) {
+            case 'getblockchaininfo':
+              return { blocks: blocks.length - 1, bestblockhash: hashAt(blocks.length - 1) };
+            case 'getblockhash':
+              return hashAt(params[0] as number);
+            case 'getcfilter': {
+              const items = blocks[heightOf(params[0] as string)]!.flatMap((item) => [...item.vout.map((out) => Buffer.from(out.scriptPubKey.hex, 'hex')), ...(item.txid === spend ? [script] : [])]);
+              return Buffer.from(encodeFilter(buildFilter(filterKey(params[0] as string), items))).toString('hex');
+            }
+            case 'getblock':
+              return { rawtx: blocks[heightOf(params[0] as string)] };
+            case 'getblockheader':
+              return { height: heightOf(params[0] as string) };
+            case 'getrawmempool':
+              return mempool.map((item) => item.txid);
+            case 'getrawtransaction':
+              return mempool.find((item) => item.txid === params[0]);
+            case 'searchrawtransactions':
+              throw new PearlRpcError('rpc', method, 'address type is not supported by the address index (code -32603)', { rpcCode: -32603 });
+            default:
+              throw new Error(`unexpected method ${method}`);
+          }
+        };
+        return answer() as T;
+      },
+    };
+    return { rpc, blocks, mempool, calls, renamed };
+  }
+
+  it('finds the outputs, balance and history of a P2MR address from block filters and the mempool', async () => {
+    const { rpc, calls } = chain();
+    const backend = pearldBackend(rpc, { network });
+    expect(await backend.getUtxos([address])).toEqual([{ txid: pending, vout: 0, value: 250n, script, address, confirmations: 0, coinbase: false }]);
+    expect(calls).not.toContain('searchrawtransactions');
+    // Only the blocks whose filter matched were fetched.
+    expect(calls.filter((method) => method === 'getblock')).toHaveLength(2);
+    expect(await backend.getBalance([script])).toEqual({ confirmed: 0n, unconfirmed: 250n, immature: 0n });
+    expect(await backend.getHistory(address)).toEqual([
+      { txid: funding, block: { height: 1, hash: hashOf(1) }, received: 1000n, spent: 0n },
+      { txid: spend, block: { height: 3, hash: hashOf(3) }, received: 0n, spent: 700n },
+      { txid: pending, block: null, received: 250n, spent: 300n },
+    ]);
+    expect(await backend.getAddressActivity(address)).toEqual([
+      { txid: funding, amount: 1000n, block: { height: 1, hash: hashOf(1) } },
+      { txid: pending, amount: 250n, block: null },
+    ]);
+  });
+
+  it('goes on from the last block scanned, takes the mempool afresh, and starts over after a reorganization', async () => {
+    const { rpc, blocks, mempool, calls, renamed } = chain();
+    const backend = pearldBackend(rpc, { network });
+    await backend.getUtxos([address]);
+    const filters = (): number => calls.filter((method) => method === 'getcfilter').length;
+    expect(filters()).toBe(4);
+    // The pending transaction is mined in a new block.
+    blocks.push(mempool.splice(0));
+    expect(await backend.getUtxos([address])).toEqual([{ txid: pending, vout: 0, value: 250n, script, address, confirmations: 1, coinbase: false }]);
+    expect(filters()).toBe(5);
+    // The block is replaced by one without it: the scan runs again from the start and the output is back.
+    blocks.splice(3, 2, []);
+    renamed.set(3, 'ee'.repeat(32));
+    expect(await backend.getUtxos([address])).toEqual([
+      { txid: funding, vout: 0, value: 700n, script, address, confirmations: 3, coinbase: false },
+      { txid: funding, vout: 1, value: 300n, script, address, confirmations: 3, coinbase: false },
+    ]);
+  });
+
+  it('starts the scan at scanFrom', async () => {
+    const { rpc, calls } = chain();
+    const backend = pearldBackend(rpc, { network, scanFrom: 2 });
+    expect(await backend.getHistory(address)).toEqual([{ txid: pending, block: null, received: 250n, spent: 0n }]);
+    expect(calls.filter((method) => method === 'getcfilter')).toHaveLength(2);
+    expect(() => pearldBackend(rpc, { network, scanFrom: -1 })).toThrow(RangeError);
+  });
+});
+
 describe('Oyster backend', () => {
   it('lists the wallet outputs paying the watched addresses, as coin selection takes them', async () => {
     const { client, sent } = scenarioOyster();
@@ -228,11 +341,20 @@ describe('Oyster backend', () => {
     expect(await backend.getTip()).toEqual({ height: tipHeight, hash: expected('getblock-raw', 'hash') });
   });
 
-  it('counts a change address as used although Oyster lists no receive for it', async () => {
-    const { client } = scenarioOyster();
+  it('counts a change address as used although Oyster lists no receive for it, and reads what it was paid from the transaction', async () => {
+    // Oyster answers for the change address with the send alone; the amount is in the transaction it holds.
+    const { hex } = (JSON.parse(fixture('backend-search-change0').body) as { result: { hex: string }[] }).result[0]!;
+    const { client, sent } = scenarioOyster({
+      gettransaction: (r) => new Response(JSON.stringify({ result: { hex, txid: r.body.params[0], details: [] }, error: null, id: r.body.id })),
+    });
     const backend = oysterBackend(client, { network });
     expect(await backend.findUsed!([receive0, receive1, receive2, change0])).toEqual([receive0, receive2, change0]);
-    expect(await backend.getAddressActivity(change0)).toEqual([]);
+    expect(await backend.getAddressActivity(change0)).toEqual([{ txid: txids.m1, amount: 100000000n, block: null }]);
+    expect(await backend.getHistory(change0)).toEqual([{ txid: txids.m1, block: null, received: 100000000n }]);
+    expect(sent.filter((r) => r.body.method === 'gettransaction').map((r) => r.body.params[0])).toEqual([txids.m1, txids.m1]);
+    // An address others paid needs no such lookup.
+    await backend.getHistory(receive0);
+    expect(sent.filter((r) => r.body.method === 'gettransaction')).toHaveLength(2);
   });
 
   it('looks up a wallet transaction and returns null for one the wallet does not hold', async () => {

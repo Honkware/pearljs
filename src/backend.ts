@@ -4,7 +4,9 @@
 //
 // Two backends are here. pearldBackend reads pearld's address index
 // (searchrawtransactions), so pearld must run with --addrindex, which needs
-// --txindex. oysterBackend reads Oyster's own wallet (listunspent and
+// --txindex. That index holds Taproot addresses only (addrToKey,
+// node/blockchain/indexers/addrindex.go), so a P2MR address is found by
+// matching the compact filter of every block instead. oysterBackend reads Oyster's own wallet (listunspent and
 // friends) and so only knows the wallet's addresses. The interface asks for
 // nothing either server has that a compact-filter scanner or a Blockbook
 // client could not also answer: every query is by address or output script.
@@ -16,9 +18,10 @@
  * @module
  */
 
-import { fromOutputScript, toOutputScript } from './address.js';
+import { decodeAddress, fromOutputScript, toOutputScript } from './address.js';
 import type { AddressPayment, BlockRef, ChainClient, ChainTransaction } from './client.js';
 import type { Utxo } from './coinselect.js';
+import { matchFilter } from './gcs.js';
 import type { PearlNetwork } from './networks.js';
 import {
   OysterRpc,
@@ -30,9 +33,11 @@ import {
   pearldChainClient,
   searchAllTransactions,
 } from './rpc.js';
+import { toHex } from './internal/bytes.js';
 import { safeHeight } from './internal/rpc-wire.js';
 import type { OutPointParam, Rpc, SearchRawTransactionsResult, WalletTransactionEntry } from './rpc.js';
 import { PearlError } from './errors.js';
+import { parseTransaction } from './transaction.js';
 import type { FeeRate } from './amount.js';
 
 /** An address, or the output script of one. */
@@ -140,27 +145,100 @@ export interface PearldBackendOptions {
   pageSize?: number;
   /** Addresses queried at once. Default 8; a client made with `batch` sends them in one request. */
   concurrency?: number;
+  /**
+   * The height the filter scan for P2MR addresses starts at: the block a
+   * wallet's first P2MR address was made in, when known. 0 unless given.
+   */
+  scanFrom?: number;
+}
+
+// The fields of a transaction the backend reads, from the address index or from a block.
+type FoundTx = Pick<SearchRawTransactionsResult, 'txid' | 'vin' | 'vout' | 'blockhash' | 'confirmations'>;
+
+// What a filter scan for one address has found up to a block.
+interface FilterScan {
+  height: number;
+  hash: string;
+  found: Map<string, FoundTx & { height: number }>;
+  outpoints: Set<string>;
 }
 
 /**
  * A wallet backend over pearld, from a PearldClient, a PearlWsClient or
  * anything else with `call`. pearld must run with --addrindex (which turns
  * --txindex on); without it every address query fails with a
- * MissingIndexError. The address index covers P2TR and P2MR outputs only,
- * which is every output Pearl relays.
+ * MissingIndexError. The address index covers P2TR addresses. For a P2MR
+ * address the backend matches the compact filter of every block from
+ * `scanFrom` and reads the blocks that match, which needs pearld's filter
+ * index (on unless --nocfilters) and takes two requests a block the first
+ * time; later queries for the same address go on from where the last ended.
  */
 export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletBackend {
-  const { network, pageSize = 100, concurrency = 8 } = options;
+  const { network, pageSize = 100, concurrency = 8, scanFrom = 0 } = options;
+  if (!Number.isSafeInteger(scanFrom) || scanFrom < 0) throw new RangeError('scanFrom must be a block height');
   const node = new PearldRpc(rpc);
   const chain = pearldChainClient(node, { pageSize });
-  const search = (address: string) => indexed(() => searchAllTransactions(node, address, { pageSize }));
+  const scans = new Map<string, FilterScan>();
+
+  // Every transaction paying or spending from an address pearld's index does not hold, mempool included.
+  const scan = async (address: string): Promise<FoundTx[]> => {
+    const script = toOutputScript(address, network);
+    const tip = await chain.getTip();
+    let state = scans.get(address);
+    // A reorganization under the block the last scan ended at: start over.
+    if (state !== undefined && (state.height > tip.height || (await node.getBlockHash(state.height)) !== state.hash)) state = undefined;
+    state ??= { height: scanFrom - 1, hash: '', found: new Map(), outpoints: new Set() };
+    const { found, outpoints } = state;
+    const touches = (tx: FoundTx): boolean => {
+      let pays = false;
+      for (const out of tx.vout) {
+        if (out.scriptPubKey.address !== address) continue;
+        outpoints.add(`${tx.txid}:${out.n}`);
+        pays = true;
+      }
+      return pays || tx.vin.some((input) => 'txid' in input && outpoints.has(`${input.txid}:${input.vout}`));
+    };
+    const heights = Array.from({ length: Math.max(0, tip.height - state.height) }, (_, i) => state.height + 1 + i);
+    const blocks = await mapLimit(heights, concurrency, async (height) => {
+      const hash = await node.getBlockHash(height);
+      const { filter, key } = await node.getCFilter(hash);
+      return { height, hash, match: filter.n > 0 && matchFilter(filter, key, script) };
+    });
+    for (const { height, hash, match } of blocks) {
+      if (match) {
+        for (const tx of (await node.getBlockWithTransactions(hash)).rawtx) {
+          if (touches(tx)) found.set(tx.txid, { txid: tx.txid, vin: tx.vin, vout: tx.vout, blockhash: hash, height });
+        }
+      }
+      state.height = height;
+      state.hash = hash;
+    }
+    if (state.height >= scanFrom) scans.set(address, state);
+
+    const result: FoundTx[] = [...found.values()].map(({ height, ...tx }) => ({ ...tx, confirmations: tip.height - height + 1 }));
+    // Unconfirmed transactions are looked at every time and never kept. Twice over, so a spend listed before the payment it spends is seen.
+    const pending = new Map<string, FoundTx>();
+    const mempool = await mapLimit(await node.getRawMempool(), concurrency, (txid) => node.getRawTransaction(txid).catch(() => null));
+    for (let pass = 0; pass < 2; pass += 1) {
+      for (const tx of mempool) {
+        if (tx === null || found.has(tx.txid) || (tx.blockhash !== undefined && tx.blockhash !== '')) continue;
+        if (touches(tx)) pending.set(tx.txid, { txid: tx.txid, vin: tx.vin, vout: tx.vout });
+      }
+    }
+    // Mempool outputs are not the next scan's to remember.
+    for (const tx of pending.values()) for (const out of tx.vout) outpoints.delete(`${tx.txid}:${out.n}`);
+    return [...result, ...pending.values()];
+  };
+
+  const search = (address: string): Promise<FoundTx[]> =>
+    decodeAddress(address, network).version === 1 ? indexed(() => searchAllTransactions(node, address, { pageSize })) : scan(address);
 
   const getUtxos = async (watched: readonly Watched[]): Promise<WalletUtxo[]> => {
     const addresses = [...new Set(watched.map((item) => addressOf(item, network)))];
     // Every transaction touching an address is in its list, the ones
     // spending its outputs included, so the unspent ones are those no input
     // here refers to. Mempool transactions are in the lists too.
-    const transactions = new Map<string, SearchRawTransactionsResult>();
+    const transactions = new Map<string, FoundTx>();
     for (const list of await mapLimit(addresses, concurrency, search)) {
       for (const tx of list) transactions.set(tx.txid, tx);
     }
@@ -219,7 +297,17 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletBa
   return {
     network,
     getTip: () => chain.getTip(),
-    getAddressActivity: (address) => indexed(() => chain.getAddressActivity(address)),
+    async getAddressActivity(address) {
+      if (decodeAddress(address, network).version === 1) return indexed(() => chain.getAddressActivity(address));
+      const payments: AddressPayment[] = [];
+      for (const tx of await scan(address)) {
+        const amount = paidTo(tx, address);
+        if (amount === 0n) continue;
+        const block = tx.blockhash === undefined ? null : { height: scans.get(address)!.found.get(tx.txid)!.height, hash: tx.blockhash };
+        payments.push({ txid: tx.txid, amount, block });
+      }
+      return payments;
+    },
     getTransaction: (txid) => indexed(() => chain.getTransaction(txid)),
     getUtxos,
 
@@ -280,9 +368,9 @@ export interface OysterBackendOptions {
  * A wallet backend over Oyster, from an OysterClient or anything else with
  * `call`. It answers for the wallet's own addresses only, from what Oyster
  * has processed, which can trail the node. listunspent leaves out outputs
- * locked with lockunspent, so they count in no balance here, and Oyster
- * lists no receive for change it pays itself, so getHistory and
- * getAddressActivity show a change address only what others paid it.
+ * locked with lockunspent, so they count in no balance here. Oyster lists
+ * no receive for change it pays itself; getHistory and getAddressActivity
+ * read what such a transaction paid the address from the transaction.
  *
  * Broadcast, fee estimates and the spend status of outputs the wallet does
  * not hold go through Oyster to its pearld, which needs Oyster connected to
@@ -321,7 +409,18 @@ export function oysterBackend(rpc: Rpc, options: OysterBackendOptions): WalletBa
 
   const payments = async (address: string): Promise<AddressPayment[]> => {
     const [tip, entries] = await Promise.all([getTip(), wallet.listAddressTransactions([address])]);
-    return [...received(entries, address).values()].map((entry) => ({
+    const paid = received(entries, address);
+    // Oyster lists a payment to the wallet's own change as nothing but the
+    // send, so what such a transaction paid the address is read from the
+    // transaction itself.
+    const script = toHex(toOutputScript(address, network));
+    for (const entry of entries) {
+      if (paid.has(entry.txid)) continue;
+      const tx = parseTransaction((await wallet.getTransaction(entry.txid)).hex);
+      const total = tx.outs.reduce((sum, out) => (toHex(out.script) === script ? sum + out.value : sum), 0n);
+      if (total > 0n) paid.set(entry.txid, { ...entry, total });
+    }
+    return [...paid.values()].map((entry) => ({
       txid: entry.txid,
       amount: entry.total,
       block: blockOf(entry, tip, 'listaddresstransactions'),
