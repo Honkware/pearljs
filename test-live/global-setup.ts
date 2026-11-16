@@ -19,9 +19,14 @@ declare module 'vitest' {
 // Coinbase outputs spend after 100 blocks, so 101 leaves the first one mature.
 const INITIAL_BLOCKS = 101;
 
-const exists = (path: string): Promise<boolean> =>
+// pearld treats a chain whose tip is more than 24 hours old as not caught up,
+// and then its fee estimator, among other things, ignores the blocks it is
+// given. Cached setup blocks are used while they are younger than that.
+const CACHE_LIFETIME = 20 * 3600 * 1000;
+
+const fresh = (path: string): Promise<boolean> =>
   stat(path).then(
-    () => true,
+    (file) => Date.now() - file.mtimeMs < CACHE_LIFETIME,
     () => false,
   );
 
@@ -50,9 +55,10 @@ export default async function setup(project: TestProject): Promise<() => Promise
     running.push(node);
     // PEARL_LIVE_CHAIN names a file that caches the setup blocks between
     // runs. pearld wipes its regtest database on every start, so the blocks
-    // are submitted again, which needs no proving.
+    // are submitted again, which needs no proving. A stale cache is mined
+    // again and replaced.
     const cache = process.env.PEARL_LIVE_CHAIN;
-    if (cache !== undefined && cache !== '' && (await exists(cache))) {
+    if (cache !== undefined && cache !== '' && (await fresh(cache))) {
       const blocks = JSON.parse(await readFile(cache, 'utf8')) as string[];
       for (const block of blocks) await node.client.call('submitblock', [block]);
       if ((await node.client.getBlockCount()) !== blocks.length) throw new Error(`pearld refused the blocks in ${cache}`);
