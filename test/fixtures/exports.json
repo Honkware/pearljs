@@ -13,6 +13,7 @@
       "DEFAULT_ANCESTOR_SIZE_LIMIT",
       "DEFAULT_CREATE_UNLOCK_MS",
       "DEFAULT_DESCENDANT_COUNT_LIMIT",
+      "DEFAULT_FOLLOW_DEPTH",
       "DEFAULT_KEYSTORE_KDF",
       "DEFAULT_LOOKAHEAD",
       "DEFAULT_MAX_FEE_RATE",
@@ -152,6 +153,7 @@
       "createTransaction",
       "createXmssSigner",
       "csvScript",
+      "customNetwork",
       "debugInput",
       "decodeAddress",
       "decodeFilter",
@@ -181,6 +183,7 @@
       "feeRateFromPearlPerKvB",
       "feeRateToGrainPerVbyte",
       "feeRateToPearlPerKvB",
+      "fetchMempool",
       "fetchPayerInputs",
       "filterBackend",
       "filterHash",
@@ -190,6 +193,7 @@
       "finalizePayment",
       "finalizePsbt",
       "finalizeScriptPathInput",
+      "followChain",
       "formatPearl",
       "fromOutputScript",
       "generateMnemonic",
@@ -255,6 +259,7 @@
       "pearldTransactionSource",
       "prepareP2mrScriptPathInput",
       "prepareTaprootScriptPathInput",
+      "prevoutsFromSearch",
       "prlAmount",
       "probePearld",
       "psbtOutputs",
@@ -263,6 +268,7 @@
       "regtest",
       "replacementFee",
       "requiredCertVersion",
+      "resolvePrevouts",
       "rootFromProof",
       "scriptFromAsm",
       "scriptPathWitness",
@@ -315,6 +321,7 @@
       "verifyP2mrLeafCommitment",
       "verifyTaprootLeafCommitment",
       "verifyTransaction",
+      "watchChain",
       "watchInvoices",
       "witnessCommitment",
       "witnessTransactionId",
@@ -353,10 +360,12 @@
       "CallOptions",
       "CertificateVersion",
       "ChainClient",
+      "ChainFollower",
       "ChainName",
       "ChainTip",
       "ChainTipStatus",
       "ChainTransaction",
+      "ChainWatch",
       "Checkpoint",
       "CoinArranger",
       "CoinOwner",
@@ -389,6 +398,9 @@
       "FilterSyncOptions",
       "FilterSyncProgress",
       "FilteredBlockEvent",
+      "FollowCursor",
+      "FollowEvent",
+      "FollowOptions",
       "ForkHeights",
       "GcsParams",
       "HistoryEntry",
@@ -432,6 +444,7 @@
       "MnemonicWordCount",
       "MultiALeaf",
       "NetTotals",
+      "NetworkChanges",
       "NetworkInfo",
       "NodeAddress",
       "NodeInfo",
@@ -493,6 +506,7 @@
       "ReplacementOptions",
       "RescanEvent",
       "RescannedBlock",
+      "ResolvePrevoutsOptions",
       "RestoreWalletOptions",
       "RetryOptions",
       "Rpc",
@@ -799,6 +813,24 @@
       "RpcErrorKind"
     ]
   },
+  "follow": {
+    "values": [
+      "DEFAULT_FOLLOW_DEPTH",
+      "fetchMempool",
+      "followChain",
+      "prevoutsFromSearch",
+      "resolvePrevouts",
+      "watchChain"
+    ],
+    "types": [
+      "ChainFollower",
+      "ChainWatch",
+      "FollowCursor",
+      "FollowEvent",
+      "FollowOptions",
+      "ResolvePrevoutsOptions"
+    ]
+  },
   "gcs": {
     "values": [
       "BASIC_FILTER_M",
@@ -977,6 +1009,7 @@
   },
   "networks": {
     "values": [
+      "customNetwork",
       "mainnet",
       "networks",
       "regtest",
@@ -987,6 +1020,7 @@
     "types": [
       "Checkpoint",
       "ForkHeights",
+      "NetworkChanges",
       "PearlNetwork",
       "PearlNetworkName"
     ]

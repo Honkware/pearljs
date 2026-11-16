@@ -67,7 +67,7 @@ describe('keystore error codes', () => {
       .catch((err: unknown) => err);
     expect(wrong).toEqual(code('KeystoreError', 'KEYSTORE_BAD_PASSPHRASE'));
     expect(JSON.stringify(wrong)).not.toContain('a wrong passphrase');
-    const tampered = openKeystore({ ...data, secrets: { seed: { ...data.secrets.seed!, ciphertext: `00${data.secrets.seed!.ciphertext.slice(2)}` } } });
+    const tampered = openKeystore({ ...data, secrets: { seed: { ...data.secrets.seed!, ciphertext: `${data.secrets.seed!.ciphertext.startsWith('00') ? 'ff' : '00'}${data.secrets.seed!.ciphertext.slice(2)}` } } });
     await tampered.unlock('right passphrase');
     await expect(tampered.useSecret('seed', () => undefined)).rejects.toThrow(code('KeystoreError', 'KEYSTORE_TAMPERED'));
     await expect(tampered.useSecret('other', () => undefined)).rejects.toThrow(code('KeystoreError', 'KEYSTORE_NO_SECRET'));

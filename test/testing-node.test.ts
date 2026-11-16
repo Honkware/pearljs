@@ -268,7 +268,7 @@ describe('the SDK over the simulated node', () => {
 
   it('runs a PearlWallet over RPC through payments, a send, a reorg and a double spend, in step with one on the native backend', async () => {
     const chain = small();
-    const open = (backend: WalletBackend, transactions: Parameters<typeof PearlWallet.create>[0]['transactions']): Promise<PearlWallet> =>
+    const open = (backend: WalletBackend, transactions: NonNullable<Parameters<typeof PearlWallet.create>[0]['transactions']>): Promise<PearlWallet> =>
       PearlWallet.create({ store: createMemoryStore(), backend, transactions, mnemonic: TEST_MNEMONIC, passphrase: 'correct horse battery staple', kdf: { N: 2 ** 10 }, now: () => chain.time * 1000 });
     const overRpc = await open(pearldBackend(chain.rpc, { network: quick }), pearldTransactionSource(chain.rpc));
     const native = await open(chain, chain);

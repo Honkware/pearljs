@@ -152,7 +152,7 @@ describe('confirmations and coinbase maturity', () => {
     chain.mine(4);
     expect((await chain.getUtxos([address]))[0]!.confirmations).toBe(5);
     expect(await chain.getBalance([address])).toEqual({ confirmed: prl('3'), unconfirmed: 0n, immature: 0n });
-    expect(await chain.getTransaction(paid.getId())).toEqual({ txid: paid.getId(), block: { height: chain.height - 4, hash: chain.blocks[chain.height - 4]!.hash } });
+    expect(await chain.getTransaction(paid.getId())).toEqual({ txid: paid.getId(), block: { height: chain.height - 4, hash: chain.blocks[chain.height - 4]!.hash, time: chain.blocks[chain.height - 4]!.time } });
   });
 
   it('holds a coinbase output back until the network says it is mature, in the balance and in the mempool', async () => {
@@ -365,7 +365,7 @@ describe('reorganizations', () => {
       expect(chain.blocks[height - depth + 1]!.parent).toBe(old[0]!.parent);
       expect(chain.chainTips().map((tip) => tip.hash)).toEqual([chain.tip.hash, old[depth - 1]!.hash]);
       // The payment is in the first block of the new branch.
-      expect(await chain.getTransaction(paid.getId())).toEqual({ txid: paid.getId(), block: { height: height - depth + 1, hash: chain.blocks[height - depth + 1]!.hash } });
+      expect(await chain.getTransaction(paid.getId())).toEqual({ txid: paid.getId(), block: { height: height - depth + 1, hash: chain.blocks[height - depth + 1]!.hash, time: chain.blocks[height - depth + 1]!.time } });
       expect((await chain.getUtxos([address]))[0]!.confirmations).toBe(depth + 1);
       expect(chain.mempool.size).toBe(0);
     });

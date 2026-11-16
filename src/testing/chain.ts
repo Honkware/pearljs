@@ -614,7 +614,7 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
   async getTransaction(txid: string): Promise<ChainTransaction | null> {
     this.enter('getTransaction');
     const found = this.transaction(txid);
-    return found === null ? null : { txid, block: found.block === null ? null : { height: found.block.height, hash: found.block.hash } };
+    return found === null ? null : { txid, block: found.block === null ? null : { height: found.block.height, hash: found.block.hash, time: found.block.time } };
   }
 
   async getRawTransaction(txid: string): Promise<string | null> {
@@ -624,7 +624,13 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
 
   async getAddressActivity(address: string): Promise<AddressPayment[]> {
     this.enter('getAddressActivity');
-    return this.#history(address).flatMap(({ txid, block, received }) => (received > 0n ? [{ txid, block, amount: received }] : []));
+    const hex = toHex(this.#scriptOf(address));
+    // A chain view gives the block's header time, as pearldChainClient does, so invoices can judge expiry by it.
+    return this.touching(this.#scriptOf(address)).flatMap(({ tx, block }) => {
+      const amount = tx.outs.reduce((sum, out) => (toHex(out.script) === hex ? sum + out.value : sum), 0n);
+      if (amount === 0n) return [];
+      return [{ txid: tx.getId(), block: block === null ? null : { height: block.height, hash: block.hash, time: block.time }, amount }];
+    });
   }
 
   async getHistory(watched: Watched): Promise<AddressHistoryEntry[]> {

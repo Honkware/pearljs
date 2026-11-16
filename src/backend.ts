@@ -255,7 +255,7 @@ export interface PearldBackendOptions {
 }
 
 // The fields of a transaction the backend reads, from the address index or from a block.
-type FoundTx = Pick<SearchRawTransactionsResult, 'txid' | 'vin' | 'vout' | 'blockhash' | 'confirmations'>;
+type FoundTx = Pick<SearchRawTransactionsResult, 'txid' | 'vin' | 'vout' | 'blockhash' | 'blocktime' | 'confirmations'>;
 
 // What a filter scan for one address has found up to a block.
 interface FilterScan {
@@ -306,7 +306,7 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletCh
     for (const { height, hash, filter, key } of await fetchBlockFilters(node, heights, concurrency)) {
       if (filter.n > 0 && matchFilter(filter, key, script)) {
         for (const tx of (await node.getBlockWithTransactions(hash)).rawtx) {
-          if (touches(tx)) found.set(tx.txid, { txid: tx.txid, vin: tx.vin, vout: tx.vout, blockhash: hash, height });
+          if (touches(tx)) found.set(tx.txid, { txid: tx.txid, vin: tx.vin, vout: tx.vout, blockhash: hash, height, ...(tx.blocktime === undefined ? {} : { blocktime: tx.blocktime }) });
         }
       }
       state.height = height;
@@ -411,8 +411,14 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletCh
       for (const tx of await scan(address)) {
         const amount = paidTo(tx, address);
         if (amount === 0n) continue;
-        const block = tx.blockhash === undefined ? null : { height: scans.get(address)!.found.get(tx.txid)!.height, hash: tx.blockhash };
-        payments.push({ txid: tx.txid, amount, block });
+        if (tx.blockhash === undefined) {
+          payments.push({ txid: tx.txid, amount, block: null });
+          continue;
+        }
+        const height = scans.get(address)!.found.get(tx.txid)!.height;
+        // The header time lets an invoice judge expiry by the block, as the indexed path does.
+        const time = tx.blocktime === undefined || tx.blocktime === 0 ? {} : { time: tx.blocktime };
+        payments.push({ txid: tx.txid, amount, block: { height, hash: tx.blockhash, ...time } });
       }
       return payments;
     },
