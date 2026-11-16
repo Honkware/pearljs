@@ -30,6 +30,7 @@ import { p2tr } from './payments.js';
 import { classifyOutputScript } from './script.js';
 import { assertTaprootSighashType as assertSighashType, psbtSighashType } from './internal/sighash.js';
 import {
+  keyPathSignerFromPrivateKey,
   signP2mrInput,
   signP2mrScriptPathInput,
   signTaprootKeyPathInputAsync,
@@ -270,6 +271,18 @@ export interface PearlSigningAccount {
    * stops working when the account is destroyed.
    */
   tapscriptSigner(options: PearlSignOptions): TapscriptSigner;
+  /**
+   * The signing end of KeyPathSignerAsync for this account: it answers a
+   * request the way a device holding the seed does, finding the child from
+   * the request's derivation, applying the taproot tweak and signing the
+   * hash. For a signing service behind a transport, and for exercising a
+   * hardware flow without the hardware.
+   *
+   * It signs the hash it is handed. What that hash commits to is checked by
+   * whoever built the request, as signInputAsync does. A request that names
+   * no child of this account is refused with DERIVATION_NOT_FOUND.
+   */
+  keyPathSigner(options?: { auxRand?: Uint8Array }): KeyPathSignerAsync;
   /**
    * Overwrites the master and account private keys with zeros. Every signing
    * method throws afterwards; the watch-only methods keep working. See the
@@ -687,6 +700,21 @@ export function deriveSigningAccountFromSeed(
           withChild(options.index, change, (child) =>
             schnorrSigner(child.privateKey!, child.publicKey, options.auxRand).signSchnorr(hash),
           ),
+      };
+    },
+    keyPathSigner(options: { auxRand?: Uint8Array } = {}): KeyPathSignerAsync {
+      return {
+        signKeyPath: async (request) => {
+          const { derivation, internalPubkey } = request;
+          const found = derivation === undefined ? null : findChild(watchOnly, [{ ...derivation, pubkey: internalPubkey }]);
+          if (found === null) {
+            throw new SigningError('DERIVATION_NOT_FOUND', 'the request names no child of this account in its derivation');
+          }
+          return withChild(found.index, found.change, (child) =>
+            // The in-memory signer signs before it returns, so the key is still whole here.
+            keyPathSignerFromPrivateKey(child.privateKey!, options).signKeyPath(request),
+          );
+        },
       };
     },
     destroy(): void {

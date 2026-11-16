@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { encodeAddress, toOutputScript } from '../src/address.js';
 import { mainnet } from '../src/networks.js';
-import { embed, MAX_EMBED_DATA_SIZE, p2mr, p2tr } from '../src/payments.js';
+import { sha256 } from '@noble/hashes/sha2';
+import * as ecc from 'tiny-secp256k1';
+import { embed, MAX_EMBED_DATA_SIZE, NUMS_INTERNAL_KEY, p2mr, p2tr, p2trScriptOnly } from '../src/payments.js';
+import vectors from '../vectors/pearl-go.json' with { type: 'json' };
 import { classifyOutputScript } from '../src/script.js';
 
 const hex = (u: Uint8Array) => Buffer.from(u).toString('hex');
@@ -155,5 +158,43 @@ describe('embed', () => {
     data.fill(0);
     expect(hex(p.data)).toBe('deadbeef');
     expect(hex(p.output)).toBe('6a04deadbeef');
+  });
+});
+
+describe('script-only P2TR', () => {
+  it('uses an internal key that is the hash of the generator, as BIP341 derives it', () => {
+    // 04 || Gx || Gy, from the private key 1.
+    const generator = ecc.pointFromScalar(unhex('01'.padStart(64, '0')), false)!;
+    expect(generator).toHaveLength(65);
+    expect(hex(NUMS_INTERNAL_KEY)).toBe(hex(sha256(generator)));
+    expect(ecc.isXOnlyPoint(NUMS_INTERNAL_KEY)).toBe(true);
+  });
+
+  it("builds the outputs Pearl's engine let the Go vectors spend by script path", () => {
+    const spends = vectors.customLeaves.filter((item) => item.kind === 'p2tr');
+    expect(spends.length).toBeGreaterThan(0);
+    for (const spend of spends) {
+      expect(spend.internalPubKey).toBe(hex(NUMS_INTERNAL_KEY));
+      // The root of a one-leaf tree is the leaf's tagged hash.
+      const merkleRoot = sha256(
+        Uint8Array.from([...sha256(Buffer.from('TapLeaf')), ...sha256(Buffer.from('TapLeaf')), 0xc0, spend.leafScript.length / 2, ...unhex(spend.leafScript)]),
+      );
+      const payment = p2trScriptOnly({ merkleRoot });
+      expect(hex(payment.output)).toBe(spend.prevouts[0]!.script);
+      expect(hex(payment.internalPubkey)).toBe(hex(NUMS_INTERNAL_KEY));
+      expect(hex(payment.output)).toBe(hex(p2tr({ internalPubkey: NUMS_INTERNAL_KEY, merkleRoot }).output));
+    }
+  });
+
+  it('does not depend on the exported array staying intact', () => {
+    const before = hex(p2trScriptOnly({ merkleRoot: MERKLE_ROOT }).output);
+    const saved = NUMS_INTERNAL_KEY[0]!;
+    NUMS_INTERNAL_KEY[0] = 0;
+    try {
+      expect(hex(p2trScriptOnly({ merkleRoot: MERKLE_ROOT }).output)).toBe(before);
+    } finally {
+      NUMS_INTERNAL_KEY[0] = saved;
+    }
+    expect(() => p2trScriptOnly({ merkleRoot: new Uint8Array(31) })).toThrow('merkle root must be 32 bytes');
   });
 });

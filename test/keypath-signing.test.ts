@@ -245,6 +245,37 @@ describe('account.signInputAsync', () => {
     expect(signer.requests).toHaveLength(1);
   });
 
+  it('is answered by a signing account acting as the device, for either way of naming the child', async () => {
+    const auxRand = new Uint8Array(32).fill(9);
+    const local = twoInputs();
+    signing.signInput(local, 0, { auxRand });
+    const remote = twoInputs();
+    await account.signInputAsync(remote, 0, signing.keyPathSigner({ auxRand }));
+    expect(bytesToHex(remote.data.inputs[0]!.tapKeySig!)).toBe(bytesToHex(local.data.inputs[0]!.tapKeySig!));
+
+    const bare = importWatchOnlyAccount(exported.extendedPublicKey(), network);
+    const underAccountKey = twoInputs(bare);
+    await bare.signInputAsync(underAccountKey, 1, signing.keyPathSigner());
+    finalizePsbt(remote.combine(parsePsbt(underAccountKey.toBase64())));
+    expect(verifyFinalizedPsbt(remote)).toEqual({ ok: true });
+  });
+
+  it('gets no signature from a signing account for a child that is not its own, or once it is destroyed', async () => {
+    const elsewhere = deriveSigningAccountFromSeed(seed, network, 1);
+    const psbt = twoInputs();
+    expect((await refusal(account.signInputAsync(psbt, 0, elsewhere.keyPathSigner()))).code).toBe('DERIVATION_NOT_FOUND');
+    const request = { hash: new Uint8Array(32), outputKey: new Uint8Array(32), merkleRoot: null, sighashType: 0, inputIndex: 0 };
+    const signer = elsewhere.keyPathSigner();
+    // The path of one child with the key of another.
+    const lying = { ...request, internalPubkey: elsewhere.derivePublicKey(1), derivation: { masterFingerprint: hexToBytes(origin.masterFingerprint), path: `${elsewhere.path}/0/0` } };
+    expect((await refusal(signer.signKeyPath(lying))).code).toBe('DERIVATION_NOT_FOUND');
+    expect((await refusal(signer.signKeyPath({ ...request, internalPubkey: elsewhere.derivePublicKey(1) }))).code).toBe('DERIVATION_NOT_FOUND');
+    const honest = { ...lying, internalPubkey: elsewhere.derivePublicKey(0) };
+    expect(await signer.signKeyPath(honest)).toHaveLength(64);
+    elsewhere.destroy();
+    expect((await refusal(signer.signKeyPath(honest))).code).toBe('SIGNER_DESTROYED');
+  });
+
   it('names the child under the account key when the account was imported without its origin', async () => {
     const bare = importWatchOnlyAccount(exported.extendedPublicKey(), network);
     const psbt = twoInputs(bare);

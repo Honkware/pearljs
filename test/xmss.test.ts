@@ -2,7 +2,7 @@
 // must match byte for byte, since both sides are deterministic.
 
 import { describe, expect, it } from 'vitest';
-import { XMSS_LAST_INDEX, XMSS_MAX_SIGNATURES, xmssKeygen, xmssSign, xmssVerify } from '../src/index.js';
+import { XMSS_LAST_INDEX, XMSS_MAX_SIGNATURES, generateXmssSeeds, xmssKeygen, xmssSign, xmssVerify } from '../src/index.js';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
 import { bytesToHex, hexToBytes } from './vector-helpers.js';
 
@@ -78,6 +78,17 @@ describe('XMSS', () => {
         expect(xmssVerify(...mixed)).toBe(false);
       }
     }
+  });
+
+  it('generates seeds of the lengths keygen takes, different each time', () => {
+    const first = generateXmssSeeds();
+    const second = generateXmssSeeds();
+    expect([first.privateSeed.length, first.publicSeed.length]).toEqual([64, 32]);
+    expect(bytesToHex(first.privateSeed)).not.toBe(bytesToHex(second.privateSeed));
+    expect(bytesToHex(first.publicSeed)).not.toBe(bytesToHex(second.publicSeed));
+    expect(first.privateSeed.some((byte) => byte !== 0) && first.publicSeed.some((byte) => byte !== 0)).toBe(true);
+    const { publicKey, secretKey } = xmssKeygen(first.privateSeed, first.publicSeed);
+    expect(xmssVerify(publicKey, new Uint8Array(32), xmssSign(secretKey, 0, new Uint8Array(32)))).toBe(true);
   });
 
   it('checks seed and message lengths', () => {

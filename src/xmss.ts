@@ -315,6 +315,18 @@ function checkLength(bytes: Uint8Array, length: number, what: string): void {
 }
 
 /**
+ * Fresh seeds for xmssKeygen and createXmssSigner, from
+ * crypto.getRandomValues. The private seed is the key: back it up with the
+ * public seed, and never use one pair with two index stores.
+ */
+export function generateXmssSeeds(): { privateSeed: Uint8Array; publicSeed: Uint8Array } {
+  return {
+    privateSeed: crypto.getRandomValues(new Uint8Array(XMSS_PRIVATE_SEED_LENGTH)),
+    publicSeed: crypto.getRandomValues(new Uint8Array(XMSS_PUBLIC_SEED_LENGTH)),
+  };
+}
+
+/**
  * Derive a key pair from seeds, as Pearl's xmss.Keygen does.
  *
  * privateSeed is 64 bytes and publicSeed 32. Throws for other lengths. Takes

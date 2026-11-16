@@ -11,6 +11,7 @@
 import { payments } from 'bitcoinjs-lib';
 import { fromOutputScript, WITNESS_PROGRAM_LENGTH } from './address.js';
 import type { PearlNetwork } from './networks.js';
+import { fromHex } from './internal/bytes.js';
 import { ensureEcc } from './internal/ecc.js';
 import { scriptPush } from './script.js';
 import { PearlError } from './errors.js';
@@ -78,6 +79,29 @@ export function p2tr(args: { internalPubkey: Uint8Array; merkleRoot?: Uint8Array
     ...(args.merkleRoot === undefined ? {} : { merkleRoot: Uint8Array.from(args.merkleRoot) }),
     output: Uint8Array.from(output),
   };
+}
+
+// BIP341's H: the x coordinate is the SHA-256 of the uncompressed encoding of
+// the secp256k1 generator, 04 || Gx || Gy. Pearl's code names no such point.
+const NUMS_HEX = '50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0';
+
+/**
+ * An x-only internal key nobody can sign for, for P2TR outputs that must be
+ * spendable through their script tree only. It is the point H of BIP341: its
+ * x coordinate is sha256(04 || Gx || Gy), the hash of the generator's
+ * uncompressed encoding, so nobody chose it and its private key would be a
+ * discrete logarithm nobody knows. Anyone can check that from the bytes.
+ */
+export const NUMS_INTERNAL_KEY: Uint8Array = fromHex(NUMS_HEX);
+
+/**
+ * P2TR that only its script tree can spend: p2tr with NUMS_INTERNAL_KEY as
+ * the internal key. Spend it with prepareTaprootScriptPathInput and the same
+ * key. Every output built this way shows the same internal key when spent,
+ * which tells an observer that it had no key path.
+ */
+export function p2trScriptOnly(args: { merkleRoot: Uint8Array }): P2trPayment {
+  return p2tr({ internalPubkey: fromHex(NUMS_HEX), merkleRoot: args.merkleRoot });
 }
 
 /** P2MR from a 32-byte Merkle root. The output script is OP_2 <root>. */

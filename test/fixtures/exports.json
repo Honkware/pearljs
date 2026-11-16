@@ -43,6 +43,7 @@
       "MIN_STANDARD_TX_NON_WITNESS_SIZE",
       "MNEMONIC_WORD_COUNTS",
       "MissingIndexError",
+      "NUMS_INTERNAL_KEY",
       "OPCODE_NAMES",
       "OP_CODES",
       "OYSTER_DEFAULT_FEE_RATE",
@@ -172,6 +173,7 @@
       "formatPearl",
       "fromOutputScript",
       "generateMnemonic",
+      "generateXmssSeeds",
       "hash160",
       "hash256",
       "httpTransport",
@@ -206,6 +208,7 @@
       "p2mrControlBlock",
       "p2tr",
       "p2trAddress",
+      "p2trScriptOnly",
       "packageFeeRate",
       "paidTo",
       "parseBlock",
@@ -867,11 +870,13 @@
   "payments": {
     "values": [
       "MAX_EMBED_DATA_SIZE",
+      "NUMS_INTERNAL_KEY",
       "embed",
       "p2mr",
       "p2mrAddress",
       "p2tr",
-      "p2trAddress"
+      "p2trAddress",
+      "p2trScriptOnly"
     ],
     "types": [
       "EmbedPayment",
@@ -1257,6 +1262,7 @@
       "XMSS_SIGNATURE_LENGTH",
       "createMemoryXmssIndexStore",
       "createXmssSigner",
+      "generateXmssSeeds",
       "xmssKeygen",
       "xmssSign",
       "xmssVerify"
