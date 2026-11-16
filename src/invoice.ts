@@ -32,6 +32,7 @@ import type { Transaction } from 'bitcoinjs-lib';
 import { decodeAddress, fromOutputScript } from './address.js';
 import { MAX_GRAIN } from './amount.js';
 import type { AddressPayment, BlockRef, ChainClient } from './client.js';
+import { OYSTER_RECOVERY_WINDOW } from './discovery.js';
 import type { PearlNetwork } from './networks.js';
 import { parseTransaction } from './transaction.js';
 import type { TxOutput } from './transaction.js';
@@ -610,6 +611,177 @@ export async function fetchPayerInputs(txid: string, source: TransactionSource, 
     return { script: Uint8Array.from(output.script), value: output.value };
   });
   return payerInputs(tx, prevouts, network);
+}
+
+/** What InvoiceIndexAllocator.toJson writes and its `state` option reads. */
+export interface InvoiceIndexState {
+  format: 'pearljs-invoice-indices';
+  version: 1;
+  /** The lowest index never handed out. */
+  next: number;
+  /** The highest index known to have been paid, or -1. */
+  lastUsed: number;
+  /** Indices whose invoice expired with nothing paid, with when each may be handed out again. */
+  free: { index: number; reusableAt: number }[];
+}
+
+/** Options for InvoiceIndexAllocator. */
+export interface InvoiceIndexAllocatorOptions {
+  /** The address at an index, such as `(index) => account.deriveAddress(index)`. */
+  readonly deriveAddress: (index: number) => string;
+  /** Checked before an index is handed out again, so a payment that arrived after the last refresh is not given to a new invoice. */
+  readonly client: Pick<ChainClient, 'getAddressActivity'>;
+  /** A stored state, from toJson. */
+  readonly state?: InvoiceIndexState;
+  /** For a fresh allocator, the first index to hand out, such as discoverAccount's receive.nextIndex. Default 0. */
+  readonly startAt?: number;
+  /** Unpaid indices allowed after the last paid one. Default OYSTER_RECOVERY_WINDOW, 250; lower it if the account is restored with a smaller window. */
+  readonly gapLimit?: number;
+  /** Seconds after expiry before an unpaid index is reused. Default 7 days. */
+  readonly reuseAfter?: number;
+  /** Hand out an index beyond the gap limit instead of throwing, marked `beyondGap`. */
+  readonly allowBeyondGap?: boolean;
+}
+
+/** An index handed out by InvoiceIndexAllocator. */
+export interface InvoiceIndexAllocation {
+  readonly index: number;
+  readonly address: string;
+  /** Whether an expired unpaid invoice had this index before. */
+  readonly reused: boolean;
+  /** How far past the last paid index it is; a restore finds it while this is at most the gap limit. */
+  readonly gap: number;
+  /** Whether a payment to it alone would be beyond a restore's window. Only with allowBeyondGap. */
+  readonly beyondGap: boolean;
+}
+
+/** An allocator refused to hand out an index a wallet restore would not find. */
+export class InvoiceGapError extends PearlError {
+  override name = 'InvoiceGapError';
+  /** The index it would have handed out. */
+  readonly index: number;
+  readonly lastUsed: number;
+  readonly gapLimit: number;
+
+  constructor(index: number, lastUsed: number, gapLimit: number) {
+    super(
+      'INVOICE_GAP_LIMIT',
+      `index ${index} is ${index - lastUsed} past the last paid index ${lastUsed}, beyond the gap limit of ${gapLimit}: a wallet restore would not find a payment to it. Wait for unpaid invoices to expire and become reusable, or pass allowBeyondGap and restore with a larger window`,
+    );
+    this.index = index;
+    this.lastUsed = lastUsed;
+    this.gapLimit = gapLimit;
+  }
+}
+
+const DEFAULT_REUSE_AFTER = 7 * 24 * 3600;
+
+function indexOf(value: unknown, what: string, min = 0): number {
+  if (!Number.isSafeInteger(value) || (value as number) < min) throw bad(`${what} is not an integer from ${min}`);
+  return value as number;
+}
+
+/**
+ * Hands out address indices for invoices so that every payment stays
+ * inside the window a wallet restore scans. An index is reused only after
+ * its invoice expired with nothing paid, reuseAfter seconds have passed,
+ * and the address still shows no activity; a fresh index is handed out
+ * only while it is within gapLimit of the last paid one. Feed it every
+ * refreshed invoice through `track`, and store `toJson()` after each call.
+ *
+ * Use an account, or at least its receive chain, for invoices alone: the
+ * allocator assumes nothing else hands out its indices.
+ */
+export class InvoiceIndexAllocator {
+  readonly #options: InvoiceIndexAllocatorOptions;
+  readonly #gapLimit: number;
+  readonly #reuseAfter: number;
+  #next: number;
+  #lastUsed: number;
+  readonly #free = new Map<number, number>();
+  #queue: Promise<unknown> = Promise.resolve();
+
+  constructor(options: InvoiceIndexAllocatorOptions) {
+    this.#options = options;
+    this.#gapLimit = options.gapLimit ?? OYSTER_RECOVERY_WINDOW;
+    this.#reuseAfter = options.reuseAfter ?? DEFAULT_REUSE_AFTER;
+    if (!Number.isSafeInteger(this.#gapLimit) || this.#gapLimit < 1) throw new RangeError('gapLimit must be a positive integer');
+    if (!Number.isSafeInteger(this.#reuseAfter) || this.#reuseAfter < 0) throw new RangeError('reuseAfter must be a non-negative integer of seconds');
+    const { state } = options;
+    if (state === undefined) {
+      const startAt = options.startAt ?? 0;
+      if (!Number.isSafeInteger(startAt) || startAt < 0) throw new RangeError('startAt must be a non-negative integer');
+      this.#next = startAt;
+      this.#lastUsed = startAt - 1;
+      return;
+    }
+    if (state === null || typeof state !== 'object' || state.format !== 'pearljs-invoice-indices') throw bad('not a pearljs invoice index state');
+    if (state.version !== 1) throw bad(`invoice index state version ${String(state.version)} is not one this pearljs reads (1)`);
+    this.#next = indexOf(state.next, 'next');
+    this.#lastUsed = indexOf(state.lastUsed, 'lastUsed', -1);
+    if (this.#lastUsed >= this.#next) throw bad('lastUsed is not below next');
+    if (!Array.isArray(state.free)) throw bad('free is not an array');
+    for (const entry of state.free) {
+      const index = indexOf((entry as { index?: unknown } | null)?.index, 'a free index');
+      if (index >= this.#next) throw bad(`free index ${index} was never handed out`);
+      this.#free.set(index, indexOf((entry as { reusableAt?: unknown }).reusableAt, `reusableAt of ${index}`));
+    }
+  }
+
+  /** The next index for an invoice. Throws InvoiceGapError rather than hand out one a restore would miss, unless allowBeyondGap. */
+  allocate(now: number = Math.floor(Date.now() / 1000)): Promise<InvoiceIndexAllocation> {
+    assertNow(now);
+    // One at a time, so two callers never get the same index.
+    const run = this.#queue.then(() => this.#allocate(now));
+    this.#queue = run.catch(() => undefined);
+    return run;
+  }
+
+  async #allocate(now: number): Promise<InvoiceIndexAllocation> {
+    const ready = [...this.#free].filter(([, at]) => at <= now).map(([index]) => index).sort((a, b) => a - b);
+    for (const index of ready) {
+      const address = this.#options.deriveAddress(index);
+      this.#free.delete(index);
+      if ((await this.#options.client.getAddressActivity(address)).length > 0) {
+        // Paid after its invoice was last refreshed: used, never reused.
+        this.#lastUsed = Math.max(this.#lastUsed, index);
+        continue;
+      }
+      return { index, address, reused: true, gap: index - this.#lastUsed, beyondGap: index - this.#lastUsed > this.#gapLimit };
+    }
+    const index = this.#next;
+    const gap = index - this.#lastUsed;
+    if (gap > this.#gapLimit && this.#options.allowBeyondGap !== true) throw new InvoiceGapError(index, this.#lastUsed, this.#gapLimit);
+    this.#next++;
+    return { index, address: this.#options.deriveAddress(index), reused: false, gap, beyondGap: gap > this.#gapLimit };
+  }
+
+  /**
+   * Tells the allocator what became of the invoice at an index: paid
+   * (anything at all, late payments included) marks the index used for good,
+   * expired with nothing paid makes it reusable reuseAfter seconds after
+   * expiry. Call it with every refreshed record.
+   */
+  track(index: number, invoice: Invoice): void {
+    if (!Number.isSafeInteger(index) || index < 0 || index >= this.#next) throw new RangeError(`index ${index} was not handed out by this allocator`);
+    if (invoice.payments.length > 0) {
+      this.#free.delete(index);
+      this.#lastUsed = Math.max(this.#lastUsed, index);
+    } else if (invoice.state === 'expired' && !this.#free.has(index)) {
+      this.#free.set(index, invoice.expiresAt + this.#reuseAfter);
+    }
+  }
+
+  /** How many unpaid indices follow the last paid one. */
+  get gap(): number {
+    return this.#next - 1 - this.#lastUsed;
+  }
+
+  /** The state to store, for the `state` option. */
+  toJson(): InvoiceIndexState {
+    const free = [...this.#free].sort(([a], [b]) => a - b).map(([index, reusableAt]) => ({ index, reusableAt }));
+    return { format: 'pearljs-invoice-indices', version: 1, next: this.#next, lastUsed: this.#lastUsed, free };
+  }
 }
 
 /**
