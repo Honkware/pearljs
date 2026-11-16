@@ -135,6 +135,9 @@ export type PearlErrorCode =
   | 'INVOICE_GAP_LIMIT'
   // Reading the chain
   | 'INSPECT_PREVOUTS'
+  // The test kit
+  | 'SIMULATION_INVALID'
+  | 'REGTEST_FAILED'
   // Wallet stores
   | 'STORE_LOCKED'
   | 'STORE_NOT_FOUND'
