@@ -8,8 +8,9 @@
 // node/blockchain/indexers/addrindex.go), so a P2MR address is found by
 // matching the compact filter of every block instead. oysterBackend reads Oyster's own wallet (listunspent and
 // friends) and so only knows the wallet's addresses. The interface asks for
-// nothing either server has that a compact-filter scanner or a Blockbook
-// client could not also answer: every query is by address or output script.
+// nothing either server has that a compact-filter scanner (backend-filters.ts)
+// or another indexer could not also answer: every query is by address or
+// output script.
 
 /**
  * Wallet backends: what a wallet needs from the chain, answered by pearld's
@@ -35,6 +36,7 @@ import {
   searchAllTransactions,
 } from './rpc.js';
 import { toHex } from './internal/bytes.js';
+import { fetchBlockFilters, mapLimit } from './internal/filter-scan.js';
 import { safeHeight } from './internal/rpc-wire.js';
 import type { OutPointParam, Rpc, SearchRawTransactionsResult, TxOutResult, WalletTransactionEntry } from './rpc.js';
 import { PearlError } from './errors.js';
@@ -290,13 +292,8 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletBa
       return pays || tx.vin.some((input) => 'txid' in input && outpoints.has(`${input.txid}:${input.vout}`));
     };
     const heights = Array.from({ length: Math.max(0, tip.height - state.height) }, (_, i) => state.height + 1 + i);
-    const blocks = await mapLimit(heights, concurrency, async (height) => {
-      const hash = await node.getBlockHash(height);
-      const { filter, key } = await node.getCFilter(hash);
-      return { height, hash, match: filter.n > 0 && matchFilter(filter, key, script) };
-    });
-    for (const { height, hash, match } of blocks) {
-      if (match) {
+    for (const { height, hash, filter, key } of await fetchBlockFilters(node, heights, concurrency)) {
+      if (filter.n > 0 && matchFilter(filter, key, script)) {
         for (const tx of (await node.getBlockWithTransactions(hash)).rawtx) {
           if (touches(tx)) found.set(tx.txid, { txid: tx.txid, vin: tx.vin, vout: tx.vout, blockhash: hash, height });
         }
@@ -740,17 +737,4 @@ function grains(value: unknown, method: string): bigint {
     throw new PearlRpcError('response', method, `expected an amount, got ${typeof value === 'bigint' ? value : JSON.stringify(value)}`);
   }
   return value;
-}
-
-async function mapLimit<T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await run(items[i]!);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
-  return results;
 }
