@@ -489,6 +489,7 @@
       "SpendStatus",
       "SpendableOptions",
       "StandardOptions",
+      "StoreExpectation",
       "StoreOperation",
       "SweepOptions",
       "SyncProgress",
@@ -1174,6 +1175,7 @@
     ],
     "types": [
       "JsonValue",
+      "StoreExpectation",
       "StoreOperation",
       "WalletStore"
     ]
@@ -1183,6 +1185,7 @@
       "createFileStore"
     ],
     "types": [
+      "FileLockOptions",
       "FileStore",
       "FileStoreOptions"
     ]
@@ -1327,6 +1330,7 @@
       "readXmssIndexFile"
     ],
     "types": [
+      "FileLockOptions",
       "FileXmssIndexStore",
       "FileXmssIndexStoreOptions",
       "XmssIndexFileState"

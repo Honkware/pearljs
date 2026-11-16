@@ -1,8 +1,8 @@
-// What the memory and file stores share: checking operations before any is
+// What the stores share: checking operations before any is
 // applied, applying them to a map, and copying values in and out. Also the
 // encodings wallet records use for amounts and bytes. Not a subpath export.
 
-import type { JsonValue, StoreOperation } from '../store.js';
+import type { JsonValue, StoreExpectation, StoreOperation } from '../store.js';
 import { StoreError } from '../errors.js';
 import { toHex } from './bytes.js';
 
@@ -44,6 +44,33 @@ export function checkOperations(operations: readonly StoreOperation[]): StoreOpe
     if (operation.type !== 'set') throw new TypeError(`unknown store operation ${String((operation as { type: unknown }).type)}`);
     return { type: 'set', key: operation.key, value: copyJson(operation.value) };
   });
+}
+
+// JSON with object keys in order, so two values are equal exactly when their text is.
+function canonical(value: JsonValue): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  const keys = Object.keys(value).filter((key) => value[key] !== undefined).sort();
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${canonical(value[key]!)}`).join(',')}}`;
+}
+
+/** Whether a stored value (undefined: none) is the one expected, whatever the order of its object keys. */
+export function sameJson(stored: JsonValue | undefined, expected: JsonValue | undefined): boolean {
+  if (stored === undefined || expected === undefined) return stored === expected;
+  return canonical(stored) === canonical(expected);
+}
+
+/** Checks the expectations of a compareAndSet before anything is read. */
+export function checkExpectations(expected: readonly StoreExpectation[]): StoreExpectation[] {
+  return expected.map(({ key, value }) => {
+    checkKey(key);
+    return { key, value: value === undefined ? undefined : copyJson(value) };
+  });
+}
+
+/** Whether every expectation holds in a map. */
+export function expectationsHold(entries: ReadonlyMap<string, JsonValue>, expected: readonly StoreExpectation[]): boolean {
+  return expected.every(({ key, value }) => sameJson(entries.get(key), value));
 }
 
 /** Applies checked operations to a map; shared by the memory and file stores. */

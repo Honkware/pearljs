@@ -63,6 +63,25 @@ describe('IndexedDB store', () => {
     await store.close();
   });
 
+  it('applies a compareAndSet only over the expected values, and lets one of two tabs win', async () => {
+    const name = fresh();
+    const store = await openIndexedDbStore(name);
+    await store.set('xmss:k', { next: 3, label: null });
+    expect(await store.compareAndSet([{ key: 'xmss:k', value: { next: 2, label: null } }], [{ type: 'set', key: 'xmss:k', value: 'no' }])).toBe(false);
+    expect(await store.compareAndSet([{ key: 'xmss:k', value: { label: null, next: 3 } }, { key: 'absent', value: undefined }], [{ type: 'set', key: 'xmss:k', value: { next: 4, label: null } }, { type: 'set', key: 'absent', value: 1 }])).toBe(true);
+    expect(await store.compareAndSet([{ key: 'absent', value: undefined }], [{ type: 'delete', key: 'xmss:k' }])).toBe(false);
+    expect(await store.list('')).toEqual([['absent', 1], ['xmss:k', { next: 4, label: null }]]);
+    // A second connection that got past the tab lock: of two reservations of one index, one is applied.
+    const other = await openIndexedDbStore(name, { unlocked: true });
+    const reserve = (from: typeof store) => from.compareAndSet([{ key: 'xmss:k', value: { next: 4, label: null } }], [{ type: 'set', key: 'xmss:k', value: { next: 5, label: null } }]);
+    const results = await Promise.all([reserve(store), reserve(other), reserve(store), reserve(other)]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(await other.get('xmss:k')).toEqual({ next: 5, label: null });
+    await expect(store.compareAndSet([], [{ type: 'set', key: 'k', value: 1n as unknown as JsonValue }])).rejects.toThrow(TypeError);
+    await store.close();
+    await other.close();
+  });
+
   it('keeps a second tab out until the first closes, and keeps the data', async () => {
     const name = fresh();
     const store = await openIndexedDbStore(name);

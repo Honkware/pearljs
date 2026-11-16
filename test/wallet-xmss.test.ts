@@ -49,9 +49,10 @@ describe('wallet XMSS keys', () => {
     const inner = createMemoryStore();
     const store: WalletStore = {
       ...inner,
-      async set(key, value) {
-        if (key.startsWith('xmss:')) order.push(`stored next ${(value as Record<string, JsonValue>).next}`);
-        await inner.set(key, value);
+      async compareAndSet(expected, operations) {
+        const applied = await inner.compareAndSet(expected, operations);
+        for (const op of operations) if (op.type === 'set' && op.key.startsWith('xmss:') && applied) order.push(`stored next ${(op.value as Record<string, JsonValue>).next}`);
+        return applied;
       },
     };
     const { chain, wallet, key } = await xmssWallet(store);
@@ -61,7 +62,35 @@ describe('wallet XMSS keys', () => {
       return broadcast(hex);
     };
     await wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n, from: { xmss: key.id } });
-    expect(order).toEqual(['stored next 1', 'broadcast index 0']);
+    expect(order.slice(-2)).toEqual(['stored next 1', 'broadcast index 0']);
+  });
+
+  it('signs with an index in only one of two wallets that share a store', async () => {
+    // Two wallets on one store are what a lost lock, or a store without one, comes to.
+    const { chain, wallet, key, store } = await xmssWallet();
+    const twin = await PearlWallet.open({ store, backend: chain, transactions: chain });
+    await twin.unlock(PASSPHRASE);
+    const send = (from: PearlWallet) => from.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n, from: { xmss: key.id } });
+    const first = await send(wallet);
+    expect(xmssIndexOf(first.hex)).toBe(0);
+    // The twin still holds index 0 in memory; the store does not.
+    await expect(send(twin)).rejects.toMatchObject({ code: 'XMSS_INDEX_REUSE', message: expect.stringContaining('another writer is using the store') });
+    expect(((await store.get(`xmss:${key.id}`)) as { next: number }).next).toBe(1);
+    expect(chain.mempool.size).toBe(1);
+    // Nor can the twin move the stored record back by writing its own copy of it.
+    await expect(twin.burnXmssIndices(key.id, { nextIndex: 0 })).rejects.toMatchObject({ code: 'XMSS_INDEX_REUSE' });
+    expect(((await store.get(`xmss:${key.id}`)) as { next: number }).next).toBe(1);
+  });
+
+  it('does not sign when the store declines the reservation', async () => {
+    const inner = createMemoryStore();
+    let decline = false;
+    const store: WalletStore = { ...inner, compareAndSet: async (expected, operations) => !decline && inner.compareAndSet(expected, operations) };
+    const { chain, wallet, key } = await xmssWallet(store);
+    decline = true;
+    await expect(wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n, from: { xmss: key.id } })).rejects.toMatchObject({ code: 'XMSS_INDEX_REUSE' });
+    expect(chain.mempool.size).toBe(0);
+    expect(wallet.xmssKeys()[0]!.nextIndex).toBe(0);
   });
 
   it('burns the index of a signature that never left', async () => {

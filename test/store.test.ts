@@ -1,11 +1,14 @@
-// Wallet stores: the same behaviour from the memory and file stores, the
-// file store's format, atomic writes that survive a process killed between
-// writing and renaming, and a lock no second process gets past. The crash
-// and lock tests run the file store in child processes, bundled from src/
-// with esbuild so they need no build.
+// Wallet stores: the same behaviour from the memory and file stores,
+// compareAndSet included, the file store's format, commits that survive a
+// process killed between writing and linking, and a lock that knows its
+// owner: it is not taken from a live holder unless the caller insists, a
+// store that lost it writes nothing more, and closing removes only one's
+// own. The crash and lock tests run the file store in child processes,
+// bundled from src/ with esbuild so they need no build.
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildSync } from 'esbuild';
@@ -20,6 +23,12 @@ beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'pearljs-store-'));
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+/** The revision files of a file store, oldest first. */
+const revisions = (path: string): string[] => readdirSync(path).filter((name) => /^\d{16}\.json$/.test(name)).sort();
+/** The newest revision of a file store, as text. */
+const newest = (path: string): string => readFileSync(join(path, revisions(path).at(-1)!), 'utf8');
+const temporaries = (path: string): string[] => readdirSync(path).filter((name) => name.endsWith('.tmp'));
 
 const kinds: [string, () => WalletStore][] = [
   ['memory', () => createMemoryStore()],
@@ -68,62 +77,246 @@ describe.each(kinds)('%s store', (_, make) => {
     const store = make();
     await store.close();
     await expect(store.get('k')).rejects.toThrow('closed');
+    await expect(store.compareAndSet([], [{ type: 'set', key: 'k', value: 1 }])).rejects.toThrow('closed');
+  });
+
+  it('applies a compareAndSet only while every expected key holds the expected value', async () => {
+    const store = make();
+    await store.set('index', { next: 3, label: null });
+    // Absent is a value too, and object key order is not.
+    expect(await store.compareAndSet([{ key: 'index', value: { label: null, next: 3 } }, { key: 'new', value: undefined }], [{ type: 'set', key: 'index', value: { next: 4, label: null } }, { type: 'set', key: 'new', value: 1 }])).toBe(true);
+    expect(await store.get('index')).toEqual({ next: 4, label: null });
+    for (const expected of [{ next: 3, label: null }, { next: 4 }, { next: 4, label: 'x' }, { next: '4', label: null }, undefined]) {
+      expect(await store.compareAndSet([{ key: 'index', value: expected }], [{ type: 'set', key: 'index', value: 'overwritten' }, { type: 'delete', key: 'new' }])).toBe(false);
+    }
+    expect(await store.compareAndSet([{ key: 'index', value: { next: 4, label: null } }, { key: 'new', value: 2 }], [{ type: 'delete', key: 'index' }])).toBe(false);
+    expect(await store.list('')).toEqual([['index', { next: 4, label: null }], ['new', 1]]);
+    await expect(store.compareAndSet([{ key: 'new', value: 1 }], [{ type: 'set', key: 'new', value: 2n as unknown as JsonValue }])).rejects.toThrow(TypeError);
+    expect(await store.get('new')).toBe(1);
+    await store.close();
+  });
+
+  it('lets one of two compareAndSet calls made at once win', async () => {
+    const store = make();
+    await store.set('n', 0);
+    const results = await Promise.all(Array.from({ length: 8 }, (_, i) => store.compareAndSet([{ key: 'n', value: 0 }], [{ type: 'set', key: 'n', value: i + 1 }])));
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(await store.get('n')).toBe(results.indexOf(true) + 1);
+    await store.close();
   });
 });
 
 describe('file store', () => {
   it('writes the documented format and reads it back after a restart', async () => {
-    const path = join(dir, 'wallet.json');
+    const path = join(dir, 'wallet');
     const store = createFileStore(path, { create: true });
     await store.batch([
       { type: 'set', key: 'meta', value: { version: 1 } },
       { type: 'set', key: 'amount', value: '2100000000000000' },
     ]);
+    expect(store.revision).toBe(1);
     await store.close();
-    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({
+    expect(revisions(path)).toEqual(['0000000000000000.json', '0000000000000001.json']);
+    expect(JSON.parse(newest(path))).toEqual({
       format: 'pearljs-wallet-store',
-      version: 1,
+      version: 2,
+      revision: 1,
+      id: expect.stringMatching(/^[0-9a-f]{32}$/),
       entries: { amount: '2100000000000000', meta: { version: 1 } },
     });
+    expect(readdirSync(path).sort()).toEqual(revisions(path));
     const reopened = createFileStore(path);
+    expect(reopened.revision).toBe(1);
     expect(await reopened.get('amount')).toBe('2100000000000000');
     await reopened.close();
   });
 
-  it('needs create for a new file and refuses it for an existing one', async () => {
-    const path = join(dir, 'wallet.json');
+  it('keeps the newest two revisions and deletes the rest', async () => {
+    const path = join(dir, 'wallet');
+    const store = createFileStore(path, { create: true });
+    for (let n = 1; n <= 5; n += 1) await store.set('n', n);
+    expect(revisions(path)).toEqual(['0000000000000004.json', '0000000000000005.json']);
+    // A write that changes nothing still commits; an empty batch does not.
+    await store.batch([]);
+    expect(store.revision).toBe(5);
+    await store.close();
+  });
+
+  it('needs create for a new store and refuses it for an existing one', async () => {
+    const path = join(dir, 'wallet');
     expect(() => createFileStore(path)).toThrow('does not exist; pass create: true');
     await createFileStore(path, { create: true }).close();
     expect(() => createFileStore(path, { create: true })).toThrow('already exists');
-    expect(existsSync(`${path}.lock`)).toBe(false);
+    expect(existsSync(join(path, 'lock'))).toBe(false);
+    // A directory with no store in it is not one, and a file is not a directory.
+    expect(() => createFileStore(dir)).toThrow('holds no wallet store');
+    writeFileSync(join(dir, 'file'), '{}');
+    expect(() => createFileStore(join(dir, 'file'))).toThrow('is a file, not a pearljs wallet store directory');
+    expect(existsSync(join(dir, 'lock'))).toBe(false);
   });
 
-  it('refuses a damaged file instead of starting empty', () => {
-    const path = join(dir, 'wallet.json');
-    writeFileSync(path, '{"format":"pearljs-wallet-store","version":1,"entr');
-    expect(() => createFileStore(path)).toThrow('is not valid JSON');
-    writeFileSync(path, '{"format":"pearljs-wallet-store","version":9,"entries":{}}');
-    expect(() => createFileStore(path)).toThrow('format version 9');
-  });
-
-  it('discards a temporary file a crash left before its rename', async () => {
-    const path = join(dir, 'wallet.json');
+  it('refuses a damaged revision instead of starting empty or falling back', async () => {
+    const path = join(dir, 'wallet');
     const store = createFileStore(path, { create: true });
     await store.set('n', 1);
     await store.close();
-    writeFileSync(`${path}.tmp`, '{"format":"pearljs-wallet-store","version":1,"entries":{"n":2}}');
+    const file = join(path, revisions(path).at(-1)!);
+    const good = readFileSync(file, 'utf8');
+    for (const [text, message] of [
+      [good.slice(0, 60), 'is not valid JSON'],
+      [good.replace('"version":2', '"version":9'), 'format version 9'],
+      [good.replace('"revision":1', '"revision":7'), 'does not say it is revision 1'],
+      [good.replace('pearljs-wallet-store', 'something-else'), 'is not a pearljs wallet store revision'],
+    ] as const) {
+      writeFileSync(file, text);
+      expect(() => createFileStore(path)).toThrow(message);
+      expect(existsSync(join(path, 'lock'))).toBe(false);
+    }
+  });
+
+  it('discards a temporary file a crash left before its link', async () => {
+    const path = join(dir, 'wallet');
+    const store = createFileStore(path, { create: true });
+    await store.set('n', 1);
+    await store.close();
+    writeFileSync(join(path, `${'ab'.repeat(16)}.tmp`), newest(path).replace('"n":1', '"n":2'));
     const reopened = createFileStore(path);
     expect(await reopened.get('n')).toBe(1);
-    expect(existsSync(`${path}.tmp`)).toBe(false);
+    expect(temporaries(path)).toEqual([]);
     await reopened.close();
   });
 
-  it('refuses a second store on a locked file', async () => {
-    const path = join(dir, 'wallet.json');
+  it('refuses a second store on a locked store, and never suggests removing the lock', async () => {
+    const path = join(dir, 'wallet');
     const store = createFileStore(path, { create: true });
-    expect(() => createFileStore(path)).toThrow(`is locked by process ${process.pid}`);
+    let message = '';
+    try {
+      createFileStore(path);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain(`is locked by process ${process.pid}`);
+    expect(message).not.toMatch(/delete|remove/);
+    // The holder is this live process, so the lock is not stale however long it is left.
+    expect(() => createFileStore(path, { breakStaleLock: true, staleLockMs: 1 })).toThrow('Two writers must never share a wallet');
+    expect(temporaries(path)).toEqual([]);
     await store.close();
     await createFileStore(path).close();
+  });
+
+  it('calls a lock stale only when its process is gone and it has stopped being touched', async () => {
+    const path = join(dir, 'wallet');
+    await createFileStore(path, { create: true }).close();
+    const lock = join(path, 'lock');
+    const write = (owner: object, ageMs: number): void => {
+      writeFileSync(lock, JSON.stringify(owner));
+      const then = new Date(Date.now() - ageMs);
+      utimesSync(lock, then, then);
+    };
+    // A process id that does not exist here, as a holder in another PID namespace looks.
+    const gone = { id: 'cd'.repeat(16), pid: 2 ** 22 + 12345, host: hostname(), heartbeatMs: 100 };
+    const options = { breakStaleLock: true, staleLockMs: 2_000 };
+
+    write(gone, 0);
+    expect(() => createFileStore(path, options)).toThrow('if you are certain its holder is gone, open with breakLock: true');
+    write(gone, 1_000);
+    expect(() => createFileStore(path, options)).toThrow('is locked by process');
+    // Untouched for long enough, but by a holder whose heartbeat is slower than that.
+    write({ ...gone, heartbeatMs: 60_000 }, 5_000);
+    expect(() => createFileStore(path, options)).toThrow('is locked by process');
+    // Another host's lock, and one that cannot be read, are never stale.
+    write({ ...gone, host: 'another-host' }, 3_600_000);
+    expect(() => createFileStore(path, options)).toThrow('on another-host');
+    write({ not: 'a lock' }, 3_600_000);
+    expect(() => createFileStore(path, options)).toThrow('is locked by another store');
+    // A live process is never stale.
+    write({ ...gone, pid: process.ppid }, 3_600_000);
+    expect(() => createFileStore(path, options)).toThrow('is locked by process');
+
+    write(gone, 5_000);
+    expect(() => createFileStore(path, { staleLockMs: 2_000 })).toThrow('open with breakStaleLock: true to take it over');
+    const store = createFileStore(path, options);
+    expect(JSON.parse(readFileSync(lock, 'utf8'))).toMatchObject({ pid: process.pid, host: hostname() });
+    await store.set('n', 1);
+    await store.close();
+    expect(existsSync(lock)).toBe(false);
+  });
+
+  it('touches its lock while it is open', async () => {
+    const path = join(dir, 'wallet');
+    const store = createFileStore(path, { create: true, staleLockMs: 100 });
+    const lock = join(path, 'lock');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(Date.now() - statSync(lock).mtimeMs).toBeLessThan(5_000);
+    await store.close();
+  });
+
+  it('writes nothing once its lock is gone, and refuses every call after', async () => {
+    const path = join(dir, 'wallet');
+    const store = createFileStore(path, { create: true });
+    await store.set('n', 1);
+    rmSync(join(path, 'lock'));
+    await expect(store.set('n', 2)).rejects.toMatchObject({ code: 'STORE_LOCKED', message: expect.stringContaining('no longer locked by this store') });
+    await expect(store.get('n')).rejects.toMatchObject({ code: 'STORE_LOCKED' });
+    await expect(store.list('')).rejects.toMatchObject({ code: 'STORE_LOCKED' });
+    await expect(store.compareAndSet([], [{ type: 'set', key: 'n', value: 3 }])).rejects.toMatchObject({ code: 'STORE_LOCKED' });
+    expect(JSON.parse(newest(path)).entries).toEqual({ n: 1 });
+    await store.close();
+  });
+
+  it('gives the lock to a store that breaks it, whose lock the first then leaves alone', async () => {
+    const path = join(dir, 'wallet');
+    const first = createFileStore(path, { create: true });
+    await first.set('n', 1);
+    const second = createFileStore(path, { breakLock: true });
+    const lock = readFileSync(join(path, 'lock'), 'utf8');
+    await expect(first.set('n', 2)).rejects.toMatchObject({ code: 'STORE_LOCKED' });
+    // Closing the first removes only a lock that is its own.
+    await first.close();
+    expect(readFileSync(join(path, 'lock'), 'utf8')).toBe(lock);
+    expect(() => createFileStore(path)).toThrow('is locked by process');
+    await second.set('n', 3);
+    await second.close();
+    expect(existsSync(join(path, 'lock'))).toBe(false);
+    const reopened = createFileStore(path);
+    expect(await reopened.get('n')).toBe(3);
+    await reopened.close();
+  });
+
+  it('refuses a writer that is behind, whoever holds the lock by then', async () => {
+    const path = join(dir, 'wallet');
+    const first = createFileStore(path, { create: true });
+    await first.set('n', 1);
+    const lock = join(path, 'lock');
+    const firstLock = readFileSync(lock, 'utf8');
+    const second = createFileStore(path, { breakLock: true });
+    await second.set('n', 2);
+    // The first store is handed its lock back, so only the revisions stand between it and the file.
+    writeFileSync(lock, firstLock);
+    await expect(first.set('n', 99)).rejects.toMatchObject({ code: 'STORE_CONFLICT', message: expect.stringContaining('another writer is using it') });
+    await expect(first.get('n')).rejects.toMatchObject({ code: 'STORE_CONFLICT' });
+    expect(JSON.parse(newest(path)).entries).toEqual({ n: 2 });
+    expect(temporaries(path)).toEqual([]);
+    await first.close();
+  });
+
+  it('refuses a writer so far behind that its next revision name is free again', async () => {
+    const path = join(dir, 'wallet');
+    const first = createFileStore(path, { create: true });
+    await first.set('n', 1);
+    const lock = join(path, 'lock');
+    const firstLock = readFileSync(lock, 'utf8');
+    const second = createFileStore(path, { breakLock: true });
+    for (let n = 2; n <= 6; n += 1) await second.set('n', n);
+    expect(revisions(path)).toEqual(['0000000000000005.json', '0000000000000006.json']);
+    writeFileSync(lock, firstLock);
+    await expect(first.compareAndSet([{ key: 'n', value: 1 }], [{ type: 'set', key: 'n', value: 99 }])).rejects.toMatchObject({ code: 'STORE_CONFLICT', message: expect.stringContaining('has moved past revision 1') });
+    // Its link is gone again, and the newest revision is untouched.
+    expect(revisions(path)).toEqual(['0000000000000005.json', '0000000000000006.json']);
+    expect(JSON.parse(newest(path)).entries).toEqual({ n: 6 });
+    await first.close();
   });
 });
 
@@ -137,30 +330,32 @@ describe('file store across processes', () => {
   });
   afterAll(() => rmSync(build, { recursive: true, force: true }));
 
-  // A child that opens the store, optionally dies by SIGKILL at the next rename, and runs `body`.
-  const child = (path: string, body: string, options: { crashAtRename?: boolean; breakStaleLock?: boolean } = {}): string => {
+  // A child that opens the store, optionally dies by SIGKILL at the next link, and runs `body`.
+  const child = (path: string, body: string, options: { crashAtLink?: boolean; open?: string } = {}): string => {
     const script = join(build, `child-${Math.random().toString(16).slice(2)}.mjs`);
     writeFileSync(
       script,
       `import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
-const rename = fs.renameSync;
-fs.renameSync = (from, to) => {
-  if (${options.crashAtRename === true}) process.kill(process.pid, 'SIGKILL');
-  return rename(from, to);
+const link = fs.linkSync;
+fs.linkSync = (from, to) => {
+  if (${options.crashAtLink === true} && /[0-9]{16}\\.json$/.test(to)) process.kill(process.pid, 'SIGKILL');
+  return link(from, to);
 };
 syncBuiltinESMExports();
 const { createFileStore } = await import(${JSON.stringify(bundle)});
-const store = createFileStore(${JSON.stringify(path)}, { breakStaleLock: ${options.breakStaleLock === true} });
+const store = createFileStore(${JSON.stringify(path)}, ${options.open ?? '{}'});
 ${body}
 `,
     );
     return script;
   };
+  const STALE = '{ breakStaleLock: true, staleLockMs: 200 }';
+  const untilStale = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 300));
 
-  it('keeps the last complete state when a process dies between writing and renaming', async () => {
+  it('keeps the last complete state when a process dies between writing and linking', async () => {
     const chain = new FakeChain();
-    const path = join(dir, 'wallet.json');
+    const path = join(dir, 'wallet');
     const wallet = await newWallet(chain, { store: createFileStore(path, { create: true }) });
     chain.pay(await wallet.receiveAddress(), parsePearl('3'));
     chain.mine();
@@ -168,17 +363,20 @@ ${body}
     const balance = wallet.balance();
     const history = wallet.history();
     await wallet.close();
-    const before = readFileSync(path, 'utf8');
+    const before = newest(path);
 
-    const script = child(path, `await store.batch([{ type: 'delete', key: 'meta' }, { type: 'set', key: 'account:0', value: 'half written' }]);`, { crashAtRename: true });
+    const script = child(path, `await store.batch([{ type: 'delete', key: 'meta' }, { type: 'set', key: 'account:0', value: 'half written' }]);`, { crashAtLink: true, open: '{ staleLockMs: 200 }' });
     const result = spawnSync(process.execPath, [script]);
     expect(result.signal).toBe('SIGKILL');
-    expect(existsSync(`${path}.tmp`)).toBe(true);
-    expect(readFileSync(path, 'utf8')).toBe(before);
+    expect(temporaries(path)).toHaveLength(1);
+    expect(newest(path)).toBe(before);
 
-    // The dead process's lock stays until it is broken on purpose.
-    expect(() => createFileStore(path)).toThrow('no longer running, so open with breakStaleLock: true');
-    const store = createFileStore(path, { breakStaleLock: true });
+    // The dead process's lock stays until it is broken on purpose, and is not stale while it could still be touched.
+    expect(() => createFileStore(path, { breakStaleLock: true, staleLockMs: 60_000 })).toThrow('is locked by process');
+    await untilStale();
+    expect(() => createFileStore(path, { staleLockMs: 200 })).toThrow('open with breakStaleLock: true to take it over');
+    const store = createFileStore(path, { breakStaleLock: true, staleLockMs: 200 });
+    expect(temporaries(path)).toEqual([]);
     const reopened = await PearlWallet.open({ store, backend: chain, transactions: chain });
     expect(reopened.balance()).toEqual(balance);
     expect(reopened.history()).toEqual(history);
@@ -188,7 +386,7 @@ ${body}
   });
 
   it('never leaves a torn state however a busy writer is killed', async () => {
-    const path = join(dir, 'wallet.json');
+    const path = join(dir, 'wallet');
     await createFileStore(path, { create: true }).close();
     for (let round = 0; round < 3; round += 1) {
       const script = child(
@@ -197,13 +395,14 @@ ${body}
   await store.batch([{ type: 'set', key: 'n', value: n }, { type: 'set', key: 'item:' + String(n).padStart(6, '0'), value: n }]);
   if (n % 20 === 0) process.stdout.write('.');
 }`,
-        { breakStaleLock: true },
+        { open: STALE },
       );
       const proc = spawn(process.execPath, [script]);
       await new Promise<void>((resolve) => proc.stdout.once('data', () => resolve()));
       proc.kill('SIGKILL');
       await new Promise((resolve) => proc.once('exit', resolve));
-      const store = createFileStore(path, { breakStaleLock: true });
+      await untilStale();
+      const store = createFileStore(path, { breakStaleLock: true, staleLockMs: 200 });
       const n = (await store.get('n')) as number;
       const items = await store.list('item:');
       expect(n).toBeGreaterThanOrEqual(20);
@@ -213,15 +412,17 @@ ${body}
     }
   });
 
-  it('keeps a second process off a wallet another has open', async () => {
-    const path = join(dir, 'wallet.json');
+  it('keeps a second process off a wallet another has open, however long it stays open', async () => {
+    const path = join(dir, 'wallet');
     await createFileStore(path, { create: true }).close();
-    const proc = spawn(process.execPath, [child(path, `process.stdout.write('open'); setInterval(() => {}, 1000);`)]);
+    const proc = spawn(process.execPath, [child(path, `process.stdout.write('open'); setInterval(() => {}, 1000);`, { open: '{ staleLockMs: 200 }' })]);
     await new Promise<void>((resolve) => proc.stdout.once('data', () => resolve()));
     try {
       expect(() => createFileStore(path)).toThrow(`is locked by process ${proc.pid}`);
-      // The holder is alive, so even breakStaleLock does not take it.
-      expect(() => createFileStore(path, { breakStaleLock: true })).toThrow('Two writers must never share a wallet');
+      // The holder is alive and touching its lock, so breakStaleLock does not take it even past the stale interval.
+      await untilStale();
+      expect(() => createFileStore(path, { breakStaleLock: true, staleLockMs: 200 })).toThrow('Two writers must never share a wallet');
+      expect(Date.now() - statSync(join(path, 'lock')).mtimeMs).toBeLessThan(250);
     } finally {
       proc.kill('SIGKILL');
       await new Promise((resolve) => proc.once('exit', resolve));

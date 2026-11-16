@@ -1,5 +1,6 @@
 // The storage a wallet keeps its state in: string keys, JSON values, reads
-// by key or prefix, and an atomic batch. Small enough to put over a file,
+// by key or prefix, an atomic batch, and a batch that applies only if some
+// keys still hold what the caller last saw. Small enough to put over a file,
 // IndexedDB, a key-value database or SQL table. Values are plain JSON, so
 // amounts are decimal strings and bytes are hex; nothing here knows what a
 // wallet is.
@@ -13,13 +14,19 @@
  */
 
 import { StoreError } from './errors.js';
-import { applyOperations, checkKey, checkOperations, copyJson, listEntries } from './internal/store-ops.js';
+import { applyOperations, checkExpectations, checkKey, checkOperations, copyJson, expectationsHold, listEntries } from './internal/store-ops.js';
 
 /** A value a store holds: anything JSON can carry. */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 /** One write in a batch. */
 export type StoreOperation = { type: 'set'; key: string; value: JsonValue } | { type: 'delete'; key: string };
+
+/** What a key must hold for a compareAndSet to apply. `value: undefined` means the key must be absent. */
+export interface StoreExpectation {
+  key: string;
+  value: JsonValue | undefined;
+}
 
 /**
  * Where a wallet keeps its state. Every write must be durable when its
@@ -35,6 +42,18 @@ export interface WalletStore {
   /** Every entry whose key starts with prefix, sorted by key. An empty prefix lists everything. */
   list(prefix: string): Promise<[string, JsonValue][]>;
   batch(operations: readonly StoreOperation[]): Promise<void>;
+  /**
+   * Applies the operations, entirely or not at all, only if every expected
+   * key holds exactly the expected value in the durable state at that
+   * moment; resolves false, having written nothing, if one does not. The
+   * check and the write are one step against every other writer of the
+   * store, in this process or another: of two calls expecting the same
+   * value, one applies. Values are compared as JSON, whatever the order of
+   * object keys. A wallet reserves XMSS indices through this, so a store
+   * that answers from a cache, or checks and then writes, lets two writers
+   * sign with one index.
+   */
+  compareAndSet(expected: readonly StoreExpectation[], operations: readonly StoreOperation[]): Promise<boolean>;
   /** Releases the store's lock, if it has one. The store cannot be used afterwards. */
   close(): Promise<void>;
 }
@@ -73,6 +92,15 @@ export function createMemoryStore(initial: Iterable<[string, JsonValue]> = []): 
     async batch(operations) {
       ensureOpen();
       applyOperations(entries, checkOperations(operations));
+    },
+    async compareAndSet(expected, operations) {
+      ensureOpen();
+      const conditions = checkExpectations(expected);
+      const checked = checkOperations(operations);
+      // No await between the check and the write, so nothing in this process runs between them.
+      if (!expectationsHold(entries, conditions)) return false;
+      applyOperations(entries, checked);
+      return true;
     },
     async close() {
       open = false;

@@ -1,12 +1,12 @@
 /**
- * Keep a wallet in a file and bring it up to a node: create it on the first
+ * Keep a wallet in a directory on disk and bring it up to a node: create it on the first
  * run, then on every run sync, print what it holds and where to pay it, and
  * pay an address if asked.
  *
  * Needs a running pearld started with --addrindex. Settings come from the
  * environment (see lib/env.ts), plus:
  *
- *   WALLET_FILE         where the wallet lives, for example ./regtest-wallet.json
+ *   WALLET_FILE         the directory the wallet lives in, for example ./regtest-wallet
  *   WALLET_PASSPHRASE   encrypts its keys
  *   PEARL_MNEMONIC      on the first run only: restore this phrase instead of making a new one
  *   PAY_TO, PAY_AMOUNT  optional: send PAY_AMOUNT PRL to PAY_TO, a real transaction

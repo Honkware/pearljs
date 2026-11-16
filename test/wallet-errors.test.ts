@@ -35,15 +35,21 @@ afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe('store error codes', () => {
   it('names each file store refusal', async () => {
-    const path = join(dir, 'wallet.json');
+    const path = join(dir, 'wallet');
     expect(() => createFileStore(path)).toThrow(code('StoreError', 'STORE_NOT_FOUND'));
     const store = createFileStore(path, { create: true });
     expect(() => createFileStore(path)).toThrow(code('StoreError', 'STORE_LOCKED'));
     await store.close();
     expect(() => createFileStore(path, { create: true })).toThrow(code('StoreError', 'STORE_EXISTS'));
     await expect(store.get('k')).rejects.toThrow(code('StoreError', 'STORE_CLOSED'));
-    writeFileSync(path, 'not json');
+    writeFileSync(join(path, '0000000000000000.json'), 'not json');
     expect(() => createFileStore(path)).toThrow(code('StoreError', 'STORE_INVALID'));
+    const taken = createFileStore(join(dir, 'other'), { create: true });
+    await taken.set('n', 1);
+    const taker = createFileStore(join(dir, 'other'), { breakLock: true });
+    await expect(taken.set('n', 2)).rejects.toThrow(code('StoreError', 'STORE_LOCKED'));
+    await taker.close();
+    await taken.close();
   });
 
   it('says when there is no IndexedDB', async () => {

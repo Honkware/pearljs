@@ -140,6 +140,8 @@ export type PearlErrorCode =
   | 'STORE_INVALID'
   | 'STORE_CLOSED'
   | 'STORE_UNAVAILABLE'
+  | 'STORE_CONFLICT'
+  | 'STORE_WRITE_FAILED'
   // Keystore
   | 'KEYSTORE_BAD_PASSPHRASE'
   | 'KEYSTORE_TAMPERED'
@@ -221,7 +223,7 @@ export class XmssError extends PearlError {
   override name = 'XmssError';
 }
 
-/** A wallet store that is locked, missing, damaged or closed. */
+/** A wallet store that is locked, missing, damaged, closed, written by someone else, or unable to write. */
 export class StoreError extends PearlError {
   override name = 'StoreError';
 }

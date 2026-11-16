@@ -526,6 +526,8 @@ export class PearlWallet {
   #addresses = new Map<string, AddressRecord>();
   #imported = new Map<string, { address: string; label: string | null }>();
   #xmss = new Map<string, XmssRecord>();
+  // Each XMSS record as the store last held it, which every write of one is conditional on.
+  #xmssStored = new Map<string, JsonValue>();
   #txs = new Map<string, TxEntry>();
   #externalSpends = new Map<string, string | null>();
   #locks = new Map<string, number | null>();
@@ -538,6 +540,8 @@ export class PearlWallet {
   #notifier: WalletNotifier | null = null;
   #stops: (() => void)[] = [];
   #closed = false;
+  // Set when a failed operation could not reload the state: memory may hold what the store does not.
+  #broken: unknown = null;
 
   private constructor(connection: WalletConnection) {
     this.#store = connection.store;
@@ -930,7 +934,8 @@ export class PearlWallet {
       record.next = nextIndex;
       record.frozen = null;
       // Durable now, like a reservation.
-      await this.#store.set(`xmss:${id}`, record as unknown as JsonValue);
+      this.#putXmss(record);
+      await this.#flush();
       return this.#xmssView(record);
     });
   }
@@ -1396,6 +1401,7 @@ export class PearlWallet {
     this.#addresses.clear();
     this.#imported.clear();
     this.#xmss.clear();
+    this.#xmssStored.clear();
     this.#txs.clear();
     this.#externalSpends.clear();
     this.#locks.clear();
@@ -1407,7 +1413,11 @@ export class PearlWallet {
       if (key.startsWith('account:')) this.#addAccount(asRecord<AccountRecord>(value, key), false);
       else if (key.startsWith('address:')) this.#addresses.set(name, asRecord<AddressRecord>(value, key));
       else if (key.startsWith('imported:')) this.#imported.set(name, asRecord<{ address: string; label: string | null }>(value, key));
-      else if (key.startsWith('xmss:')) this.#xmss.set(name, asRecord<XmssRecord>(value, key));
+      else if (key.startsWith('xmss:')) {
+        this.#xmss.set(name, asRecord<XmssRecord>(value, key));
+        // A copy: the record above changes in memory before it is stored again.
+        this.#xmssStored.set(name, structuredClone(value));
+      }
       else if (key.startsWith('tx:')) this.#txs.set(name, txFromJson(name, value));
       else if (key.startsWith('spent:')) this.#externalSpends.set(name, asRecord<{ by: string | null }>(value, key).by);
       else if (key.startsWith('lock:')) this.#locks.set(name, asRecord<{ until: number | null }>(value, key).until);
@@ -1454,7 +1464,23 @@ export class PearlWallet {
     const last = new Map<string, StoreOperation>();
     for (const op of this.#ops) last.set(op.key, op);
     this.#ops = [];
-    await this.#store.batch([...last.values()]);
+    const operations = [...last.values()];
+    // An XMSS record is only ever written over the value this wallet last stored for it, so a
+    // second writer of the store cannot have its index moved back, or move this wallet's.
+    const guarded = operations.filter((op) => op.key.startsWith('xmss:'));
+    if (guarded.length === 0) {
+      await this.#store.batch(operations);
+      return;
+    }
+    const expected = guarded.map((op) => ({ key: op.key, value: this.#xmssStored.get(op.key.slice(5)) }));
+    const written = guarded.map((op) => structuredClone(op));
+    if (!(await this.#store.compareAndSet(expected, operations))) {
+      throw new XmssError('XMSS_INDEX_REUSE', 'the stored state of an XMSS key is not what this wallet last wrote: another writer is using the store. Nothing was written');
+    }
+    for (const op of written) {
+      if (op.type === 'set') this.#xmssStored.set(op.key.slice(5), op.value);
+      else this.#xmssStored.delete(op.key.slice(5));
+    }
   }
 
   /**
@@ -1465,6 +1491,7 @@ export class PearlWallet {
   async #exclusive<T>(run: (events: PendingEvent[]) => Promise<T>): Promise<T> {
     const result = this.#queue.then(async () => {
       if (this.#closed) throw new WalletError('WALLET_CLOSED', 'this wallet is closed');
+      if (this.#broken !== null) throw this.#broken;
       const events: PendingEvent[] = [];
       const before = this.#ledger().balance;
       try {
@@ -1480,7 +1507,12 @@ export class PearlWallet {
         return value;
       } catch (err) {
         this.#ops = [];
-        if (!this.#closed) await this.#load();
+        try {
+          if (!this.#closed) await this.#load();
+        } catch (reload) {
+          // The store cannot be read back, so nothing more is done on what memory holds.
+          this.#broken = reload;
+        }
         throw err;
       }
     });
@@ -1729,9 +1761,11 @@ export class PearlWallet {
     };
   }
 
-  // The index store an XMSS signer of this wallet reserves from: the stored
-  // record is read back and must agree with memory, then advanced and written
-  // before the index is returned.
+  // The index store an XMSS signer of this wallet reserves from. The advanced
+  // record is written with compareAndSet over the record this wallet last
+  // stored, so the store itself, not a read followed by a write, decides
+  // that no other writer has moved the index; only then is the index
+  // returned.
   #xmssIndexStore(): XmssIndexStore {
     const recordOf = (publicKey: Uint8Array): XmssRecord => {
       const record = this.#xmss.get(toHex(publicKey));
@@ -1744,14 +1778,17 @@ export class PearlWallet {
         const id = toHex(publicKey);
         const record = recordOf(publicKey);
         this.#checkXmssUsable(record);
-        const stored = asRecord<XmssRecord>(await this.#store.get(`xmss:${id}`), 'XMSS state');
-        if (stored.next !== record.next) throw new XmssError('XMSS_INDEX_REUSE', 'the stored XMSS index changed under this wallet; another writer is using the store');
         const index = record.next;
         // Index 30 is the last; past it nothing is recorded.
         if (index > XMSS_LAST_INDEX) throw new XmssError('XMSS_INDEX_EXHAUSTED', `this XMSS key has used all ${XMSS_MAX_SIGNATURES} of its signatures`);
         if (index <= record.seenOnChain || index <= (this.#reserved.get(id) ?? -1)) throw new XmssError('XMSS_INDEX_REUSE', `refusing to reuse XMSS index ${index}`);
+        const advanced = { ...record, next: index + 1 } as unknown as JsonValue;
+        const key = `xmss:${id}`;
+        if (!(await this.#store.compareAndSet([{ key, value: this.#xmssStored.get(id) }], [{ type: 'set', key, value: advanced }]))) {
+          throw new XmssError('XMSS_INDEX_REUSE', 'the stored XMSS index is not the one this wallet last wrote: another writer is using the store. Nothing was signed');
+        }
         record.next = index + 1;
-        await this.#store.set(`xmss:${id}`, record as unknown as JsonValue);
+        this.#xmssStored.set(id, advanced);
         this.#reserved.set(id, index);
         return index;
       },

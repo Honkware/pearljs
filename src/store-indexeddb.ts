@@ -15,7 +15,7 @@
  */
 
 import { StoreError } from './errors.js';
-import { checkOperations, copyJson } from './internal/store-ops.js';
+import { checkExpectations, checkOperations, copyJson, sameJson } from './internal/store-ops.js';
 import type { JsonValue, WalletStore } from './store.js';
 
 const OBJECT_STORE = 'entries';
@@ -128,6 +128,34 @@ export async function openIndexedDbStore(name: string, options: IndexedDbStoreOp
         else objects.delete(operation.key);
       }
       await done;
+    },
+    async compareAndSet(expected, operations) {
+      ensureOpen();
+      const conditions = checkExpectations(expected);
+      const checked = checkOperations(operations);
+      // One readwrite transaction reads and writes: IndexedDB runs no other
+      // writer of these keys, in any tab, between its first request and its commit.
+      const tx = transaction('readwrite');
+      const done = completion(tx);
+      const objects = tx.objectStore(OBJECT_STORE);
+      let stored: (JsonValue | undefined)[];
+      try {
+        stored = await Promise.all(conditions.map(({ key }) => request(objects.get(key) as IDBRequest<JsonValue | undefined>)));
+      } catch (error) {
+        done.catch(() => undefined);
+        throw error;
+      }
+      if (!conditions.every(({ value }, i) => sameJson(stored[i], value))) {
+        done.catch(() => undefined);
+        tx.abort();
+        return false;
+      }
+      for (const operation of checked) {
+        if (operation.type === 'set') objects.put(operation.value, operation.key);
+        else objects.delete(operation.key);
+      }
+      await done;
+      return true;
     },
     async close() {
       if (!open) return;
