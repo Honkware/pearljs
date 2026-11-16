@@ -1852,16 +1852,19 @@ export class PearlWallet {
   }
 
   // A transaction that is in a block, or that the backend has, wins over
-  // every unconfirmed one spending the same outputs.
+  // every unconfirmed one spending the same outputs. `entry` is what the
+  // backend has just reported, so when it is in a block and a recorded
+  // transaction spending the same outputs is recorded in one too, the record
+  // is the stale one: a chain holds only one of them.
   #settleConflicts(entry: TxEntry, events: PendingEvent[]): void {
     const spends = new Set(entry.tx.ins.map((input) => outpointKey(prevTxid(input), input.index)));
     for (const other of this.#txs.values()) {
       if (other === entry || other.status !== 'active') continue;
       if (!other.tx.ins.some((input) => spends.has(outpointKey(prevTxid(input), input.index)))) continue;
-      const [loser, winner] = other.block === null ? [other, entry] : entry.block === null ? [entry, other] : [null, null];
-      if (loser === null || winner === null) continue;
+      const [loser, winner] = other.block === null || entry.block !== null ? [other, entry] : [entry, other];
       loser.status = 'conflicted';
       loser.by = winner.txid;
+      loser.block = null;
       this.#putTx(loser);
       events.push(['conflict', { txid: loser.txid, status: 'conflicted', by: winner.txid }]);
     }
@@ -1967,7 +1970,8 @@ export class PearlWallet {
         const known = this.#txs.get(spender);
         const where = await this.#backend.getTransaction(spender);
         if (known !== undefined) {
-          this.#observe(known, where?.block ?? null, events);
+          // A spender the backend names and cannot find is no news about where it stands.
+          if (where !== null) this.#observe(known, where.block, events);
           continue;
         }
         if ((await this.#fetchAndIngest(spender, where?.block ?? null, events)) !== null) continue;
@@ -2004,46 +2008,61 @@ export class PearlWallet {
         }
         continue;
       }
-      if (conflict !== null && !this.#txs.has(conflict)) {
-        const where = await this.#backend.getTransaction(conflict);
-        await this.#fetchAndIngest(conflict, where?.block ?? null, events);
-      } else if (conflict !== null) {
-        const where = await this.#backend.getTransaction(conflict);
-        this.#observe(this.#txs.get(conflict)!, where?.block ?? null, events);
-      }
-      if (entry.status === 'active') {
-        entry.status = 'conflicted';
-        if (conflict === null) delete entry.by;
-        else entry.by = conflict;
-        this.#putTx(entry);
-        events.push(['conflict', { txid: entry.txid, status: 'conflicted', by: conflict }]);
-      }
+      // Conflicted first, so a known rival that is only in the mempool finds its inputs free and becomes active again.
+      entry.status = 'conflicted';
+      if (conflict === null) delete entry.by;
+      else entry.by = conflict;
+      this.#putTx(entry);
+      events.push(['conflict', { txid: entry.txid, status: 'conflicted', by: conflict }]);
+      if (conflict === null) continue;
+      const where = await this.#backend.getTransaction(conflict);
+      const known = this.#txs.get(conflict);
+      if (known === undefined) await this.#fetchAndIngest(conflict, where?.block ?? null, events);
+      else if (where !== null) this.#observe(known, where.block, events);
     }
   }
 
   /**
-   * When the tip moved, checks every recorded block within reorgDepth of it.
-   * If any left the chain, rolls back to the lowest such height as wtxmgr's
-   * rollback does (wallet/wtxmgr/tx.go:568): transactions from that height
-   * up go back to pending, and coinbase transactions, which cannot exist
-   * outside their block, become orphaned. The scan that follows confirms
-   * again whatever the new chain holds.
+   * When the tip moved, finds how far back the recorded blocks still stand.
+   * Recorded blocks are walked from the highest down and every transaction
+   * in each is looked up again. A block whose transactions the backend still
+   * places in it anchors everything below it, since a block's hash commits
+   * to its ancestors, so the walk goes on past reorgDepth below the last
+   * synced tip only until it has met one such block. The window is measured
+   * from the last synced tip, not the new one: blocks mined while the wallet
+   * was away do not make an old reorg any shallower. A transaction the
+   * backend no longer knows, or places elsewhere, is never left confirmed.
+   *
+   * The wallet then rolls back to the lowest block that did not stand, as
+   * wtxmgr's rollback does (wallet/wtxmgr/tx.go:568): transactions from that
+   * height up go back to pending, and coinbase transactions, which cannot
+   * exist outside their block, become orphaned. The scan that follows
+   * confirms again whatever the new chain holds.
    */
   async #reconcile(tip: BlockRef, events: PendingEvent[]): Promise<void> {
     const previous = this.#tip;
     if (previous !== null && previous.hash === tip.hash) return;
-    const floor = tip.height - this.#meta.reorgDepth;
+    const floor = previous === null ? Number.NEGATIVE_INFINITY : Math.min(previous.height, tip.height) - this.#meta.reorgDepth;
+    const blocks = new Map<string, { height: number; hash: string; entries: TxEntry[] }>();
+    for (const entry of this.#txs.values()) {
+      if (entry.status !== 'active' || entry.block === null) continue;
+      const key = `${entry.block.height}:${entry.block.hash}`;
+      const block = blocks.get(key) ?? { height: entry.block.height, hash: entry.block.hash, entries: [] };
+      block.entries.push(entry);
+      blocks.set(key, block);
+    }
     let fork = Number.POSITIVE_INFINITY;
-    const candidates = [...this.#txs.values()].filter((entry) => entry.status === 'active' && entry.block !== null && entry.block.height > floor);
-    await mapLimit(candidates, CONCURRENCY, async (entry) => {
-      const block = entry.block!;
-      if (block.height > tip.height) {
-        fork = Math.min(fork, block.height);
-        return;
+    let anchored = false;
+    for (const block of [...blocks.values()].sort((a, b) => b.height - a.height)) {
+      if (anchored && block.height <= floor) break;
+      let stands = block.height <= tip.height;
+      if (stands) {
+        const found = await mapLimit(block.entries, CONCURRENCY, (entry) => this.#backend.getTransaction(entry.txid));
+        stands = found.every((item) => item !== null && item.block !== null && item.block.hash === block.hash && item.block.height === block.height);
       }
-      const found = await this.#backend.getTransaction(entry.txid);
-      if (found === null || found.block === null || found.block.hash !== block.hash) fork = Math.min(fork, block.height);
-    });
+      if (stands) anchored = true;
+      else fork = Math.min(fork, block.height);
+    }
     if (fork === Number.POSITIVE_INFINITY) return;
     for (const entry of this.#txs.values()) {
       if (entry.status !== 'active' || entry.block === null || entry.block.height < fork) continue;

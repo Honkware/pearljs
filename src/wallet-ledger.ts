@@ -7,7 +7,10 @@
 // A transaction is active unless it was conflicted, replaced, abandoned or
 // orphaned by a reorg; a transaction spending an output of one that is not
 // active is not active either, as wtxmgr's removeConflict removes whole
-// spend chains (wallet/wtxmgr/unconfirmed.go:117).
+// spend chains (wallet/wtxmgr/unconfirmed.go:117). That holds for a spender
+// recorded in a block too: a block cannot hold a spend of an output that
+// does not exist, so such a record is older than what made its parent
+// inactive, and its outputs are not counted until the chain is asked again.
 
 /**
  * The derived view of a wallet: its coins, balance and history, from its
@@ -116,6 +119,8 @@ export function prevTxid(input: Transaction['ins'][number]): string {
   return toHex(Uint8Array.from(input.hash).reverse());
 }
 
+const active = (status: TransactionStatus | undefined): boolean => status === 'pending' || status === 'confirmed';
+
 /** Statuses with inactive spend chains followed to a fixed point. */
 export function effectiveStatus(txs: ReadonlyMap<string, LedgerTransaction>): Map<string, TransactionStatus> {
   const status = new Map<string, TransactionStatus>();
@@ -125,7 +130,7 @@ export function effectiveStatus(txs: ReadonlyMap<string, LedgerTransaction>): Ma
   for (let changed = true; changed; ) {
     changed = false;
     for (const [txid, entry] of txs) {
-      if (status.get(txid) !== 'pending') continue;
+      if (!active(status.get(txid))) continue;
       const dead = entry.tx.ins.some((input) => {
         const parent = status.get(prevTxid(input));
         return parent !== undefined && parent !== 'pending' && parent !== 'confirmed';
@@ -138,8 +143,6 @@ export function effectiveStatus(txs: ReadonlyMap<string, LedgerTransaction>): Ma
   }
   return status;
 }
-
-const active = (status: TransactionStatus | undefined): boolean => status === 'pending' || status === 'confirmed';
 
 /**
  * Works out the coins and balance. externalSpends are outputs the backend
