@@ -2,11 +2,12 @@
 // Oyster: sendMany, the signs of amounts and fees in listTransactions and
 // getTransaction after a real send, lockUnspent, removeTransaction and
 // rebroadcastTransaction on a pending transaction, and getSyncProgress from
-// a second Oyster in SPV mode.
+// a second Oyster in SPV mode, which oysterBackend reads as far as a wallet
+// without a node can answer.
 
 import { join } from 'node:path';
 import { beforeAll, expect, it } from 'vitest';
-import { generateMnemonic, parseTransaction, toOutputScript } from '../src/index.js';
+import { generateMnemonic, OYSTER_DEFAULT_FEE_RATE, oysterBackend, parseTransaction, pearldBackend, PearlError, toOutputScript } from '../src/index.js';
 import { OYSTER_PASSPHRASE } from './context.js';
 import { confirm, describeOyster, eventually, fund, live, mine, miner, network, oyster, pearld, spentOutputs } from './chain.js';
 import { startOyster } from './processes.js';
@@ -124,7 +125,7 @@ describeOyster('Oyster wallet methods', () => {
     expect(await oyster.getBestBlock()).toEqual({ hash: await pearld.getBestBlockHash(), height: tip });
   });
 
-  it('reports sync progress in SPV mode, following pearld as a peer', { timeout: 300_000 }, async () => {
+  it('reports sync progress in SPV mode, following pearld as a peer', async () => {
     const spv = await startOyster({
       exe: process.env.OYSTER!,
       dir: join(live!.dir, 'oyster-spv'),
@@ -146,6 +147,30 @@ describeOyster('Oyster wallet methods', () => {
       });
       // What needs pearld's RPC is not there in this mode.
       await expect(spv.client.getInfo()).rejects.toMatchObject({ kind: 'rpc', message: expect.stringContaining('Chain RPC is inactive') as string });
+
+      // oysterBackend still reads what the wallet holds, and says what it cannot do without a node.
+      const backend = oysterBackend(spv.client, { network });
+      const node = pearldBackend(pearld, { network });
+      const address = await spv.client.getNewAddress();
+      const funding = await fund([{ script: toOutputScript(address, network), value: 9_000_000n }]);
+      const paid = await pearld.getBlockCount();
+      await eventually(() => spv.client.getSyncProgress(), (state) => state.synced && state.block_height === paid, 120_000);
+      await eventually(() => spv.client.getBalance(), (balance) => balance === 9_000_000n, 120_000);
+      expect(await backend.getTip()).toEqual(await node.getTip());
+      expect(await backend.getUtxos([address])).toEqual(await node.getUtxos([address]));
+      expect(await backend.getBalance([address])).toEqual({ confirmed: 9_000_000n, unconfirmed: 0n, immature: 0n });
+      expect(await backend.getHistory(address)).toEqual([{ txid: funding.getId(), block: await node.getTip(), received: 9_000_000n }]);
+      expect(await backend.getTransaction(funding.getId())).toEqual({ txid: funding.getId(), block: await node.getTip() });
+      expect(await backend.getTransaction('00'.repeat(32))).toBeNull();
+      expect(await backend.findUsed!([address, miner.deriveAddress(0)])).toEqual([address]);
+      expect(await backend.getSpendStatus({ txid: funding.getId(), vout: 0 })).toEqual({ status: 'unspent', confirmations: 1 });
+      // An output the wallet does not hold needs the node, which is not there.
+      expect(await backend.getSpendStatus({ txid: funding.getId(), vout: 1 })).toEqual({ status: 'unknown' });
+      expect(await backend.estimateFeeRate()).toBe(OYSTER_DEFAULT_FEE_RATE);
+      const refused = await backend.broadcast(funding.toHex()).catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(PearlError);
+      expect(refused).toMatchObject({ code: 'BACKEND_UNSUPPORTED', message: expect.stringContaining('sendMany') as string });
+      expect((refused as PearlError).cause).toMatchObject({ code: 'RPC_ERROR', kind: 'rpc' });
     } finally {
       await spv.stop();
     }

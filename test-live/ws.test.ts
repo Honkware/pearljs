@@ -1,7 +1,7 @@
 // PearlWsClient against a regtest pearld over wss with the certificate the
 // node generated: both ways to log in, a wrong password, block and
 // transaction notifications around a real payment from mempool to spend,
-// rescanBlocks, the limited user, reconnection and resubscription across a
+// rescanBlocks and rescan, the limited user, reconnection and resubscription across a
 // restart of a second node, and Oyster's /ws.
 
 import { join } from 'node:path';
@@ -229,6 +229,27 @@ describeLive('websocket', () => {
       { hash: blockHash, transactions: [payment.hex] },
       { hash: spendBlock, transactions: [spend.hex] },
     ]);
+
+    // The older rescan, on a connection that has watched nothing: the payment and its spend come
+    // back as recvtx and redeemingtx with their blocks, then rescanfinished names the last block.
+    const fresh = client(node);
+    const found = { received: record(fresh, 'recvtx'), redeeming: record(fresh, 'redeemingtx'), finished: record(fresh, 'rescanfinished') };
+    const progress = record(fresh, 'rescanprogress');
+    // The end block is where pearld's rescan stops, not the last block it scans.
+    await fresh.rescan(blockHash!, [address], [], empty);
+    const last = parseBlock(await pearld.getRawBlock(spendBlock!));
+    expect(await found.finished.until(() => true)).toEqual({ hash: spendBlock, height: height + 1, time: last.header.timestamp });
+    expect(found.received.seen).toEqual([{ transaction: payment.hex, block: { hash: blockHash, height, index: 1, time: block.header.timestamp } }]);
+    expect(found.redeeming.seen).toMatchObject([{ transaction: spend.hex, block: { hash: spendBlock, height: height + 1, index: 1 } }]);
+    // pearld sends rescanprogress from a ten-second ticker, which two blocks never reach.
+    expect(progress.seen).toEqual([]);
+    // A rescan that starts after the payment sees only the spend of an outpoint it is told about.
+    const later = client(node);
+    const spends = record(later, 'redeemingtx');
+    const done = record(later, 'rescanfinished');
+    await later.rescan(spendBlock!, [], [{ txid: payment.txid, vout: 0 }]);
+    await done.until(() => true);
+    expect(spends.seen).toMatchObject([{ transaction: spend.hex, block: { hash: spendBlock } }]);
   });
 
   it('serves the limited user notifications and chain reads, and refuses it admin methods', async () => {
@@ -243,7 +264,7 @@ describeLive('websocket', () => {
     expect((await connected.until((event) => event.hash === hash)).hash).toBe(hash);
   });
 
-  it('reconnects to a restarted node and resubscribes without being asked', { timeout: 300_000 }, async () => {
+  it('reconnects to a restarted node and resubscribes without being asked', async () => {
     const options = {
       exe: process.env.PEARLD!,
       dir: join(live!.dir, 'pearld-ws'),
