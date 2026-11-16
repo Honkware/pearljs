@@ -16,6 +16,7 @@
       "DEFAULT_KEYSTORE_KDF",
       "DEFAULT_LOOKAHEAD",
       "DEFAULT_MAX_FEE_RATE",
+      "DEFAULT_MAX_REPLY_SIZE",
       "DEFAULT_PREPARE_HOLD_MS",
       "DEFAULT_QUIET_SYNC_INTERVAL",
       "DEFAULT_RELAY_FEE_RATE",
@@ -141,6 +142,7 @@
       "coinToJson",
       "compileScript",
       "confirmationsFromHeight",
+      "connectPearld",
       "cpfpChildFee",
       "createInvoice",
       "createKeystore",
@@ -330,6 +332,7 @@
       "AccountPaymentOptions",
       "AccountUtxo",
       "ActivityScanner",
+      "AddedNodeInfo",
       "AddressHistoryEntry",
       "AddressInfo",
       "AddressPayment",
@@ -361,6 +364,7 @@
       "CoinSelectionStrategy",
       "CoinSource",
       "CompactFilter",
+      "ConnectPearldOptions",
       "CreateInvoiceConfig",
       "CreateWalletOptions",
       "DecodeScriptNumberOptions",
@@ -425,7 +429,9 @@
       "MiningInfo",
       "MnemonicWordCount",
       "MultiALeaf",
+      "NetTotals",
       "NetworkInfo",
+      "NodeAddress",
       "NodeInfo",
       "OpcodeName",
       "OpenWalletOptions",
@@ -465,6 +471,7 @@
       "PearlWsEvents",
       "PearldBackendOptions",
       "PearldCapabilities",
+      "PearldChain",
       "PeerInfo",
       "PrepareSendOptions",
       "PreparedSend",
@@ -475,6 +482,7 @@
       "PsbtSighashOptions",
       "RawTxInput",
       "RebroadcastResult",
+      "ReceivedByAccount",
       "ReceivedByAddress",
       "Recipient",
       "ReconnectOptions",
@@ -552,6 +560,7 @@
       "UnlockOptions",
       "Utxo",
       "ValidateAddressResult",
+      "VersionInfo",
       "WalletAccount",
       "WalletAddress",
       "WalletAddressInfo",
@@ -559,6 +568,7 @@
       "WalletBackup",
       "WalletBalance",
       "WalletBalanceJson",
+      "WalletChain",
       "WalletCoin",
       "WalletCoinJson",
       "WalletConnection",
@@ -632,20 +642,24 @@
       "SpendStatus",
       "WalletBackend",
       "WalletBalance",
+      "WalletChain",
       "WalletUtxo",
       "Watched"
     ]
   },
   "backend-filters": {
     "values": [
+      "connectPearld",
       "filterBackend"
     ],
     "types": [
+      "ConnectPearldOptions",
       "FilterBackend",
       "FilterBackendOptions",
       "FilterBackendStatus",
       "FilterSyncOptions",
-      "FilterSyncProgress"
+      "FilterSyncProgress",
+      "PearldChain"
     ]
   },
   "block": {
@@ -1034,6 +1048,7 @@
   },
   "rpc": {
     "values": [
+      "DEFAULT_MAX_REPLY_SIZE",
       "DEFAULT_RPC_TIMEOUT",
       "DESKTOP_OYSTER_URL",
       "JsonRpcClient",
@@ -1062,6 +1077,7 @@
       "searchAllTransactions"
     ],
     "types": [
+      "AddedNodeInfo",
       "BatchOptions",
       "BestBlockResult",
       "Bip9SoftForkDescription",
@@ -1085,11 +1101,14 @@
       "MempoolEntry",
       "MempoolInfo",
       "MiningInfo",
+      "NetTotals",
       "NetworkInfo",
+      "NodeAddress",
       "NodeInfo",
       "OutPointParam",
       "PeerInfo",
       "RawTxInput",
+      "ReceivedByAccount",
       "ReceivedByAddress",
       "RetryOptions",
       "Rpc",
@@ -1115,6 +1134,7 @@
       "TxRawResult",
       "TxSpendingPrevOut",
       "ValidateAddressResult",
+      "VersionInfo",
       "WalletAddressInfo",
       "WalletInfo",
       "WalletTransaction",
