@@ -410,6 +410,43 @@ describe('reorganizations', () => {
     expect(() => chain.reorg(1, { replace: [onward.getId()] })).toThrow(/no transaction/);
   });
 
+  it('forgets a coin made and spent inside a block it takes off', async () => {
+    const chain = small();
+    const paid = chain.pay(alice.deriveAddress(0), prl('2'));
+    const [coin] = await chain.getUtxos([alice.deriveAddress(0)]);
+    const onward = spend(alice, coin!, { amount: prl('1') });
+    chain.accept(onward);
+    chain.mine();
+    expect(chain.tip.txs).toHaveLength(3);
+    // The payment is double-spent; what spent it in the same block has nothing left to spend.
+    chain.reorg(1, { replace: [paid.getId()], keepInMempool: true });
+    expect(chain.coin(paid.getId(), 0)).toBeNull();
+    expect(chain.mempool.size).toBe(0);
+    expect(() => chain.check(onward)).toThrow(/orphan transaction/);
+    for (const { tx } of chain.mempool.values()) expect(chain.prevouts(tx)).not.toBeNull();
+  });
+
+  it('mines an included transaction after the mempool parent it spends, and replaces a chain of faucet payments at its root', () => {
+    const chain = small();
+    const coin = chain.fund(alice.deriveAddress(0), prl('2'));
+    const parent = spend(alice, coin, { to: alice.deriveAddress(1), amount: prl('1') });
+    chain.accept(parent);
+    const child = spend(alice, { ...coin, txid: parent.getId(), vout: 0, value: prl('1'), script: parent.outs[0]!.script }, { index: 1, amount: 100n, fee: 400n });
+    chain.mine(1, { include: [child] });
+    expect(chain.tip.txs.slice(1).map((tx) => tx.getId())).toEqual([parent.getId(), child.getId()]);
+    expect(() => chain.mine(1, { include: [spend(alice, { ...coin, txid: 'ee'.repeat(32) })], skipMempool: true })).toThrow(/does not exist or has already been spent/);
+
+    // More payments between blocks than the faucet has confirmed coins, so the last ones spend its own change.
+    const paid = Array.from({ length: 130 }, (_, i) => chain.pay(testAddress(i), prl('1')));
+    const last = paid[paid.length - 1]!;
+    const before = paid.find((tx) => tx.getId() === toHex(last.ins[0]!.hash.slice().reverse()))!;
+    chain.mine();
+    chain.reorg(1, { replace: [before.getId(), last.getId()] });
+    expect(chain.transaction(before.getId())).toBeNull();
+    expect(chain.transaction(last.getId())).toBeNull();
+    expect(chain.blocks[chain.height - 1]!.txs).toHaveLength(1 + 1 + 128);
+  });
+
   it('takes a conflict signed by the test for coins the faucet does not hold', () => {
     const chain = small();
     const coin = chain.fund(alice.deriveAddress(0), prl('2'));

@@ -535,11 +535,14 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
    */
   reorg(depth: number, options: ReorgOptions = {}): BlockRef[] {
     if (!Number.isInteger(depth) || depth < 1 || depth > this.height) throw invalid(`cannot take ${depth} blocks off a chain of height ${this.height}`);
-    const conflicts = (options.replace ?? []).map((txid) => {
+    const replaced = new Set(options.replace ?? []);
+    const conflicts: Transaction[] = [];
+    for (const txid of replaced) {
       const original = this.transaction(txid);
       if (original === null) throw invalid(`no transaction ${txid} to replace`);
-      return this.#conflicting(original.tx);
-    });
+      // One that spends from another being replaced goes when that one does, and has nothing left to conflict over.
+      if (!original.tx.ins.some((input) => this.#descends(prevTxid(input), replaced))) conflicts.push(this.#conflicting(original.tx));
+    }
     const returning = this.#rewind(this.height - depth);
     // What a conflict double-spends must not get back in ahead of it.
     const gone = new Set(conflicts.flatMap((tx) => tx.ins.map(outpointOf)));
@@ -826,6 +829,13 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
     this.#emit({ type: 'removed', txid });
   }
 
+  // Whether a transaction is one of `txids` or spends, however far down, from one of them.
+  #descends(txid: string, txids: ReadonlySet<string>): boolean {
+    if (txids.has(txid)) return true;
+    const tx = this.transaction(txid)?.tx;
+    return tx !== undefined && !tx.isCoinbase() && tx.ins.some((input) => this.#descends(prevTxid(input), txids));
+  }
+
   // Puts the mempool together again after the chain changed under it: `returning` first, then what it held, each kept only if it is still acceptable.
   #refill(returning: readonly Transaction[]): void {
     const before = this.#pool;
@@ -857,6 +867,7 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
       return view.has(at) ? view.get(at)! : (this.#coins.get(at) ?? null);
     };
     const txs: Transaction[] = [];
+    const taken = new Set<string>();
     let fees = 0n;
     let vsize = 0;
     const take = (tx: Transaction, checked: boolean): void => {
@@ -869,7 +880,11 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
           throw new SimulatedRefusal(TX_ERROR, (err as Error).message, { cause: err });
         }
       }
+      if (taken.has(txid)) return;
       const coins = tx.ins.map((input) => {
+        // A parent still in the mempool goes into the block ahead of what spends it.
+        const parent = this.#pool.get(prevTxid(input));
+        if (parent !== undefined && !taken.has(prevTxid(input)) && options.skipMempool !== true) take(parent.tx, true);
         const coin = lookup(input);
         if (coin === null) {
           throw new SimulatedRefusal(TX_ERROR, `output ${outpointOf(input)} referenced from transaction ${txid} either does not exist or has already been spent`);
@@ -884,6 +899,7 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
       for (const input of tx.ins) view.set(outpointOf(input), null);
       tx.outs.forEach((out, vout) => view.set(key(txid, vout), { script: out.script, value: out.value, height, coinbase: false }));
       txs.push(tx);
+      taken.add(txid);
       fees += fee;
       vsize += tx.virtualSize();
     };
@@ -982,13 +998,14 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
   // Takes the tip off and returns its transactions, coinbase left out.
   #disconnect(): Transaction[] {
     const block = this.#active.pop()!;
-    for (const tx of [...block.txs].reverse()) {
+    // Spent coins go back first: one made and spent inside this block is among them, and must not outlive it.
+    for (const [at, coin] of block.undo) this.#coins.set(at, coin);
+    for (const tx of block.txs) {
       const txid = tx.getId();
       tx.outs.forEach((_, vout) => this.#coins.delete(key(txid, vout)));
       this.#confirmed.delete(txid);
       if (!tx.isCoinbase()) for (const input of tx.ins) this.#spent.delete(outpointOf(input));
     }
-    for (const [at, coin] of block.undo) this.#coins.set(at, coin);
     this.#touching = null;
     this.#emit({ type: 'disconnected', block });
     return block.txs.filter((tx) => !tx.isCoinbase());
