@@ -123,7 +123,7 @@ describeLive('reorganization', () => {
 
   it('takes a wallet\'s confirmed receive back to pending and orphans the replaced coinbase, then confirms the receive again', async () => {
     const other = second!.client;
-    const wallet = await PearlWallet.create({ ...connection(createMemoryStore()), passphrase: PASSPHRASE, kdf: QUICK_KDF });
+    const wallet = await PearlWallet.create({ ...connection(createMemoryStore()), passphrase: PASSPHRASE, unlockTimeoutMs: null, kdf: QUICK_KDF });
     // Every coinbase of the suite's node pays the miner's first address.
     const mining = await PearlWallet.create({ ...connection(createMemoryStore()), watchOnly: miner.watchOnlyAccount().extendedPublicKey(), gapLimit: 5 });
     const address = await wallet.receiveAddress();

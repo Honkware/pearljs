@@ -7,7 +7,7 @@
 // is compared with what the node itself reports.
 
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildSync } from 'esbuild';
 import { afterAll, beforeAll, expect, it } from 'vitest';
@@ -60,10 +60,10 @@ describeLive('wallet state on pearld', () => {
   });
 
   it('creates an encrypted wallet in a file and shows a payment pending and then confirmed, as the node has it', async () => {
-    wallet = await PearlWallet.create({ ...connection(createFileStore(path, { create: true }), backend), passphrase: PASSPHRASE });
+    wallet = await PearlWallet.create({ ...connection(createFileStore(path, { create: true }), backend), passphrase: PASSPHRASE, unlockTimeoutMs: null });
     const phrase = (await wallet.mnemonic())!;
     expect(phrase.split(' ')).toHaveLength(24);
-    const file = readFileSync(path, 'utf8');
+    const file = storeText(path);
     expect(file).toContain('"pearljs-keystore"');
     for (const word of new Set(phrase.split(' '))) expect(file).not.toContain(`${word} `);
     expect(wallet.accounts()).toMatchObject([{ id: '0', kind: 'seed', number: 0, nextReceiveIndex: 0, nextChangeIndex: 0 }]);
@@ -288,7 +288,7 @@ describeLive('wallet state on pearld', () => {
     await new Promise((resolve) => child.once('exit', resolve));
     expect(output).toMatch(new RegExp(`^open ${before.balance.total}\n\\.+$`));
 
-    // The dead process's lock is not broken unasked.
+    // The dead process's lock is not broken unasked, nor called stale while it could still be touched.
     const locked = ((): unknown => {
       try {
         return createFileStore(path);
@@ -297,9 +297,10 @@ describeLive('wallet state on pearld', () => {
       }
     })();
     expect(locked).toBeInstanceOf(StoreError);
-    expect(locked).toMatchObject({ code: 'STORE_LOCKED', message: expect.stringContaining('breakStaleLock') as string });
+    expect(locked).toMatchObject({ code: 'STORE_LOCKED', message: expect.stringContaining('breakLock: true') as string });
 
-    wallet = await PearlWallet.open(connection(createFileStore(path, { breakStaleLock: true }), backend));
+    // The test killed the holder itself, so it can say so.
+    wallet = await PearlWallet.open(connection(createFileStore(path, { breakLock: true }), backend));
     expect(wallet.locked).toBe(true);
     expect(wallet.balance()).toEqual(before.balance);
     expect(wallet.history()).toEqual(before.history);
@@ -326,7 +327,7 @@ describeLive('wallet state on pearld', () => {
     expect(wrong).toMatchObject({ code: 'KEYSTORE_BAD_PASSPHRASE' });
 
     // From the keys: the chain gives back every coin and confirmed transaction, and no label.
-    const fromKeys = await PearlWallet.restore({ ...connection(createMemoryStore()), keystore, passphrase: PASSPHRASE });
+    const fromKeys = await PearlWallet.restore({ ...connection(createMemoryStore()), keystore, passphrase: PASSPHRASE, unlockTimeoutMs: null });
     expect(fromKeys.balance().total).toBe(0n);
     await fromKeys.sync();
     expect(fromKeys.balance()).toEqual(wallet.balance());
@@ -344,7 +345,7 @@ describeLive('wallet state on pearld', () => {
 
     // With the backup: labels, the replaced transaction and every index are back before any sync.
     const restoredPath = join(dir, 'restored.json');
-    const withState = await PearlWallet.restore({ ...connection(createFileStore(restoredPath, { create: true })), keystore, backup: state, passphrase: PASSPHRASE });
+    const withState = await PearlWallet.restore({ ...connection(createFileStore(restoredPath, { create: true })), keystore, backup: state, passphrase: PASSPHRASE, unlockTimeoutMs: null });
     expect(withState.history()).toEqual(wallet.history());
     expect(withState.addresses()).toEqual(wallet.addresses());
     expect(withState.accounts()).toEqual(wallet.accounts());
@@ -356,13 +357,13 @@ describeLive('wallet state on pearld', () => {
     expect(withState.history()).toMatchObject(wallet.history().map(({ txid, status, amount, fee, label }) => ({ txid, status, amount, fee, ...(label === undefined ? {} : { label }) })));
     expect(withState.transaction(sent.txid)).toMatchObject({ status: 'confirmed', direction: 'outgoing', fee: sent.fee });
     await withState.close();
-    const occupied = await PearlWallet.restore({ ...connection(createFileStore(restoredPath)), keystore, passphrase: PASSPHRASE }).catch((err: unknown) => err);
+    const occupied = await PearlWallet.restore({ ...connection(createFileStore(restoredPath)), keystore, passphrase: PASSPHRASE, unlockTimeoutMs: null }).catch((err: unknown) => err);
     expect(occupied).toMatchObject({ name: 'WalletError', code: 'WALLET_EXISTS' });
   });
 
   it('spends from an XMSS key, freezes it when an older backup is restored, sees its index on chain and spends again after burning past it', async () => {
     const xmssPath = join(dir, 'xmss.json');
-    const vault = await PearlWallet.create({ ...connection(createFileStore(xmssPath, { create: true })), passphrase: PASSPHRASE, kdf: QUICK_KDF });
+    const vault = await PearlWallet.create({ ...connection(createFileStore(xmssPath, { create: true })), passphrase: PASSPHRASE, unlockTimeoutMs: null, kdf: QUICK_KDF });
     const key = await vault.addXmssKey({ label: 'vault' });
     expect(key).toMatchObject({ nextIndex: 0, remaining: 31, highestOnChain: -1, frozen: null });
     const script = toOutputScript(key.address, network);
@@ -396,7 +397,7 @@ describeLive('wallet state on pearld', () => {
     await vault.close();
 
     // The backup was taken at index 0. Restored, the key refuses to sign at all.
-    const restored = await PearlWallet.restore({ ...connection(createMemoryStore()), keystore, backup, passphrase: PASSPHRASE });
+    const restored = await PearlWallet.restore({ ...connection(createMemoryStore()), keystore, backup, passphrase: PASSPHRASE, unlockTimeoutMs: null });
     expect(restored.xmssKeys()).toMatchObject([{ id: key.id, nextIndex: 0, highestOnChain: -1, frozen: 'restored' }]);
     const send = (wallet: PearlWallet): Promise<SendResult> =>
       wallet.send({ recipients: [{ address: elsewhere(72), amount: 3_000_000n }], from: { xmss: key.id }, feeRate: FEE_RATE });
@@ -443,6 +444,7 @@ describeLive('wallet state on pearld', () => {
       backend: pearldBackend(ws, { network }),
       transactions: pearldTransactionSource(ws),
       passphrase: PASSPHRASE,
+      unlockTimeoutMs: null,
       kdf: QUICK_KDF,
     });
     try {
@@ -483,25 +485,30 @@ describeLive('wallet state on pearld', () => {
   });
 });
 
-// Two things the flows above found in the wallet, kept as failing tests until it is changed.
-describeLive('wallet state on pearld, open findings', () => {
+// Two things the flows above first found wrong in the wallet, read from what they recorded.
+describeLive('wallet state on pearld, what the flows above recorded', () => {
   // pearld sends recvtx for a mined transaction before blockconnected. The
-  // wallet records the block at once and counts confirmations from its old
-  // tip, so a confirmation listener still finds the payment unconfirmed.
-  it.fails('counts a payment as confirmed by the time its confirmation event fires', () => {
+  // wallet counts confirmations from the highest block it has been told of,
+  // so a confirmation listener already finds the payment confirmed.
+  it('counts a payment as confirmed by the time its confirmation event fires', () => {
     expect(confirmedWhenAnnounced).toBe(7_000_000n);
   });
 
-  // highestOnChain is read from transactions the wallet takes in from the
-  // chain, not from its own sends when they confirm, so it stays at -1 for
-  // a key that has only ever signed in this wallet.
-  it.fails('shows the index of its own mined XMSS spends as the highest on chain', () => {
+  // The wallet's own sends are never taken in from the chain, so their
+  // signatures are counted when they confirm.
+  it('shows the index of its own mined XMSS spends as the highest on chain', () => {
     expect(ownSpendsSeen).toBe(1);
   });
 });
 
-/** The entries of a wallet file as a memory store takes them, read without its lock. */
+/** The newest revision of a file store, as text, read without its lock. */
+function storeText(path: string): string {
+  const newest = readdirSync(path).filter((name) => /^\d{16}\.json$/.test(name)).sort().at(-1)!;
+  return readFileSync(join(path, newest), 'utf8');
+}
+
+/** The entries of a file store as a memory store takes them, read without its lock. */
 function fileEntries(path: string): [string, JsonValue][] {
-  const file = JSON.parse(readFileSync(path, 'utf8')) as { entries: Record<string, JsonValue> };
+  const file = JSON.parse(storeText(path)) as { entries: Record<string, JsonValue> };
   return Object.entries(file.entries);
 }

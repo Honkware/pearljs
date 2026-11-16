@@ -38,7 +38,7 @@ async function oysterCoins(): Promise<string[]> {
 }
 
 const create = (backend = nodeBackend): Promise<PearlWallet> =>
-  PearlWallet.create({ ...connection(createMemoryStore(), backend), mnemonic: OYSTER_MNEMONIC, passphrase: PASSPHRASE, kdf: QUICK_KDF });
+  PearlWallet.create({ ...connection(createMemoryStore(), backend), mnemonic: OYSTER_MNEMONIC, passphrase: PASSPHRASE, unlockTimeoutMs: null, kdf: QUICK_KDF });
 
 describeOyster('wallet state beside Oyster', () => {
   beforeAll(async () => {
@@ -64,14 +64,14 @@ describeOyster('wallet state beside Oyster', () => {
     const backup = await original.exportState();
     await original.close();
 
-    const fromKeys = await PearlWallet.restore({ ...connection(createMemoryStore()), keystore, passphrase: PASSPHRASE });
+    const fromKeys = await PearlWallet.restore({ ...connection(createMemoryStore()), keystore, passphrase: PASSPHRASE, unlockTimeoutMs: null });
     await fromKeys.sync();
     expect(fromKeys.balance().confirmed).toBe(balance);
     expect(fromKeys.coins().map(outpoint).sort()).toEqual(await oysterCoins());
     expect(fromKeys.accounts()[0]!.nextChangeIndex).toBe(nextChange);
     await fromKeys.close();
 
-    const withState = await PearlWallet.restore({ ...connection(createMemoryStore()), keystore, backup, passphrase: PASSPHRASE });
+    const withState = await PearlWallet.restore({ ...connection(createMemoryStore()), keystore, backup, passphrase: PASSPHRASE, unlockTimeoutMs: null });
     expect(withState.balance().confirmed).toBe(balance);
     await withState.sync();
     expect(withState.balance().confirmed).toBe(await oyster.getBalance('default'));
@@ -107,7 +107,7 @@ describeOyster('wallet state beside Oyster', () => {
     const view = await nodeView(rival);
     expect(wallet.transaction(rival)).toMatchObject({ status: 'pending', direction: 'outgoing', fee: view.fee, counterparties: [elsewhere(1)] });
     expect(wallet.balance().total).toBe(before - 3_000_000n - view.fee);
-    expect(await wallet.rebroadcast()).toEqual([]);
+    expect(await wallet.rebroadcast()).toEqual({ accepted: [], refused: [], failed: [] });
 
     await mine(1);
     await synced();
@@ -127,6 +127,7 @@ describeOyster('wallet state beside Oyster', () => {
       transactions: oysterTransactionSource(oyster),
       mnemonic: OYSTER_MNEMONIC,
       passphrase: PASSPHRASE,
+      unlockTimeoutMs: null,
       kdf: QUICK_KDF,
     });
     const agree = async (): Promise<void> => {
