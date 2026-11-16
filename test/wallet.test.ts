@@ -390,14 +390,14 @@ describe('wallet: keys and accounts', () => {
     expect(await wallet.receiveAddress({ account: '1' })).toBe(deriveAccountFromSeed(mnemonicToSeed(MNEMONIC), network, 1).deriveAddress(1));
   });
 
-  it('changes the passphrase without touching the secrets', async () => {
+  it('changes the passphrase, encrypting the secrets again under a new key', async () => {
     const chain = new FakeChain();
     const store = createMemoryStore();
     const wallet = await newWallet(chain, { store });
     const before = wallet.exportKeystore();
     await wallet.changePassphrase(PASSPHRASE, 'new passphrase', { kdf: FAST_KDF });
     const after = wallet.exportKeystore();
-    expect(after.secrets).toEqual(before.secrets);
+    expect(after.secrets.seed).not.toEqual(before.secrets.seed);
     expect(after.kdf.salt).not.toBe(before.kdf.salt);
     const reopened = await PearlWallet.open({ store, backend: chain, transactions: chain });
     await expect(reopened.unlock(PASSPHRASE)).rejects.toThrow('wrong passphrase');

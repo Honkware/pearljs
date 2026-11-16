@@ -11,6 +11,7 @@
       "COINBASE_MATURITY",
       "DEFAULT_ANCESTOR_COUNT_LIMIT",
       "DEFAULT_ANCESTOR_SIZE_LIMIT",
+      "DEFAULT_CREATE_UNLOCK_MS",
       "DEFAULT_DESCENDANT_COUNT_LIMIT",
       "DEFAULT_KEYSTORE_KDF",
       "DEFAULT_LOOKAHEAD",
@@ -40,6 +41,7 @@
       "MAX_SCRIPT_ELEMENT_SIZE",
       "MAX_STANDARD_TX_VERSION",
       "MAX_STANDARD_TX_VSIZE",
+      "MAX_UNLOCK_TIMEOUT_MS",
       "MAX_ZK_PROOF_SIZE",
       "MIN_HEX_SEED_BYTES",
       "MIN_STANDARD_TX_NON_WITNESS_SIZE",
@@ -849,6 +851,7 @@
     "values": [
       "DEFAULT_KEYSTORE_KDF",
       "Keystore",
+      "MAX_UNLOCK_TIMEOUT_MS",
       "createKeystore",
       "openKeystore"
     ],
@@ -1236,6 +1239,7 @@
   },
   "wallet": {
     "values": [
+      "DEFAULT_CREATE_UNLOCK_MS",
       "DEFAULT_LOOKAHEAD",
       "DEFAULT_REORG_DEPTH",
       "PearlWallet",

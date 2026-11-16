@@ -33,7 +33,7 @@ import { decodeBigint, decodeHex, encodeBigint } from './internal/store-ops.js';
 import { InsufficientFundsError, confirmationsFromHeight } from './coinselect.js';
 import type { CoinSelectionStrategy } from './coinselect.js';
 import { deriveAccountFromSeed, deriveSigningAccountFromSeed, importWatchOnlyAccount } from './keys.js';
-import type { PearlAccount, PearlSigningAccount } from './keys.js';
+import type { KeyOrigin, PearlAccount, PearlSigningAccount } from './keys.js';
 import { createKeystore, openKeystore } from './keystore.js';
 import type { EncryptedKeystore, Keystore, KeystoreOptions, UnlockOptions } from './keystore.js';
 import { generateMnemonic, mnemonicToSeed, validateMnemonic, normalizeMnemonic } from './mnemonic.js';
@@ -66,6 +66,8 @@ export const WALLET_SCHEMA_VERSION = 1;
 export const DEFAULT_LOOKAHEAD = 20;
 /** Confirmed transactions this deep or shallower are checked against the chain when the tip moves. */
 export const DEFAULT_REORG_DEPTH = 100;
+/** How long a wallet stays unlocked after create or restore unless told otherwise: five minutes. */
+export const DEFAULT_CREATE_UNLOCK_MS = 300_000;
 
 const SCAN_BATCH = 25;
 const CONCURRENCY = 8;
@@ -138,6 +140,15 @@ export interface CreateWalletOptions extends WalletConnection {
   seed?: Uint8Array;
   /** An account extended public key: a watch-only wallet with no keystore. */
   watchOnly?: string;
+  /** Where the watchOnly key comes from, [fingerprint/86'/coin'/account'], so the PSBTs the wallet prepares name the key a signer holds. */
+  watchOnlyOrigin?: KeyOrigin;
+  /**
+   * How long the new wallet stays unlocked, in milliseconds. create returns
+   * it unlocked, so that the recovery phrase can be shown, and it locks
+   * itself after DEFAULT_CREATE_UNLOCK_MS unless this says otherwise: null
+   * keeps it unlocked until lock(), 0 returns it locked.
+   */
+  unlockTimeoutMs?: number | null;
   /** Unused addresses in a row a restore scans before it stops; also the most unused receive addresses handed out in a row. OYSTER_RECOVERY_WINDOW unless given. */
   gapLimit?: number;
   /** DEFAULT_LOOKAHEAD unless given. */
@@ -175,6 +186,8 @@ export interface RestoreWalletOptions extends WalletConnection {
   /** BIP86 accounts to restore when there is no backup. [0] unless given. */
   accounts?: number[];
   gapLimit?: number;
+  /** As for create: how long the restored wallet stays unlocked. */
+  unlockTimeoutMs?: number | null;
 }
 
 /** Which of the wallet's outputs a send may spend. */
@@ -220,6 +233,8 @@ export interface WalletAccount {
   /** The BIP86 account number, or null for an imported extended key. */
   number: number | null;
   xpub: string;
+  /** The master fingerprint (8 hex characters) and path the key derives from, or null for an extended key added without them. */
+  origin: { masterFingerprint: string; path: string } | null;
   label: string | null;
   nextReceiveIndex: number;
   nextChangeIndex: number;
@@ -298,6 +313,7 @@ interface AccountRecord {
   kind: 'seed' | 'xpub';
   number: number | null;
   xpub: string;
+  origin?: { masterFingerprint: string; path: string } | null;
   label: string | null;
   receive: number;
   change: number;
@@ -383,6 +399,26 @@ function asRecord<T>(value: JsonValue | undefined, what: string): T {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new StoreError('STORE_INVALID', `stored ${what} is not an object`);
   return value as unknown as T;
 }
+
+function invalid(what: string): StoreError {
+  return new StoreError('STORE_INVALID', `stored ${what} is not valid`);
+}
+
+const isIndex = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+
+function originOf(account: PearlAccount): { masterFingerprint: string; path: string } | null {
+  return account.masterFingerprint === null || account.path === null ? null : { masterFingerprint: account.masterFingerprint, path: account.path };
+}
+
+function unlockTimeout(value: number | null | undefined): number | null {
+  if (value === undefined) return DEFAULT_CREATE_UNLOCK_MS;
+  if (value !== null && value !== 0) checkPositive(value, 'unlockTimeoutMs');
+  return value;
+}
+
+const TAMPERED_IDENTITY =
+  "the wallet's accounts and keys are not the ones its keystore authenticated: an account's extended public key, an imported address or an XMSS key " +
+  'was changed, added or removed in the store, or the keystore is not the one this state belongs to';
 
 function txToJson(entry: TxEntry): JsonValue {
   return {
@@ -542,6 +578,10 @@ export class PearlWallet {
   #closed = false;
   // Set when a failed operation could not reload the state: memory may hold what the store does not.
   #broken: unknown = null;
+  // The tag the keystore made over #identity(), as stored under `auth`.
+  #auth: JsonValue | undefined;
+  // The identity that tag was last checked against, or made for, in this process; null until then.
+  #verified: string | null = null;
 
   private constructor(connection: WalletConnection) {
     this.#store = connection.store;
@@ -554,8 +594,9 @@ export class PearlWallet {
   /**
    * Makes a new wallet in an empty store: an encrypted keystore holding the
    * mnemonic (generated unless given) and its seed, and BIP86 account 0; or,
-   * with watchOnly, one watch-only account and no keystore. The wallet is
-   * returned unlocked. Nothing is synced yet.
+   * with watchOnly, one watch-only account and no keystore. A wallet with
+   * keys is returned unlocked, so the phrase can be read, and locks itself
+   * after unlockTimeoutMs. Nothing is synced yet.
    */
   static async create(options: CreateWalletOptions): Promise<PearlWallet> {
     const wallet = new PearlWallet(options);
@@ -563,6 +604,7 @@ export class PearlWallet {
     const gapLimit = checkPositive(options.gapLimit ?? OYSTER_RECOVERY_WINDOW, 'gapLimit');
     const lookahead = checkPositive(options.lookahead ?? DEFAULT_LOOKAHEAD, 'lookahead');
     const reorgDepth = checkPositive(options.reorgDepth ?? DEFAULT_REORG_DEPTH, 'reorgDepth');
+    const timeout = unlockTimeout(options.unlockTimeoutMs);
     wallet.#meta = {
       format: 'pearljs-wallet',
       version: WALLET_SCHEMA_VERSION,
@@ -578,9 +620,10 @@ export class PearlWallet {
       if (options.passphrase !== undefined || options.mnemonic !== undefined || options.seed !== undefined) {
         throw new WalletError('WALLET_WATCH_ONLY', 'a watch-only wallet takes an extended public key and no secrets');
       }
-      const account = importWatchOnlyAccount(options.watchOnly, wallet.network);
-      wallet.#addAccount({ id: 'watch-0', kind: 'xpub', number: null, xpub: account.extendedPublicKey(), label: null, receive: 0, change: 0 });
+      const account = importWatchOnlyAccount(options.watchOnly, wallet.network, options.watchOnlyOrigin);
+      wallet.#addAccount({ id: 'watch-0', kind: 'xpub', number: null, xpub: account.extendedPublicKey(), origin: originOf(account), label: null, receive: 0, change: 0 });
     } else {
+      if (options.watchOnlyOrigin !== undefined) throw new WalletError('WALLET_WATCH_ONLY', 'watchOnlyOrigin goes with watchOnly');
       if (options.passphrase === undefined) throw new KeystoreError('KEYSTORE_INVALID', 'a wallet with keys needs a passphrase to encrypt them; pass watchOnly for a wallet without keys');
       if (options.mnemonic !== undefined && options.seed !== undefined) throw new PearlError('SEED_INVALID', 'give a mnemonic or a seed, not both');
       const keystore = await createKeystore(options.passphrase, options.kdf === undefined ? {} : { kdf: options.kdf });
@@ -596,12 +639,15 @@ export class PearlWallet {
       try {
         const account = deriveAccountFromSeed(seed, wallet.network, 0);
         await keystore.addSecret('seed', 'seed', seed);
-        wallet.#addAccount({ id: '0', kind: 'seed', number: 0, xpub: account.extendedPublicKey(), label: null, receive: 0, change: 0 });
+        wallet.#addAccount({ id: '0', kind: 'seed', number: 0, xpub: account.extendedPublicKey(), origin: originOf(account), label: null, receive: 0, change: 0 });
       } finally {
         seed.fill(0);
       }
       wallet.#keystore = keystore;
       wallet.#put('keystore', keystore.toJSON() as unknown as JsonValue);
+      await wallet.#seal();
+      if (timeout === 0) keystore.lock();
+      else if (timeout !== null) keystore.lockAfter(timeout);
     }
     await wallet.#flush();
     return wallet;
@@ -627,28 +673,29 @@ export class PearlWallet {
 
   /**
    * Restores a wallet into an empty store from its encrypted keystore and,
-   * if there is one, a state backup. Every XMSS key comes back frozen: a
+   * if there is one, a state backup. Everything is checked before anything
+   * is written: the backup's records are read as a wallet reads them, and
+   * its accounts and keys must be the ones the keystore authenticated when
+   * the backup was made (WALLET_BACKUP_INVALID otherwise), so a failed
+   * restore leaves the store empty. Every XMSS key comes back frozen: a
    * backup is older than the key's real index, so signing would repeat
    * indices until burnXmssIndices moves each key past every index it may
    * have used. Run sync afterwards; the first one scans with the gap limit.
    */
   static async restore(options: RestoreWalletOptions): Promise<PearlWallet> {
     if ((await options.store.list('')).length > 0) throw new WalletError('WALLET_EXISTS', 'the store is not empty; restore into an empty store');
-    const keystore = openKeystore(options.keystore);
-    await keystore.unlock(options.passphrase);
-    const operations: StoreOperation[] = [{ type: 'set', key: 'keystore', value: keystore.toJSON() as unknown as JsonValue }];
+    const timeout = unlockTimeout(options.unlockTimeoutMs);
     const network = options.backend.network;
-    if (options.backup !== undefined) {
-      const backup = options.backup;
-      if (backup.format !== 'pearljs-wallet-backup' || backup.version !== 1) throw new WalletError('WALLET_BACKUP_INVALID', 'not a pearljs wallet backup');
+    const now = (options.now ?? Date.now)();
+    const keystore = openKeystore(options.keystore);
+    const entries = new Map<string, JsonValue>([['keystore', keystore.toJSON() as unknown as JsonValue]]);
+    const backup = options.backup;
+    if (backup !== undefined) {
+      if (backup === null || typeof backup !== 'object' || backup.format !== 'pearljs-wallet-backup' || backup.version !== 1) throw new WalletError('WALLET_BACKUP_INVALID', 'not a pearljs wallet backup');
       if (backup.network !== network.name) throw new WalletError('WALLET_WRONG_NETWORK', `the backup is for ${backup.network}, the backend for ${network.name}`);
-      for (const [key, value] of Object.entries(backup.entries)) {
-        if (key === 'keystore') continue;
-        const restored = key.startsWith('xmss:') ? { ...asRecord<XmssRecord>(value, key), frozen: 'restored' } : value;
-        operations.push({ type: 'set', key, value: restored as JsonValue });
-      }
+      if (backup.entries === null || typeof backup.entries !== 'object' || Array.isArray(backup.entries)) throw new WalletError('WALLET_BACKUP_INVALID', 'the wallet backup has no entries');
+      for (const [key, value] of Object.entries(backup.entries)) if (key !== 'keystore') entries.set(key, value);
     } else {
-      const now = (options.now ?? Date.now)();
       const meta: MetaRecord = {
         format: 'pearljs-wallet',
         version: WALLET_SCHEMA_VERSION,
@@ -659,33 +706,52 @@ export class PearlWallet {
         createdAt: now,
         scanned: false,
       };
-      operations.push({ type: 'set', key: 'meta', value: meta as unknown as JsonValue });
-      for (const number of options.accounts ?? [0]) {
-        const xpub = await keystore.useSecret('seed', (seed) => deriveAccountFromSeed(seed, network, number).extendedPublicKey());
-        const record: AccountRecord = { id: String(number), kind: 'seed', number, xpub, label: null, receive: 0, change: 0 };
-        operations.push({ type: 'set', key: `account:${record.id}`, value: record as unknown as JsonValue });
-      }
-      for (const { id, kind } of keystore.secrets()) {
-        if (kind === 'wif') {
-          operations.push({ type: 'set', key: `imported:${id.slice(4)}`, value: { address: id.slice(4), label: null } });
-        } else if (kind === 'xmss') {
-          const publicKey = id.slice(5);
-          const record: XmssRecord = {
-            publicKey,
-            address: encodeAddress({ version: 2, program: xmssTree(publicKey).root }, network),
-            next: 0,
-            label: null,
-            frozen: 'restored',
-            seenOnChain: -1,
-            createdAt: now,
-          };
-          operations.push({ type: 'set', key: `xmss:${publicKey}`, value: record as unknown as JsonValue });
-        }
-      }
+      entries.set('meta', meta as unknown as JsonValue);
     }
-    await options.store.batch(operations);
+    // A wallet over a copy in memory does the reading and checking; the store is written once, at the end.
+    const scratchStore = createMemoryStore(entries);
+    let scratch: PearlWallet;
+    try {
+      scratch = await PearlWallet.open({ ...options, store: scratchStore });
+    } catch (err) {
+      if (backup === undefined || (err instanceof WalletError && err.code !== 'WALLET_NOT_FOUND')) throw err;
+      throw new WalletError('WALLET_BACKUP_INVALID', `the wallet backup cannot be read as a wallet: ${(err as Error).message}`, { cause: err });
+    }
+    const unlocked = scratch.#keystore!;
+    await unlocked.unlock(options.passphrase);
+    try {
+      await scratch.#exclusive(async () => {
+        if (backup !== undefined) {
+          try {
+            await scratch.#authenticate();
+          } catch (err) {
+            throw new WalletError('WALLET_BACKUP_INVALID', `the wallet backup does not belong to this keystore as it is: ${(err as Error).message}`, { cause: err });
+          }
+        } else {
+          for (const number of options.accounts ?? [0]) {
+            const account = await unlocked.useSecret('seed', (seed) => deriveAccountFromSeed(seed, network, number));
+            scratch.#addAccount({ id: String(number), kind: 'seed', number, xpub: account.extendedPublicKey(), origin: originOf(account), label: null, receive: 0, change: 0 });
+          }
+          for (const { id, kind } of unlocked.secrets()) {
+            if (kind === 'wif') {
+              const address = id.slice(4);
+              scratch.#imported.set(address, { address, label: null });
+              scratch.#put(`imported:${address}`, { address, label: null });
+            } else if (kind === 'xmss') {
+              const publicKey = id.slice(5);
+              scratch.#putXmss({ publicKey, address: encodeAddress({ version: 2, program: xmssTree(publicKey).root }, network), next: 0, label: null, frozen: null, seenOnChain: -1, createdAt: now });
+            }
+          }
+          await scratch.#seal();
+        }
+        for (const record of scratch.#xmss.values()) scratch.#putXmss({ ...record, frozen: 'restored' });
+      });
+    } finally {
+      unlocked.lock();
+    }
+    await options.store.batch((await scratchStore.list('')).map(([key, value]) => ({ type: 'set', key, value })));
     const wallet = await PearlWallet.open(options);
-    await wallet.#keystore!.unlock(options.passphrase);
+    if (timeout !== 0) await wallet.unlock(options.passphrase, timeout === null ? {} : { timeoutMs: timeout });
     return wallet;
   }
 
@@ -700,21 +766,40 @@ export class PearlWallet {
     return this.#keystore === null;
   }
 
-  /** Unlocks the keystore; with timeoutMs it locks itself again after that long. */
+  /**
+   * Unlocks the keystore; with timeoutMs it locks itself again after that
+   * long. Before it resolves, the wallet's accounts, imported addresses and
+   * XMSS keys are checked against the tag the keystore made over them, and
+   * the keystore against the keys the wallet holds: KEYSTORE_TAMPERED, and
+   * the wallet stays locked, if the store was changed behind the wallet.
+   */
   async unlock(passphrase: string | Uint8Array, options: UnlockOptions = {}): Promise<void> {
-    await this.#requireKeystore().unlock(passphrase, options);
+    const keystore = this.#requireKeystore();
+    await keystore.unlock(passphrase, options);
+    // In turn with the wallet's operations, so it checks a state none of them is half way through changing.
+    const checked = this.#queue.then(() => (keystore.locked ? undefined : this.#authenticate()));
+    this.#queue = checked.catch(() => undefined);
+    await checked;
   }
 
   lock(): void {
     this.#keystore?.lock();
   }
 
-  /** Rewraps the keystore's data key under a new passphrase and stores it. */
+  /**
+   * Changes the passphrase: the keystore makes a new data key, encrypts
+   * every secret again under it and wraps it under the new passphrase, and
+   * the wallet's accounts and keys are authenticated again under the new
+   * key, all stored in one write. Needs the wallet unlocked. A copy of the
+   * store made before the change still opens with the old passphrase; what
+   * is added afterwards does not.
+   */
   async changePassphrase(oldPassphrase: string | Uint8Array, newPassphrase: string | Uint8Array, options: Pick<KeystoreOptions, 'kdf'> = {}): Promise<void> {
     await this.#exclusive(async () => {
-      const keystore = this.#requireKeystore();
+      const keystore = await this.#unlocked();
       await keystore.changePassphrase(oldPassphrase, newPassphrase, options);
       this.#put('keystore', keystore.toJSON() as unknown as JsonValue);
+      await this.#seal();
       await this.#flush();
     });
   }
@@ -739,6 +824,7 @@ export class PearlWallet {
       kind: record.kind,
       number: record.number,
       xpub: record.xpub,
+      origin: record.origin ?? null,
       label: record.label,
       nextReceiveIndex: record.receive,
       nextChangeIndex: record.change,
@@ -750,22 +836,30 @@ export class PearlWallet {
     return this.#exclusive(async () => {
       const id = String(number);
       if (this.#accounts.has(id)) throw new WalletError('WALLET_DUPLICATE', `account ${id} already exists`);
-      const xpub = await this.#requireUnlocked().useSecret('seed', (seed) => deriveAccountFromSeed(seed, this.network, number).extendedPublicKey());
-      this.#addAccount({ id, kind: 'seed', number, xpub, label: options.label ?? null, receive: 0, change: 0 });
+      const account = await (await this.#unlocked()).useSecret('seed', (seed) => deriveAccountFromSeed(seed, this.network, number));
+      this.#addAccount({ id, kind: 'seed', number, xpub: account.extendedPublicKey(), origin: originOf(account), label: options.label ?? null, receive: 0, change: 0 });
+      await this.#seal();
       await this.#flush();
       return this.accounts().find((account) => account.id === id)!;
     });
   }
 
-  /** Adds a watch-only account from its extended public key. */
-  async addWatchOnlyAccount(xpub: string, options: { label?: string } = {}): Promise<WalletAccount> {
+  /**
+   * Adds a watch-only account from its extended public key, with the origin
+   * a signer that holds the key expects in a PSBT if it is given. A wallet
+   * with a keystore must be unlocked, because the account joins the records
+   * the keystore authenticates.
+   */
+  async addWatchOnlyAccount(xpub: string, options: { label?: string; origin?: KeyOrigin } = {}): Promise<WalletAccount> {
     return this.#exclusive(async () => {
-      const account = importWatchOnlyAccount(xpub, this.network);
+      if (this.#keystore !== null) await this.#unlocked();
+      const account = importWatchOnlyAccount(xpub, this.network, options.origin);
       if ([...this.#accounts.values()].some((record) => record.xpub === account.extendedPublicKey())) throw new WalletError('WALLET_DUPLICATE', 'that account is already in the wallet');
       let n = 0;
       while (this.#accounts.has(`watch-${n}`)) n += 1;
       const id = `watch-${n}`;
-      this.#addAccount({ id, kind: 'xpub', number: null, xpub: account.extendedPublicKey(), label: options.label ?? null, receive: 0, change: 0 });
+      this.#addAccount({ id, kind: 'xpub', number: null, xpub: account.extendedPublicKey(), origin: originOf(account), label: options.label ?? null, receive: 0, change: 0 });
+      await this.#seal();
       await this.#flush();
       return this.accounts().find((item) => item.id === id)!;
     });
@@ -846,7 +940,7 @@ export class PearlWallet {
   /** Imports a WIF key: its key-path address is watched and its outputs spendable with from: { imported }. Needs the wallet unlocked. Returns the address, which is the key's id. */
   async importKey(wif: string, options: { label?: string } = {}): Promise<string> {
     return this.#exclusive(async () => {
-      const keystore = this.#requireUnlocked();
+      const keystore = await this.#unlocked();
       const { privateKey } = decodeWif(wif, this.network);
       const address = keyPathAddress(privateKey, this.network);
       privateKey.fill(0);
@@ -856,6 +950,7 @@ export class PearlWallet {
       this.#own(toOutputScript(address, this.network), { type: 'imported', id: address }, address);
       this.#put(`imported:${address}`, { address, label: options.label ?? null });
       this.#put('keystore', keystore.toJSON() as unknown as JsonValue);
+      await this.#seal();
       await this.#flush();
       this.#notifyAddresses([address]);
       return address;
@@ -871,7 +966,7 @@ export class PearlWallet {
    */
   async addXmssKey(options: { label?: string; privateSeed?: Uint8Array; publicSeed?: Uint8Array; nextIndex?: number } = {}): Promise<WalletXmssKey> {
     return this.#exclusive(async () => {
-      const keystore = this.#requireUnlocked();
+      const keystore = await this.#unlocked();
       const given = options.privateSeed !== undefined || options.publicSeed !== undefined;
       if (given && (options.privateSeed === undefined || options.publicSeed === undefined)) throw new XmssError('XMSS_KEY_INVALID', 'give both XMSS seeds or neither');
       if (given && options.nextIndex === undefined) {
@@ -903,6 +998,7 @@ export class PearlWallet {
         };
         this.#putXmss(record);
         this.#put('keystore', keystore.toJSON() as unknown as JsonValue);
+        await this.#seal();
         await this.#flush();
         this.#notifyAddresses([record.address]);
         return this.#xmssView(record);
@@ -1178,7 +1274,7 @@ export class PearlWallet {
    */
   async send(options: SendOptions): Promise<SendResult> {
     return this.#exclusive(async (events) => {
-      this.#requireUnlocked();
+      await this.#unlocked();
       const { feeRate, maxFeeRate } = await this.#feeRates(options);
       const minConfirmations = options.minConfirmations ?? 1;
       const coins = this.#spendable(options.from ?? { account: this.#firstSigningAccount().id });
@@ -1213,7 +1309,7 @@ export class PearlWallet {
    */
   async bumpFee(txid: string, options: { feeRate: FeeRate; maxFeeRate?: FeeRate }): Promise<SendResult> {
     return this.#exclusive(async (events) => {
-      this.#requireUnlocked();
+      await this.#unlocked();
       const { maxFeeRate } = await this.#feeRates(options);
       const original = this.#txs.get(txid);
       const ledger = this.#ledger();
@@ -1394,6 +1490,7 @@ export class PearlWallet {
     if (this.#meta.format !== 'pearljs-wallet') throw new WalletError('WALLET_NOT_FOUND', 'the store does not hold a pearljs wallet');
     if (this.#meta.network !== this.network.name) throw new WalletError('WALLET_WRONG_NETWORK', `the wallet is for ${this.#meta.network}, the backend for ${this.network.name}`);
     const keystore = map.get('keystore');
+    this.#auth = map.get('auth');
     this.#keystore = keystore === undefined ? null : this.#keystore?.locked === false && JSON.stringify(this.#keystore.toJSON()) === JSON.stringify(keystore) ? this.#keystore : openKeystore(keystore);
     this.#accounts.clear();
     this.#chains.clear();
@@ -1410,11 +1507,25 @@ export class PearlWallet {
     this.#tip = tip === null ? null : { height: tip.height, hash: tip.hash };
     for (const [key, value] of entries) {
       const name = key.slice(key.indexOf(':') + 1);
-      if (key.startsWith('account:')) this.#addAccount(asRecord<AccountRecord>(value, key), false);
-      else if (key.startsWith('address:')) this.#addresses.set(name, asRecord<AddressRecord>(value, key));
-      else if (key.startsWith('imported:')) this.#imported.set(name, asRecord<{ address: string; label: string | null }>(value, key));
-      else if (key.startsWith('xmss:')) {
-        this.#xmss.set(name, asRecord<XmssRecord>(value, key));
+      if (key.startsWith('account:')) {
+        const record = asRecord<AccountRecord>(value, key);
+        if (record.id !== name || (record.kind !== 'seed' && record.kind !== 'xpub') || typeof record.xpub !== 'string' || !isIndex(record.receive) || !isIndex(record.change)) throw invalid(key);
+        if (record.kind === 'seed' ? !isIndex(record.number) : record.number !== null) throw invalid(key);
+        try {
+          this.#addAccount(record, false);
+        } catch (err) {
+          throw new StoreError('STORE_INVALID', `stored ${key} does not hold an account key for ${this.network.name}`, { cause: err });
+        }
+      } else if (key.startsWith('address:')) this.#addresses.set(name, asRecord<AddressRecord>(value, key));
+      else if (key.startsWith('imported:')) {
+        const record = asRecord<{ address: string; label: string | null }>(value, key);
+        if (record.address !== name) throw invalid(key);
+        this.#imported.set(name, record);
+      } else if (key.startsWith('xmss:')) {
+        const record = asRecord<XmssRecord>(value, key);
+        // The address is the key's own: one put in its place would send the key's payments elsewhere.
+        if (record.publicKey !== name || !/^[0-9a-f]{128}$/.test(name) || !isIndex(record.next) || record.address !== encodeAddress({ version: 2, program: xmssTree(name).root }, this.network)) throw invalid(key);
+        this.#xmss.set(name, record);
         // A copy: the record above changes in memory before it is stored again.
         this.#xmssStored.set(name, structuredClone(value));
       }
@@ -1424,6 +1535,52 @@ export class PearlWallet {
     }
     for (const [address] of this.#imported) this.#own(toOutputScript(address, this.network), { type: 'imported', id: address }, address);
     for (const record of this.#xmss.values()) this.#own(toOutputScript(record.address, this.network), { type: 'xmss', id: record.publicKey }, record.address);
+    // Once checked in this process, the accounts and keys are held to what was checked, locked or not.
+    if (this.#verified !== null && this.#identity() !== this.#verified) throw new KeystoreError('KEYSTORE_TAMPERED', TAMPERED_IDENTITY);
+  }
+
+  // The records the keystore authenticates: which keys the wallet's addresses come from.
+  #identity(): string {
+    const accounts = [...this.#accounts.values()]
+      .map((record) => [record.id, record.kind, record.number, record.xpub, record.origin?.masterFingerprint ?? null, record.origin?.path ?? null])
+      .sort((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1));
+    return JSON.stringify({ network: this.network.name, accounts, imported: [...this.#imported.keys()].sort(), xmss: [...this.#xmss.keys()].sort() });
+  }
+
+  // Tags the accounts and keys as they now are, after an operation changed them; stored with its batch.
+  async #seal(): Promise<void> {
+    // A watch-only wallet has no key to tag with.
+    if (this.#keystore === null) return;
+    const keystore = this.#requireUnlocked();
+    const identity = this.#identity();
+    const tag = await keystore.authenticate('wallet', identity);
+    this.#auth = { nonce: tag.nonce, tag: tag.ciphertext };
+    this.#put('auth', this.#auth);
+    this.#verified = identity;
+  }
+
+  // Checks the accounts and keys against the keystore's tag, and that the keystore still holds a secret for each key.
+  async #authenticate(): Promise<void> {
+    const keystore = this.#requireUnlocked();
+    const identity = this.#identity();
+    const whole =
+      [...this.#imported.keys()].every((address) => keystore.has(`wif:${address}`)) &&
+      [...this.#xmss.keys()].every((id) => keystore.has(`xmss:${id}`)) &&
+      ([...this.#accounts.values()].every((record) => record.kind !== 'seed') || keystore.has('seed'));
+    const stored = this.#auth as { nonce?: JsonValue; tag?: JsonValue } | null | undefined;
+    const tag = stored === null || typeof stored !== 'object' ? undefined : { nonce: stored.nonce, ciphertext: stored.tag };
+    if (!whole || !(await keystore.verify('wallet', identity, tag))) {
+      keystore.lock();
+      throw new KeystoreError('KEYSTORE_TAMPERED', TAMPERED_IDENTITY);
+    }
+    this.#verified = identity;
+  }
+
+  // The unlocked keystore, with the wallet's accounts and keys checked against it if they have not been since the state was last read.
+  async #unlocked(): Promise<Keystore> {
+    const keystore = this.#requireUnlocked();
+    if (this.#verified === null) await this.#authenticate();
+    return keystore;
   }
 
   #put(key: string, value: JsonValue): void {
@@ -1494,6 +1651,7 @@ export class PearlWallet {
       if (this.#broken !== null) throw this.#broken;
       const events: PendingEvent[] = [];
       const before = this.#ledger().balance;
+      const verified = this.#verified;
       try {
         const value = await run(events);
         await this.#flush();
@@ -1507,6 +1665,8 @@ export class PearlWallet {
         return value;
       } catch (err) {
         this.#ops = [];
+        // What a failed operation tagged was never stored.
+        this.#verified = verified;
         try {
           if (!this.#closed) await this.#load();
         } catch (reload) {
@@ -1535,7 +1695,7 @@ export class PearlWallet {
 
   #addAccount(record: AccountRecord, save = true): void {
     this.#accounts.set(record.id, record);
-    const account = importWatchOnlyAccount(record.xpub, this.network);
+    const account = importWatchOnlyAccount(record.xpub, this.network, record.origin ?? undefined);
     this.#chains.set(record.id, { account, addresses: [[], []] });
     if (save) this.#putAccount(record);
     this.#extend(record.id, false);
