@@ -231,6 +231,27 @@ describe('finalizing a leaf with caller-supplied items', () => {
       expect(psbt.data.inputs[0]!.finalScriptWitness).toBeUndefined();
     });
 
+    it(`gives signatureFor nothing made for another leaf or another key on ${kind}`, () => {
+      const other = compileScript([OP_CODES.OP_SHA256, sha256(blob), OP_CODES.OP_EQUALVERIFY, A, OP_CODES.OP_CHECKSIG]);
+      const tree = assembleScriptTree([hashLock, other]);
+      const { psbt } = spendOf(kind, tree, 1);
+      alice.signScriptPathInput(psbt, 0, { index: 0, leafHash: tree.leaves[1]!.leafHash });
+      psbt.updateInput(0, { tapLeafScript: spendOf(kind, tree, 0).psbt.data.inputs[0]!.tapLeafScript! });
+      // A signed the other leaf only.
+      const wrongLeaf = error(() =>
+        finalizeScriptPathInput(psbt, 0, { leafHash: tree.leaves[0]!.leafHash, stack: (signatureFor) => [signatureFor(A), secret] }),
+      );
+      expect(wrongLeaf.code).toBe('SIGNATURES_MISSING');
+      // A signature filed under a key the leaf does not push is never looked at, so never handed out.
+      psbt.updateInput(0, { tapScriptSig: [{ pubkey: B, leafHash: tree.leaves[1]!.leafHash, signature: new Uint8Array(64).fill(7) }] });
+      const wrongKey = error(() =>
+        finalizeScriptPathInput(psbt, 0, { leafHash: tree.leaves[1]!.leafHash, stack: (signatureFor) => [signatureFor(B), blob] }),
+      );
+      expect(wrongKey.code).toBe('SIGNATURES_MISSING');
+      finalizeScriptPathInput(psbt, 0, { leafHash: tree.leaves[1]!.leafHash, stack: (signatureFor) => [signatureFor(A), blob] });
+      expect(verifyFinalizedPsbt(psbt)).toEqual({ ok: true });
+    });
+
     it(`still finalizes a timelocked checksig leaf on ${kind} from its signature, and refuses it while the lock holds`, () => {
       const tree = assembleScriptTree([csvScript(encodeSequence({ blocks: 144 }), checksigScript(A))]);
       const { leafHash } = tree.leaves[0]!;

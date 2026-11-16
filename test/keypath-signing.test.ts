@@ -348,6 +348,20 @@ describe('signTaprootKeyPathInputAsync', () => {
     expect(signer.requests).toHaveLength(0);
   });
 
+  it('signs another sighash type only when the caller allows it, and appends its byte', async () => {
+    const vector = vectors.signing.find((item) => item.hashType !== 0)!;
+    const key = root.derivePath(vector.path).privateKey!;
+    const signer = device();
+    const psbt = parsePsbt(vector.preparedPsbt);
+    expect((await refusal(signTaprootKeyPathInputAsync(psbt, 0, signer))).code).toBe('SIGHASH_NOT_ALLOWED');
+    expect(signer.requests).toHaveLength(0);
+    await signTaprootKeyPathInputAsync(psbt, 0, keyPathSignerFromPrivateKey(key), { allowedSighashTypes: [vector.hashType] });
+    const signature = psbt.data.inputs[0]!.tapKeySig!;
+    expect([signature.length, signature[64]]).toEqual([65, vector.hashType]);
+    expect(serializeTransaction(finalizePsbt(psbt), false)).toBe(vector.unsignedTxHex);
+    expect(verifyFinalizedPsbt(psbt)).toEqual({ ok: true });
+  });
+
   it('refuses a request for another key in the in-memory signer', async () => {
     const signer = keyPathSignerFromPrivateKey(child.privateKey!);
     const request = { hash: new Uint8Array(32), outputKey: internalPubkey, merkleRoot: null, sighashType: 0, inputIndex: 0 };
