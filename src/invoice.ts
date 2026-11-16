@@ -311,11 +311,52 @@ function stateOf(invoice: Invoice, paid: bigint, confirmations: number, conflict
 }
 
 
-async function readView(invoice: Invoice, client: ChainClient, tipHeight: number, activity: readonly AddressPayment[]): Promise<ChainView> {
-  const listed = listedPayments(activity);
-  const missing = invoice.payments.filter((payment) => !listed.has(payment.txid)).map((payment) => payment.txid);
-  const answers = await Promise.all(missing.map(async (txid) => (await client.getTransaction(txid)) !== null));
-  return { tipHeight, listed, known: new Map(missing.map((txid, i) => [txid, answers[i]!])) };
+// Runs fn over items with at most `limit` calls in flight, keeping order.
+async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/** Options for refreshInvoices. */
+export interface RefreshOptions {
+  /** Epoch seconds; defaults to the clock. */
+  readonly now?: number;
+  /** Backend calls in flight at once. Default 8. */
+  readonly concurrency?: number;
+}
+
+/**
+ * Refreshes many invoices in one pass: one getTip, one getAddressActivity
+ * per distinct address, and getTransaction only for recorded payments the
+ * address no longer lists, each txid once. Returns the new records in the
+ * order given. Each is what refreshInvoice would return at the same moment.
+ */
+export async function refreshInvoices(invoices: readonly Invoice[], client: ChainClient, options: RefreshOptions = {}): Promise<Invoice[]> {
+  const { now = Math.floor(Date.now() / 1000), concurrency = 8 } = options;
+  assertNow(now);
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new RangeError('concurrency must be a positive integer');
+  if (invoices.length === 0) return [];
+  const tipHeight = blockHeight(await client.getTip(), 'a tip');
+  const addresses = [...new Set(invoices.map((invoice) => invoice.address))];
+  const activity = await mapLimit(addresses, concurrency, (address) => client.getAddressActivity(address));
+  const listedBy = new Map(addresses.map((address, i) => [address, listedPayments(activity[i]!)]));
+  const missing = new Set<string>();
+  for (const invoice of invoices) {
+    const listed = listedBy.get(invoice.address)!;
+    for (const payment of invoice.payments) if (!listed.has(payment.txid)) missing.add(payment.txid);
+  }
+  const txids = [...missing];
+  const answers = await mapLimit(txids, concurrency, async (txid) => (await client.getTransaction(txid)) !== null);
+  const known = new Map(txids.map((txid, i) => [txid, answers[i]!]));
+  return invoices.map((invoice) => applyView(invoice, { tipHeight, listed: listedBy.get(invoice.address)!, known }, now));
 }
 
 /**
@@ -334,10 +375,8 @@ export async function refreshInvoice(
   client: ChainClient,
   now: number = Math.floor(Date.now() / 1000),
 ): Promise<Invoice> {
-  assertNow(now);
-  const [tip, activity] = await Promise.all([client.getTip(), client.getAddressActivity(invoice.address)]);
-  const tipHeight = blockHeight(tip, 'a tip');
-  return applyView(invoice, await readView(invoice, client, tipHeight, activity), now);
+  const [refreshed] = await refreshInvoices([invoice], client, { now });
+  return refreshed!;
 }
 
 /** The JSON form of an InvoicePayment: amounts as decimal strings of grain. */
@@ -596,5 +635,10 @@ export class InvoiceMonitor {
   /** refreshInvoice against the monitor's chain client. */
   refreshInvoice(invoice: Invoice, now?: number): Promise<Invoice> {
     return refreshInvoice(invoice, this.#client, now);
+  }
+
+  /** refreshInvoices against the monitor's chain client. */
+  refreshInvoices(invoices: readonly Invoice[], options?: RefreshOptions): Promise<Invoice[]> {
+    return refreshInvoices(invoices, this.#client, options);
   }
 }

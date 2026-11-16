@@ -8,7 +8,7 @@ import type { AddressPayment, BlockRef, ChainClient, ChainTransaction } from '..
 import type { CreateInvoiceConfig, Invoice } from '../src/invoice.js';
 import { encodeAddress } from '../src/address.js';
 import { MAX_GRAIN } from '../src/amount.js';
-import { InvoiceMonitor, createInvoice, fetchPayerInputs, invoiceFromJson, invoicePaymentFromJson, invoiceToJson, payerInputs, refreshInvoice } from '../src/invoice.js';
+import { InvoiceMonitor, createInvoice, fetchPayerInputs, invoiceFromJson, invoicePaymentFromJson, invoiceToJson, payerInputs, refreshInvoice, refreshInvoices } from '../src/invoice.js';
 import { createTransaction, transactionId } from '../src/transaction.js';
 import { toOutputScript } from '../src/address.js';
 import { PearlError } from '../src/errors.js';
@@ -687,5 +687,36 @@ describe('refunds', () => {
     expect(invoice.refundAddress).toBe(payer(4));
     expect(invoiceFromJson(JSON.parse(JSON.stringify(invoiceToJson(invoice))), NETWORK)).toEqual(invoice);
     expect(() => createInvoice(config({ refundAddress: 'nope' }), NETWORK)).toThrow('refundAddress is not valid on regtest');
+  });
+});
+
+describe('refreshInvoices', () => {
+  it('refreshes many invoices with one tip, one search per address and one lookup per missing txid', async () => {
+    const chain = new ScriptedChain();
+    const addresses = Array.from({ length: 40 }, (_, i) => encodeAddress({ version: 1, program: new Uint8Array(32).fill(i + 1) }, NETWORK));
+    let invoices = addresses.map((address, i) => createInvoice(config({ id: `inv-${i}`, address }), NETWORK));
+    for (const [i, address] of addresses.entries()) chain.broadcast(`tx-${i}`, { [address]: BigInt(i * 5_000) }, 1_100);
+    invoices = await refreshInvoices(invoices, chain, { now: 1_200 });
+    chain.drop('tx-3');
+    chain.drop('tx-4');
+    const before = { ...chain.calls };
+    let inFlight = 0;
+    let peak = 0;
+    const search = chain.getAddressActivity.bind(chain);
+    chain.getAddressActivity = async (address) => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise((resolve) => setImmediate(resolve));
+      inFlight--;
+      return search(address);
+    };
+    const next = await refreshInvoices([...invoices, invoices[0]!], chain, { now: 1_300, concurrency: 5 });
+    expect(chain.calls.getTip - before.getTip).toBe(1);
+    expect(chain.calls.getAddressActivity - before.getAddressActivity).toBe(40);
+    expect(chain.calls.getTransaction - before.getTransaction).toBe(2);
+    expect(peak).toBe(5);
+    expect(next[3]!.state).toBe('conflicted');
+    expect(next.slice(0, 40)).toEqual(await Promise.all(invoices.map((invoice) => refreshInvoice(invoice, chain, 1_300))));
+    expect(await refreshInvoices([], chain)).toEqual([]);
+    await expect(refreshInvoices(invoices, chain, { concurrency: 0 })).rejects.toThrow(RangeError);
   });
 });

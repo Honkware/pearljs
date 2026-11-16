@@ -75,6 +75,10 @@
       "types": "./dist/invoice.d.ts",
       "default": "./dist/invoice.js"
     },
+    "./invoice-watch": {
+      "types": "./dist/invoice-watch.d.ts",
+      "default": "./dist/invoice-watch.js"
+    },
     "./keys": {
       "types": "./dist/keys.d.ts",
       "default": "./dist/keys.js"

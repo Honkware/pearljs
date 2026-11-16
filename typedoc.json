@@ -19,6 +19,7 @@
     "src/inspect.ts",
     "src/interpreter.ts",
     "src/invoice.ts",
+    "src/invoice-watch.ts",
     "src/keys.ts",
     "src/message.ts",
     "src/mnemonic.ts",

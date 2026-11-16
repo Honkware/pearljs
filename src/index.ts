@@ -22,6 +22,7 @@ export * from './gcs.js';
 export * from './inspect.js';
 export * from './interpreter.js';
 export * from './invoice.js';
+export * from './invoice-watch.js';
 export * from './keys.js';
 export * from './keystore.js';
 export * from './message.js';

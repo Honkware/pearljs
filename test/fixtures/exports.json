@@ -236,6 +236,7 @@
       "prlAmount",
       "psbtOutputs",
       "refreshInvoice",
+      "refreshInvoices",
       "regtest",
       "replacementFee",
       "requiredCertVersion",
@@ -291,6 +292,7 @@
       "verifyP2mrLeafCommitment",
       "verifyTaprootLeafCommitment",
       "verifyTransaction",
+      "watchInvoices",
       "witnessCommitment",
       "witnessTransactionId",
       "workForBits",
@@ -369,6 +371,9 @@
       "InvoicePaymentJson",
       "InvoicePaymentStatus",
       "InvoiceState",
+      "InvoiceWatchOptions",
+      "InvoiceWatchSocket",
+      "InvoiceWatcher",
       "JsonValue",
       "KeyOrigin",
       "KeyPathSighashInput",
@@ -435,6 +440,7 @@
       "ReceivedByAddress",
       "Recipient",
       "ReconnectOptions",
+      "RefreshOptions",
       "RelativeLock",
       "ReplacementOptions",
       "RescanEvent",
@@ -782,7 +788,8 @@
       "invoicePaymentToJson",
       "invoiceToJson",
       "payerInputs",
-      "refreshInvoice"
+      "refreshInvoice",
+      "refreshInvoices"
     ],
     "types": [
       "CreateInvoiceConfig",
@@ -792,7 +799,18 @@
       "InvoicePaymentJson",
       "InvoicePaymentStatus",
       "InvoiceState",
-      "PayerInput"
+      "PayerInput",
+      "RefreshOptions"
+    ]
+  },
+  "invoice-watch": {
+    "values": [
+      "watchInvoices"
+    ],
+    "types": [
+      "InvoiceWatchOptions",
+      "InvoiceWatchSocket",
+      "InvoiceWatcher"
     ]
   },
   "keys": {
