@@ -13,6 +13,7 @@
 import type { Transaction } from 'bitcoinjs-lib';
 import { fromOutputScript } from './address.js';
 import { blockSubsidy } from './consensus.js';
+import { hash256 } from './crypto.js';
 import { PearlError } from './errors.js';
 import { parseMultiA } from './multia.js';
 import type { PearlNetwork } from './networks.js';
@@ -185,7 +186,8 @@ export function inspectTransaction(
   const vsize = tx.virtualSize();
   return {
     txid: tx.getId(),
-    wtxid: toHex(Uint8Array.from(tx.getHash(true)).reverse()),
+    // Not getHash(true), which answers zeros for a coinbase: that is its place in the witness merkle tree, not its id.
+    wtxid: toHex(hash256(tx.toBuffer()).reverse()),
     version: tx.version,
     locktime: tx.locktime,
     size: tx.byteLength(),

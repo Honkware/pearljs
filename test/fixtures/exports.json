@@ -1296,6 +1296,43 @@
       "SweepOptions"
     ]
   },
+  "testing": {
+    "values": [
+      "FAUCET_MNEMONIC",
+      "SimulatedChain",
+      "SimulatedRefusal",
+      "TEST_MNEMONIC",
+      "testAccount",
+      "testAddress",
+      "testKey",
+      "testMnemonic",
+      "testXmssSeeds"
+    ],
+    "types": [
+      "Faucet",
+      "FaucetOptions",
+      "MineOptions",
+      "ReorgOptions",
+      "SimulatedBlock",
+      "SimulatedChainOptions",
+      "SimulatedCoin",
+      "SimulatedEvent",
+      "SimulatedMempoolEntry",
+      "SimulatedSocket",
+      "SimulatedWebSocket"
+    ]
+  },
+  "testing-regtest": {
+    "values": [
+      "startRegtest",
+      "trustingFetch"
+    ],
+    "types": [
+      "Regtest",
+      "RegtestEndpoint",
+      "RegtestOptions"
+    ]
+  },
   "transaction": {
     "values": [
       "Psbt",

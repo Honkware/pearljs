@@ -11,6 +11,7 @@ import {
   deriveSigningAccountFromSeed,
   embed,
   fromOutputScript,
+  hash256,
   inspectTransaction,
   networks,
   parseBlock,
@@ -221,6 +222,9 @@ describe('inspectTransaction on a coinbase', () => {
       const tx = block.transactions[0]!;
       const info = inspectTransaction(tx, [], networks.regtest);
       expect(info.txid).toBe(vector.txids[0]);
+      // pearld shows a coinbase's own witness hash, not the zeros that stand for it in the witness merkle tree.
+      expect(info.wtxid).toBe(bytesToHex(hash256(tx.toBuffer()).reverse()));
+      expect(info.wtxid === info.txid).toBe(tx.ins[0]!.witness.length === 0);
       expect(info.fee).toBe(0n);
       expect(info.feeRate).toBe(0n);
       expect(info.rbf).toBe(false);

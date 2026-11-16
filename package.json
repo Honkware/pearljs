@@ -155,6 +155,14 @@
       "types": "./dist/sweep.d.ts",
       "default": "./dist/sweep.js"
     },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    },
+    "./testing-regtest": {
+      "types": "./dist/testing-regtest.d.ts",
+      "default": "./dist/testing-regtest.js"
+    },
     "./transaction": {
       "types": "./dist/transaction.d.ts",
       "default": "./dist/transaction.js"
