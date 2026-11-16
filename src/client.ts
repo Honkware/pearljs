@@ -13,6 +13,12 @@
 export interface BlockRef {
   readonly height: number;
   readonly hash: string;
+  /**
+   * The block header's timestamp, epoch seconds, when the backend knows it.
+   * Invoices judge a confirmed payment's punctuality by it; without it they
+   * can only go by when they first saw the payment.
+   */
+  readonly time?: number;
 }
 
 /**
@@ -25,6 +31,11 @@ export interface AddressPayment {
   readonly amount: bigint;
   /** Confirming block, or null while the payment sits in the mempool. */
   readonly block: BlockRef | null;
+  /**
+   * When the backend itself first saw the transaction, epoch seconds, if it
+   * keeps that. Invoices take the earlier of this and their own first sight.
+   */
+  readonly seenAt?: number;
 }
 
 /** A transaction as currently known to the chain view. */

@@ -111,7 +111,7 @@ describeLive('reorganization', () => {
     expect(await pearld.getRawTransaction(txid)).not.toHaveProperty('blockhash');
     invoice = await monitor.refreshInvoice(invoice, 1500);
     expect(invoice).toMatchObject({ state: 'pending', confirmations: 0, paidAmount: 40_000_000n });
-    expect(invoice.observedPayments).toEqual([{ txid, firstSeenAt: 1500 }]);
+    expect(invoice.payments).toMatchObject([{ txid, firstSeenAt: 1500, status: 'unconfirmed', counted: true }]);
 
     const [again] = await mine(1);
     expect(again).not.toBe(replaced);

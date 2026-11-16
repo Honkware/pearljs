@@ -390,9 +390,10 @@ export function oysterBackend(rpc: Rpc, options: OysterBackendOptions): WalletBa
 
   // Oyster reports confirmations, not heights, counted from the block it has
   // processed up to.
-  const blockOf = (entry: { blockhash?: string; confirmations: number }, tip: BlockRef, method: string): BlockRef | null => {
+  const blockOf = (entry: { blockhash?: string; blocktime?: number; confirmations: number }, tip: BlockRef, method: string): BlockRef | null => {
     if (entry.blockhash === undefined || entry.blockhash === '') return null;
-    return { height: safeHeight(tip.height - entry.confirmations + 1, method), hash: entry.blockhash };
+    const block = { height: safeHeight(tip.height - entry.confirmations + 1, method), hash: entry.blockhash };
+    return entry.blocktime === undefined || entry.blocktime === 0 ? block : { ...block, time: entry.blocktime };
   };
 
   const received = (entries: readonly WalletTransactionEntry[], address: string): Map<string, WalletTransactionEntry & { total: bigint }> => {

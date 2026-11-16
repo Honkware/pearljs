@@ -1697,14 +1697,15 @@ export function pearldChainClient(
   options: { pageSize?: number } = {},
 ): ChainClient {
   const pageSize = options.pageSize ?? 100;
-  const blockRef = async (hash: string | undefined, heights: Map<string, number>): Promise<BlockRef | null> => {
+  const blockRef = async (tx: { blockhash?: string; blocktime?: number }, heights: Map<string, number>): Promise<BlockRef | null> => {
+    const hash = tx.blockhash;
     if (hash === undefined || hash === '') return null;
     let height = heights.get(hash);
     if (height === undefined) {
       height = safeHeight((await client.getBlockHeader(hash)).height, 'getblockheader');
       heights.set(hash, height);
     }
-    return { height, hash };
+    return tx.blocktime === undefined ? { height, hash } : { height, hash, time: tx.blocktime };
   };
 
   return {
@@ -1719,7 +1720,7 @@ export function pearldChainClient(
       const payments: AddressPayment[] = [];
       for (const tx of await searchAllTransactions(client, address, { pageSize })) {
         const amount = paidTo(tx, address);
-        if (amount > 0n) payments.push({ txid: tx.txid, amount, block: await blockRef(tx.blockhash, heights) });
+        if (amount > 0n) payments.push({ txid: tx.txid, amount, block: await blockRef(tx, heights) });
       }
       return payments;
     },
@@ -1732,7 +1733,7 @@ export function pearldChainClient(
         if (isUnknownTransaction(err)) return null;
         throw err;
       }
-      return { txid: tx.txid, block: await blockRef(tx.blockhash, new Map()) };
+      return { txid: tx.txid, block: await blockRef(tx, new Map()) };
     },
   };
 }

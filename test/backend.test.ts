@@ -360,7 +360,7 @@ describe('Oyster backend', () => {
   it('looks up a wallet transaction and returns null for one the wallet does not hold', async () => {
     const { client } = scenarioOyster({ gettransaction: (r) => (r.body.params[0] === txids.a1 ? 'gettransaction' : 'gettransaction-missing') });
     const backend = oysterBackend(client, { network });
-    expect(await backend.getTransaction(txids.a1)).toEqual({ txid: 'ab'.repeat(32), block: { height: heightOf(6), hash: expected('getblock-raw', 'hash') } });
+    expect(await backend.getTransaction(txids.a1)).toEqual({ txid: 'ab'.repeat(32), block: { height: heightOf(6), hash: expected('getblock-raw', 'hash'), time: 1767225600 } });
     expect(await backend.getTransaction('00'.repeat(32))).toBeNull();
   });
 

@@ -358,6 +358,8 @@
       "InspectedOutput",
       "InspectedTransaction",
       "Invoice",
+      "InvoicePayment",
+      "InvoicePaymentStatus",
       "InvoiceState",
       "JsonValue",
       "KeyOrigin",
@@ -378,7 +380,6 @@
       "MultiALeaf",
       "NetworkInfo",
       "NodeInfo",
-      "ObservedPayment",
       "OpcodeName",
       "OpenWalletOptions",
       "OutPointParam",
@@ -771,8 +772,9 @@
     "types": [
       "CreateInvoiceConfig",
       "Invoice",
-      "InvoiceState",
-      "ObservedPayment"
+      "InvoicePayment",
+      "InvoicePaymentStatus",
+      "InvoiceState"
     ]
   },
   "keys": {

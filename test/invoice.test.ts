@@ -1,3 +1,7 @@
+// The invoice monitor against an in-memory chain view: every state, the
+// expiry rule by block time and first sight, records of every payment, and
+// backends that answer with bad data.
+
 import { describe, expect, it } from 'vitest';
 
 import type { AddressPayment, BlockRef, ChainClient, ChainTransaction } from '../src/client.js';
@@ -6,6 +10,7 @@ import { encodeAddress } from '../src/address.js';
 import { MAX_GRAIN } from '../src/amount.js';
 import { InvoiceMonitor, createInvoice, refreshInvoice } from '../src/invoice.js';
 import { networks } from '../src/networks.js';
+import { ScriptedChain } from './invoice-helpers.js';
 
 /** Controllable in-memory chain view for tests. */
 class FakeChain implements ChainClient {
@@ -26,13 +31,13 @@ class FakeChain implements ChainClient {
   }
 
   pay(txid: string, amount: bigint, height: number | null): void {
-    const block = height === null ? null : { height, hash: `hash-${height}` };
+    const block = height === null ? null : { height, hash: `hash-${height}`, time: 1_000 + height };
     this.activity.push({ txid, amount, block });
     this.transactions.set(txid, { txid, block });
   }
 
   moveToBlock(txid: string, height: number | null): void {
-    const block = height === null ? null : { height, hash: `hash-${height}` };
+    const block = height === null ? null : { height, hash: `hash-${height}`, time: 1_000 + height };
     this.activity = this.activity.map((p) => (p.txid === txid ? { ...p, block } : p));
     this.transactions.set(txid, { txid, block });
   }
@@ -64,7 +69,8 @@ describe('createInvoice', () => {
     expect(invoice.state).toBe('awaiting');
     expect(invoice.paidAmount).toBe(0n);
     expect(invoice.confirmations).toBe(0);
-    expect(invoice.observedPayments).toEqual([]);
+    expect(invoice.payments).toEqual([]);
+    expect(invoice.uncountedAmount).toBe(0n);
   });
 
   it('rejects invalid config', () => {
@@ -119,7 +125,9 @@ describe('refreshInvoice', () => {
     expect(invoice.state).toBe('pending');
     expect(invoice.paidAmount).toBe(100_000n);
     expect(invoice.confirmations).toBe(0);
-    expect(invoice.observedPayments).toEqual([{ txid: 'tx-exact', firstSeenAt: 1_500 }]);
+    expect(invoice.payments).toEqual([
+      { txid: 'tx-exact', amount: 100_000n, status: 'unconfirmed', block: null, confirmations: 0, firstSeenAt: 1_500, firstBlockTime: null, onTime: true, counted: true },
+    ]);
   });
 
   it('underpaid stays awaiting before expiry and expires after', async () => {
@@ -154,7 +162,7 @@ describe('refreshInvoice', () => {
     const invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500);
     expect(invoice.paidAmount).toBe(60_000n);
     expect(invoice.state).toBe('awaiting');
-    expect(invoice.observedPayments).toEqual([{ txid: 'tx-dup', firstSeenAt: 1_500 }]);
+    expect(invoice.payments).toMatchObject([{ txid: 'tx-dup', amount: 60_000n, firstSeenAt: 1_500 }]);
   });
 
   it('tracks confirmation depth until confirmed', async () => {
@@ -261,7 +269,8 @@ describe('refreshInvoice', () => {
     const invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 2_000);
     expect(invoice.paidAmount).toBe(0n);
     expect(invoice.state).toBe('expired');
-    expect(invoice.observedPayments).toEqual([{ txid: 'tx-late', firstSeenAt: 2_000 }]);
+    expect(invoice.uncountedAmount).toBe(100_000n);
+    expect(invoice.payments).toMatchObject([{ txid: 'tx-late', amount: 100_000n, firstSeenAt: 2_000, onTime: false, counted: false }]);
   });
 
   it('payment first seen one second before expiry counts', async () => {
@@ -300,9 +309,9 @@ describe('refreshInvoice', () => {
     let invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_200);
     chain.pay('tx-second', 10_000n, null);
     invoice = await refreshInvoice(invoice, chain, 1_300);
-    expect(invoice.observedPayments).toEqual([
-      { txid: 'tx-persist', firstSeenAt: 1_200 },
-      { txid: 'tx-second', firstSeenAt: 1_300 },
+    expect(invoice.payments.map((p) => [p.txid, p.firstSeenAt])).toEqual([
+      ['tx-persist', 1_200],
+      ['tx-second', 1_300],
     ]);
   });
 
@@ -384,5 +393,105 @@ describe('chain backends that return bad data', () => {
     const invoice = await refresh(paidAt({ height: 99, hash: 'hash-99' }));
     expect(invoice.confirmations).toBe(2);
     expect(invoice.state).toBe('confirmed');
+  });
+});
+
+describe('expiry by block time', () => {
+  const at = (chain: ScriptedChain, now: number, invoice = createInvoice(config({ requiredConfirmations: 1 }), NETWORK)) =>
+    refreshInvoice(invoice, chain, now);
+
+  it('counts a payment mined before expiry that the monitor first sees after it', async () => {
+    const chain = new ScriptedChain();
+    chain.broadcast('tx-ontime', { [ADDRESS]: 100_000n }, 1_500);
+    const block = chain.mine(1_600);
+    const invoice = await at(chain, 5_000);
+    expect(invoice).toMatchObject({ state: 'confirmed', paidAmount: 100_000n, uncountedAmount: 0n, confirmations: 1 });
+    expect(invoice.payments).toEqual([
+      { txid: 'tx-ontime', amount: 100_000n, status: 'confirmed', block, confirmations: 1, firstSeenAt: 5_000, firstBlockTime: 1_600, onTime: true, counted: true },
+    ]);
+  });
+
+  it('records a payment mined after expiry with its amount and block, uncounted', async () => {
+    const chain = new ScriptedChain();
+    chain.broadcast('tx-late', { [ADDRESS]: 100_000n }, 2_100);
+    const block = chain.mine(2_200);
+    const invoice = await at(chain, 2_300);
+    expect(invoice).toMatchObject({ state: 'expired', paidAmount: 0n, uncountedAmount: 100_000n });
+    expect(invoice.payments).toMatchObject([{ txid: 'tx-late', amount: 100_000n, block, counted: false, onTime: false }]);
+  });
+
+  it('keeps a partial payment on an expired invoice in the record', async () => {
+    const chain = new ScriptedChain();
+    chain.broadcast('tx-part', { [ADDRESS]: 40_000n }, 1_500);
+    chain.mine(1_600);
+    const invoice = await at(chain, 9_000);
+    expect(invoice).toMatchObject({ state: 'expired', paidAmount: 40_000n });
+    expect(invoice.payments).toMatchObject([{ txid: 'tx-part', amount: 40_000n, counted: true }]);
+  });
+
+  it('counts a payment seen before expiry although its block is stamped after', async () => {
+    const chain = new ScriptedChain();
+    chain.broadcast('tx-seen', { [ADDRESS]: 100_000n }, 1_900);
+    let invoice = await at(chain, 1_950);
+    chain.mine(2_400);
+    invoice = await at(chain, 2_500, invoice);
+    expect(invoice).toMatchObject({ state: 'confirmed', paidAmount: 100_000n });
+  });
+
+  it('keeps counting an on-time payment that a reorg moves into a block after expiry', async () => {
+    const chain = new ScriptedChain();
+    chain.broadcast('tx-moved', { [ADDRESS]: 100_000n }, 2_500);
+    chain.mine(1_990); // a block stamped just before expiry, first seen well after it
+    let invoice = await at(chain, 2_600);
+    expect(invoice.state).toBe('confirmed');
+    chain.disconnect(1);
+    invoice = await at(chain, 2_700, invoice);
+    expect(invoice).toMatchObject({ state: 'pending', paidAmount: 100_000n });
+    chain.mine(2_800);
+    invoice = await at(chain, 2_900, invoice);
+    expect(invoice).toMatchObject({ state: 'confirmed', paidAmount: 100_000n });
+    expect(invoice.payments[0]).toMatchObject({ firstBlockTime: 1_990, onTime: true, counted: true });
+  });
+
+  it('marks an on-time payment that is double spent away as a conflict, and keeps its amount', async () => {
+    const chain = new ScriptedChain();
+    chain.broadcast('tx-spent', { [ADDRESS]: 100_000n }, 1_500);
+    chain.mine(1_600);
+    let invoice = await at(chain, 3_000);
+    chain.disconnect(1);
+    chain.drop('tx-spent');
+    invoice = await at(chain, 3_100, invoice);
+    expect(invoice).toMatchObject({ state: 'conflicted', paidAmount: 0n });
+    expect(invoice.payments).toMatchObject([{ txid: 'tx-spent', amount: 100_000n, status: 'vanished', counted: false, onTime: true }]);
+  });
+
+  it('takes the backend seenAt when it is earlier than the first refresh', async () => {
+    const chain = new ScriptedChain();
+    chain.reportSeenAt = true;
+    chain.broadcast('tx-mempool', { [ADDRESS]: 100_000n }, 1_500);
+    const invoice = await at(chain, 2_500);
+    expect(invoice).toMatchObject({ state: 'pending', paidAmount: 100_000n });
+    expect(invoice.payments[0]!.firstSeenAt).toBe(1_500);
+  });
+
+  it('falls back to first sight when the backend reports no block time', async () => {
+    const chain = new ScriptedChain();
+    chain.reportTimes = false;
+    chain.broadcast('tx-untimed', { [ADDRESS]: 100_000n }, 1_500);
+    chain.mine(1_600);
+    const invoice = await at(chain, 2_500);
+    expect(invoice).toMatchObject({ state: 'expired', paidAmount: 0n, uncountedAmount: 100_000n });
+    expect(invoice.payments[0]).toMatchObject({ firstBlockTime: null, counted: false });
+  });
+
+  it('refuses a block time or seenAt that is not epoch seconds', async () => {
+    for (const block of [{ height: 99, hash: 'h', time: -1 }, { height: 99, hash: 'h', time: 1.5 }, { height: 99, hash: 'h', time: '1' }]) {
+      const chain = new FakeChain();
+      chain.activity = [{ txid: 'tx-bad', amount: 1n, block: block as BlockRef }];
+      await expect(refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500)).rejects.toThrow('a block time for tx-bad that is not epoch seconds');
+    }
+    const chain = new FakeChain();
+    chain.activity = [{ txid: 'tx-bad', amount: 1n, block: null, seenAt: Number.NaN }];
+    await expect(refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500)).rejects.toThrow('a seenAt for tx-bad');
   });
 });

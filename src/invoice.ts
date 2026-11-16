@@ -1,38 +1,33 @@
 /**
- * Watch-only invoice monitoring on top of a {@link ChainClient} view.
+ * Watch-only invoices on top of a {@link ChainClient} view.
  *
  * An invoice requests an exact bigint amount at a unique address before
- * an expiry time. State is recomputed synchronously from the persisted
- * Invoice record plus the current chain view on every refresh: there are
- * no subscriptions, no event handlers, and no database abstractions.
- * Callers persist the returned Invoice themselves.
+ * an expiry time. Each refresh derives a new record from the stored one and
+ * the chain as it is now; callers persist the record themselves.
  *
  * Semantics:
- * - Payments to the invoice address are summed; entries sharing a txid
- *   are the same payment and count once. Overpayment is accepted.
- * - A payment counts toward the amount iff it was first seen strictly
- *   before expiresAt. A mempool payment first seen at or after expiry
- *   does not count, but a payment first seen before expiry stays valid
- *   even when it confirms after expiry.
- * - Underpaid invoices stay "awaiting" before expiry and become
- *   "expired" at or after expiry.
- * - "pending" means fully paid with zero confirmations, "confirming"
- *   means 1..requiredConfirmations-1, "confirmed" means at least
- *   requiredConfirmations. Confirmations are recomputed from the current
- *   tip on every refresh, so a reorg below requiredConfirmations
- *   regresses a confirmed invoice, and a payment that moves blocks gets
- *   its confirmations recalculated.
- * - A payment observed before expiry that later vanishes from the chain
- *   view marks the invoice "conflicted". Conflicted wins over every other
- *   state: a conflicted invoice never stays confirmed. Late payments that
- *   never counted toward the invoice do not cause a conflict.
+ * - Every transaction paying the address is kept in `payments` with its
+ *   amount, block and whether it counted, late ones included. Entries
+ *   sharing a txid are one payment.
+ * - A payment is on time when there is evidence it existed before
+ *   expiresAt: a block it was confirmed in has a header time before
+ *   expiresAt, or it was first seen (by this invoice, or by the backend when
+ *   it reports seenAt) before expiresAt. The evidence is kept, so a reorg
+ *   that moves an on-time payment into a later block, or back to the
+ *   mempool, does not make it late.
+ * - An on-time payment counts toward `paidAmount` while the chain view
+ *   lists it. Late payments add to `uncountedAmount` instead.
+ * - Confirmations are recomputed from the current tip on every refresh, so
+ *   a reorg below requiredConfirmations regresses a confirmed invoice.
+ * - An on-time payment that the chain view no longer knows at all marks
+ *   the invoice "conflicted", which wins over every other state.
  *
  * @module
  */
 
 import { decodeAddress } from './address.js';
 import { MAX_GRAIN } from './amount.js';
-import type { BlockRef, ChainClient } from './client.js';
+import type { AddressPayment, BlockRef, ChainClient } from './client.js';
 import type { PearlNetwork } from './networks.js';
 import { PearlError } from './errors.js';
 
@@ -45,11 +40,31 @@ export type InvoiceState =
   | 'expired'
   | 'conflicted';
 
-/** A payment txid the invoice has observed, with when it was first seen. */
-export interface ObservedPayment {
+/**
+ * Where a payment stands in the chain view: in the mempool, in a block, no
+ * longer listed for the address although the transaction is still known,
+ * or unknown to the chain view altogether.
+ */
+export type InvoicePaymentStatus = 'unconfirmed' | 'confirmed' | 'unlisted' | 'vanished';
+
+/** A transaction that paid the invoice address, counted or not. */
+export interface InvoicePayment {
   readonly txid: string;
-  /** Epoch seconds at which this payment was first observed. */
+  /** Total paid to the invoice address by this transaction, in grain. */
+  readonly amount: bigint;
+  readonly status: InvoicePaymentStatus;
+  /** The block it is in now; null unless status is "confirmed". */
+  readonly block: BlockRef | null;
+  /** Confirmations now; 0 unless status is "confirmed". */
+  readonly confirmations: number;
+  /** Epoch seconds when it was first seen, by this invoice or by the backend. */
   readonly firstSeenAt: number;
+  /** The earliest header time of a block it has been seen in, or null. */
+  readonly firstBlockTime: number | null;
+  /** Whether there is evidence it existed before expiresAt. Never turns back to false. */
+  readonly onTime: boolean;
+  /** Whether it counts toward paidAmount: on time, and listed for the address now. */
+  readonly counted: boolean;
 }
 
 /** Configuration required to create an invoice. */
@@ -71,10 +86,12 @@ export interface CreateInvoiceConfig {
  * refreshInvoice derives a new record rather than mutating it.
  */
 export interface Invoice extends CreateInvoiceConfig {
-  /** Payment txids observed so far, with first-seen timestamps. */
-  readonly observedPayments: readonly ObservedPayment[];
-  /** Sum of payments that count toward the invoice. */
+  /** Every payment seen at the address, in the order first seen. */
+  readonly payments: readonly InvoicePayment[];
+  /** Sum of the payments that count. */
   readonly paidAmount: bigint;
+  /** Sum of the late payments the chain view still lists. */
+  readonly uncountedAmount: bigint;
   /** Confirmations of the least-confirmed counted payment; 0 if none. */
   readonly confirmations: number;
   readonly state: InvoiceState;
@@ -119,7 +136,7 @@ function assertValidConfig(config: CreateInvoiceConfig, network: PearlNetwork): 
  */
 export function createInvoice(config: CreateInvoiceConfig, network: PearlNetwork): Invoice {
   assertValidConfig(config, network);
-  return { ...config, observedPayments: [], paidAmount: 0n, confirmations: 0, state: 'awaiting' };
+  return { ...config, payments: [], paidAmount: 0n, uncountedAmount: 0n, confirmations: 0, state: 'awaiting' };
 }
 
 // A height that is missing or not a number must never count as confirmed:
@@ -132,36 +149,29 @@ function blockHeight(block: BlockRef, what: string): number {
   return height!;
 }
 
-/**
- * Recompute an invoice from its persisted record and the current chain
- * view. Pure with respect to the invoice: the input is not mutated and a
- * new record is returned. `now` is epoch seconds and defaults to the
- * current time; inject it for deterministic evaluation.
- *
- * What the chain backend returns is checked, not trusted: a tip or block
- * without an integer height, or a payment whose amount is not a bigint from
- * 0 to MAX_GRAIN, throws instead of producing a state.
- */
-export async function refreshInvoice(
-  invoice: Invoice,
-  client: ChainClient,
-  now: number = Math.floor(Date.now() / 1000),
-): Promise<Invoice> {
+function optionalTime(value: unknown, what: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new PearlError('BACKEND_RESPONSE', `chain backend returned ${what} that is not epoch seconds`);
+  }
+  return value as number;
+}
+
+function assertNow(now: number): void {
   if (!Number.isSafeInteger(now) || now < 0) {
     throw new Error('now must be a non-negative integer of epoch seconds');
   }
-  const [tip, activity] = await Promise.all([
-    client.getTip(),
-    client.getAddressActivity(invoice.address),
-  ]);
+}
 
-  const tipHeight = blockHeight(tip, 'a tip');
+interface Listed {
+  amount: bigint;
+  block: BlockRef | null;
+  seenAt: number | undefined;
+}
 
-  // Entries sharing a txid are the same payment reported more than once.
-  const current = new Map<
-    string,
-    { amount: bigint; blockHeight: number | null; blockHash: string | null }
-  >();
+// Checks what the backend returned and folds duplicate reports of a txid.
+function listedPayments(activity: readonly AddressPayment[]): Map<string, Listed> {
+  const listed = new Map<string, Listed>();
   for (const payment of activity) {
     if (typeof payment.txid !== 'string' || payment.txid.length === 0) {
       throw new PearlError('BACKEND_RESPONSE', 'chain backend returned a payment without a txid');
@@ -172,59 +182,90 @@ export async function refreshInvoice(
     if (payment.block === undefined) {
       throw new PearlError('BACKEND_RESPONSE', `chain backend returned no block field for ${payment.txid}; unconfirmed is null`);
     }
-    const height = payment.block === null ? null : blockHeight(payment.block, `a block for ${payment.txid}`);
-    const blockHash = payment.block === null ? null : payment.block.hash;
-    const previous = current.get(payment.txid);
+    let block: BlockRef | null = null;
+    if (payment.block !== null) {
+      const height = blockHeight(payment.block, `a block for ${payment.txid}`);
+      const time = optionalTime(payment.block.time, `a block time for ${payment.txid}`);
+      block = time === undefined ? { height, hash: payment.block.hash } : { height, hash: payment.block.hash, time };
+    }
+    const seenAt = optionalTime(payment.seenAt, `a seenAt for ${payment.txid}`);
+    const previous = listed.get(payment.txid);
     if (previous !== undefined) {
       if (
         previous.amount !== payment.amount ||
-        previous.blockHeight !== height ||
-        previous.blockHash !== blockHash
+        previous.block?.height !== block?.height ||
+        previous.block?.hash !== block?.hash ||
+        previous.block?.time !== block?.time
       ) {
         throw new PearlError('BACKEND_RESPONSE', `chain backend returned conflicting entries for ${payment.txid}`);
       }
       continue;
     }
-    current.set(payment.txid, { amount: payment.amount, blockHeight: height, blockHash });
+    listed.set(payment.txid, { amount: payment.amount, block, seenAt });
   }
+  return listed;
+}
 
-  // Merge with persisted observations, stamping new txids as first seen now.
-  const firstSeen = new Map<string, number>(
-    invoice.observedPayments.map((p) => [p.txid, p.firstSeenAt]),
-  );
-  for (const txid of current.keys()) {
-    if (!firstSeen.has(txid)) firstSeen.set(txid, now);
-  }
-  const observedPayments: ObservedPayment[] = [...firstSeen.entries()].map(
-    ([txid, at]) => ({ txid, firstSeenAt: at }),
-  );
+/** What one refresh read from the chain for one invoice. */
+interface ChainView {
+  tipHeight: number;
+  listed: Map<string, Listed>;
+  /** Recorded txids that are not listed, mapped to whether the chain view still knows them. */
+  known: Map<string, boolean>;
+}
 
-  // A previously observed payment the chain view no longer knows is a conflict.
-  const vanished = await Promise.all(
-    [...firstSeen.keys()]
-      .filter(
-        (txid) =>
-          !current.has(txid) && (firstSeen.get(txid) ?? now) < invoice.expiresAt,
-      )
-      .map(async (txid) => (await client.getTransaction(txid)) === null),
-  );
-  const conflicted = vanished.some((gone) => gone);
+function minTime(a: number | null, b: number | undefined): number | null {
+  if (b === undefined) return a;
+  return a === null || b < a ? b : a;
+}
 
-  // Only payments first seen strictly before expiry count toward the amount.
-  const counted = [...current.entries()].filter(
-    ([txid]) => (firstSeen.get(txid) ?? now) < invoice.expiresAt,
-  );
-  let paidAmount = 0n;
-  let confirmations = 0;
-  if (counted.length > 0) {
-    confirmations = Number.MAX_SAFE_INTEGER;
-    for (const [, payment] of counted) {
-      paidAmount += payment.amount;
-      const c =
-        payment.blockHeight === null ? 0 : Math.max(0, tipHeight - payment.blockHeight + 1);
-      if (c < confirmations) confirmations = c;
+// The pure half of a refresh: the stored record, what the chain shows and
+// the clock in, the new record out.
+function applyView(invoice: Invoice, view: ChainView, now: number): Invoice {
+  const record = (txid: string, previous: InvoicePayment | undefined): InvoicePayment => {
+    const listed = view.listed.get(txid);
+    const firstSeenAt = Math.min(previous?.firstSeenAt ?? now, listed?.seenAt ?? now);
+    if (listed === undefined) {
+      const status: InvoicePaymentStatus = view.known.get(txid) === true ? 'unlisted' : 'vanished';
+      return { ...previous!, status, block: null, confirmations: 0, firstSeenAt, counted: false };
     }
+    const firstBlockTime = minTime(previous?.firstBlockTime ?? null, listed.block?.time);
+    const onTime =
+      previous?.onTime === true ||
+      firstSeenAt < invoice.expiresAt ||
+      (firstBlockTime !== null && firstBlockTime < invoice.expiresAt);
+    return {
+      txid,
+      amount: listed.amount,
+      status: listed.block === null ? 'unconfirmed' : 'confirmed',
+      block: listed.block,
+      confirmations: listed.block === null ? 0 : Math.max(0, view.tipHeight - listed.block.height + 1),
+      firstSeenAt,
+      firstBlockTime,
+      onTime,
+      counted: onTime,
+    };
+  };
+  const payments = invoice.payments.map((previous) => record(previous.txid, previous));
+  const recorded = new Set(invoice.payments.map((payment) => payment.txid));
+  for (const txid of view.listed.keys()) {
+    if (!recorded.has(txid)) payments.push(record(txid, undefined));
   }
+
+  let paidAmount = 0n;
+  let uncountedAmount = 0n;
+  let confirmations = Number.MAX_SAFE_INTEGER;
+  let conflicted = false;
+  for (const payment of payments) {
+    if (payment.counted) {
+      paidAmount += payment.amount;
+      confirmations = Math.min(confirmations, payment.confirmations);
+    } else if (payment.status === 'unconfirmed' || payment.status === 'confirmed') {
+      uncountedAmount += payment.amount;
+    }
+    if (payment.onTime && payment.status === 'vanished') conflicted = true;
+  }
+  if (confirmations === Number.MAX_SAFE_INTEGER) confirmations = 0;
 
   let state: InvoiceState;
   if (conflicted) {
@@ -236,8 +277,36 @@ export async function refreshInvoice(
   } else {
     state = now >= invoice.expiresAt ? 'expired' : 'awaiting';
   }
+  return { ...invoice, payments, paidAmount, uncountedAmount, confirmations, state };
+}
 
-  return { ...invoice, observedPayments, paidAmount, confirmations, state };
+async function readView(invoice: Invoice, client: ChainClient, tipHeight: number, activity: readonly AddressPayment[]): Promise<ChainView> {
+  const listed = listedPayments(activity);
+  const missing = invoice.payments.filter((payment) => !listed.has(payment.txid)).map((payment) => payment.txid);
+  const answers = await Promise.all(missing.map(async (txid) => (await client.getTransaction(txid)) !== null));
+  return { tipHeight, listed, known: new Map(missing.map((txid, i) => [txid, answers[i]!])) };
+}
+
+/**
+ * Recompute an invoice from its persisted record and the current chain
+ * view. Pure with respect to the invoice: the input is not mutated and a
+ * new record is returned. `now` is epoch seconds and defaults to the
+ * current time; inject it for deterministic evaluation.
+ *
+ * What the chain backend returns is checked, not trusted: a tip or block
+ * without an integer height, a block time or seenAt that is not epoch
+ * seconds, or a payment whose amount is not a bigint from 0 to MAX_GRAIN,
+ * throws instead of producing a state.
+ */
+export async function refreshInvoice(
+  invoice: Invoice,
+  client: ChainClient,
+  now: number = Math.floor(Date.now() / 1000),
+): Promise<Invoice> {
+  assertNow(now);
+  const [tip, activity] = await Promise.all([client.getTip(), client.getAddressActivity(invoice.address)]);
+  const tipHeight = blockHeight(tip, 'a tip');
+  return applyView(invoice, await readView(invoice, client, tipHeight, activity), now);
 }
 
 /**

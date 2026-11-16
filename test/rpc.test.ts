@@ -447,7 +447,7 @@ describe('pearldChainClient', () => {
       {
         txid: expected('searchrawtransactions', 'confirmed'),
         amount: BigInt(expected('searchrawtransactions', 'confirmedAmount') as string),
-        block: { height: 316, hash: genesisHash },
+        block: { height: 316, hash: genesisHash, time: 1776675600 },
       },
       {
         txid: expected('searchrawtransactions', 'pending'),
@@ -498,7 +498,7 @@ describe('pearldChainClient', () => {
 
   it('finds the confirming block of a known transaction', async () => {
     const { client } = pearld({ getrawtransaction: 'getrawtransaction-verbose', getblockheader: 'getblockheader' });
-    expect(await pearldChainClient(client).getTransaction(txid)).toEqual({ txid, block: { height: 316, hash: genesisHash } });
+    expect(await pearldChainClient(client).getTransaction(txid)).toEqual({ txid, block: { height: 316, hash: genesisHash, time: 1776675600 } });
   });
 
   it('feeds the invoice monitor, which waits on the unconfirmed payment', async () => {

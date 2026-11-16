@@ -56,7 +56,7 @@ describeLive('invoices over pearld', () => {
     expect(await chain.getTip()).toEqual({ height: info.blocks, hash: info.bestblockhash });
     expect(await chain.getTransaction(funding.getId())).toEqual({
       txid: funding.getId(),
-      block: { height: info.blocks, hash: info.bestblockhash },
+      block: { height: info.blocks, hash: info.bestblockhash, time: expect.any(Number) },
     });
     expect(await chain.getTransaction('00'.repeat(32))).toBeNull();
     expect(await chain.getAddressActivity(address(160))).toEqual([]);
@@ -68,11 +68,11 @@ describeLive('invoices over pearld', () => {
     let invoice = monitor.createInvoice(config);
     const refresh = async (): Promise<typeof invoice> => (invoice = await monitor.refreshInvoice(invoice, 1500));
 
-    expect(await refresh()).toMatchObject({ state: 'awaiting', paidAmount: 0n, confirmations: 0, observedPayments: [] });
+    expect(await refresh()).toMatchObject({ state: 'awaiting', paidAmount: 0n, confirmations: 0, payments: [] });
 
     const part = await pay([{ script: script(161), value: 2_000_000n }]);
     expect(await refresh()).toMatchObject({ state: 'awaiting', paidAmount: 2_000_000n, confirmations: 0 });
-    expect(invoice.observedPayments).toEqual([{ txid: transactionId(part), firstSeenAt: 1500 }]);
+    expect(invoice.payments).toMatchObject([{ txid: transactionId(part), amount: 2_000_000n, firstSeenAt: 1500, counted: true }]);
     expect(await chain.getTransaction(transactionId(part))).toEqual({ txid: transactionId(part), block: null });
 
     const rest = await pay([{ script: script(161), value: 3_000_000n }]);
@@ -84,8 +84,8 @@ describeLive('invoices over pearld', () => {
     expect(tip.hash).toBe(first);
     expect(await chain.getAddressActivity(address(161))).toEqual(
       expect.arrayContaining([
-        { txid: transactionId(part), amount: 2_000_000n, block: tip },
-        { txid: transactionId(rest), amount: 3_000_000n, block: tip },
+        { txid: transactionId(part), amount: 2_000_000n, block: { ...tip, time: expect.any(Number) } },
+        { txid: transactionId(rest), amount: 3_000_000n, block: { ...tip, time: expect.any(Number) } },
       ]),
     );
 
@@ -97,7 +97,7 @@ describeLive('invoices over pearld', () => {
     expect(await refresh()).toMatchObject({ state: 'pending', paidAmount: 6_000_000n, confirmations: 0 });
     await mine(2);
     expect(await refresh()).toMatchObject({ state: 'confirmed', paidAmount: 6_000_000n, confirmations: 2 });
-    expect(invoice.observedPayments).toHaveLength(3);
+    expect(invoice.payments).toHaveLength(3);
   });
 
   it('expires an underpaid invoice and ignores a payment first seen after expiry', async () => {
@@ -117,7 +117,7 @@ describeLive('invoices over pearld', () => {
     const confirmed: Transaction[] = [];
     for (let i = 0; i < 4; i++) confirmed.push(await pay([{ script: target, value: BigInt(1_000_000 + i) }]));
     const [blockHash] = await mine(1);
-    const block = { height: await pearld.getBlockCount(), hash: blockHash! };
+    const block = { height: await pearld.getBlockCount(), hash: blockHash!, time: (await pearld.getBlockHeader(blockHash!)).time };
     // The miner orders a block by fee, not by arrival, and the index follows the block.
     const blockOrder = parseBlock(await pearld.getRawBlock(blockHash!)).transactions.slice(1).map(transactionId);
     expect([...blockOrder].sort()).toEqual(confirmed.map(transactionId).sort());
