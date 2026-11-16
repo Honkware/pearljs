@@ -1,17 +1,25 @@
 // Transaction inspection against spends Pearl signed for the vectors: each
 // kind of input must be read back from its witness as what Go built, with
-// the fee, sizes and addresses that follow from the prevouts.
+// the fee, sizes and addresses that follow from the prevouts. Coinbases are
+// read from the blocks Go built: height, payout, witness commitment.
 
 import { describe, expect, it } from 'vitest';
 import {
   addressInfo,
+  blockSubsidy,
+  createTransaction,
   deriveSigningAccountFromSeed,
+  embed,
+  fromOutputScript,
   inspectTransaction,
   networks,
+  parseBlock,
   parseTransaction,
   payFromAccount,
   toOutputScript,
+  witnessCommitment,
   witnessTransactionId,
+  xmssSign,
 } from '../src/index.js';
 import type { InputSpend, TxOutput } from '../src/index.js';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
@@ -199,5 +207,149 @@ describe('inspectTransaction', () => {
     const tx = parseTransaction(vector.finalTxHex);
     expect(() => inspectTransaction(tx, [], network)).toThrow(/prevouts must match/);
     expect(() => inspectTransaction(tx, [{ script: hexToBytes(`5120${vector.tweakedPubKey}`), value: 1n }], network)).toThrow(/worth less/);
+  });
+});
+
+describe('inspectTransaction on a coinbase', () => {
+  const blockOf = (name: string) => parseBlock(hexToBytes(vectors.blocks.find((item) => item.name === name)!.hex));
+  // generate.go numbers its synthetic blocks from height 100 and pays 50 PRL to one P2TR output.
+  const synthetic = vectors.blocks.filter((item) => !item.name.endsWith('-genesis'));
+
+  synthetic.forEach((vector, i) => {
+    it(`reads the coinbase of ${vector.name}`, () => {
+      const block = blockOf(vector.name);
+      const tx = block.transactions[0]!;
+      const info = inspectTransaction(tx, [], networks.regtest);
+      expect(info.txid).toBe(vector.txids[0]);
+      expect(info.fee).toBe(0n);
+      expect(info.feeRate).toBe(0n);
+      expect(info.rbf).toBe(false);
+      expect(info.inputs).toEqual([
+        { txid: '00'.repeat(32), vout: 0xffffffff, sequence: tx.ins[0]!.sequence, value: 0n, script: new Uint8Array(0), address: null, spend: { type: 'coinbase' } },
+      ]);
+      const coinbase = info.coinbase!;
+      expect(coinbase.height).toBe(100 + i);
+      expect(coinbase.script).toEqual(tx.ins[0]!.script);
+      expect(coinbase.reward).toBe(50_0000_0000n);
+      expect(coinbase.subsidy).toBe(blockSubsidy(networks.regtest, 100 + i));
+      expect(coinbase.fees).toBeUndefined();
+      expect(coinbase.unclaimed).toBeUndefined();
+      expect(info.outputs[0]).toMatchObject({ type: 'p2tr', value: 50_0000_0000n, address: fromOutputScript(tx.outs[0]!.script, networks.regtest) });
+      // block.ts finds the commitment on its own; both must name the same bytes.
+      const commitment = witnessCommitment(block);
+      expect(coinbase.witnessCommitment).toEqual(commitment);
+      expect(coinbase.witnessCommitmentIndex).toBe(commitment === null ? -1 : 1);
+    });
+  });
+
+  it('holds the reward against the subsidy and the fees of the block', () => {
+    const tx = blockOf('v3-four-spends').transactions[0]!;
+    const subsidy = blockSubsidy(networks.regtest, 104);
+    const info = inspectTransaction(tx, [], networks.regtest, { blockFees: 1234n });
+    expect(info.coinbase).toMatchObject({ height: 104, subsidy, fees: 1234n, unclaimed: subsidy + 1234n - 50_0000_0000n });
+    const greedy = inspectTransaction(tx, [], networks.regtest, { blockFees: 50_0000_0000n - subsidy - 1n });
+    expect(greedy.coinbase!.unclaimed).toBe(-1n);
+  });
+
+  for (const name of ['mainnet', 'testnet', 'testnet2', 'regtest', 'simnet'] as const) {
+    it(`finds no height in the ${name} genesis coinbase, and takes one from the options`, () => {
+      const tx = blockOf(`${name}-genesis`).transactions[0]!;
+      const info = inspectTransaction(tx, [], networks[name]);
+      expect(info.coinbase).toMatchObject({ height: null, witnessCommitment: null, witnessCommitmentIndex: -1 });
+      expect(info.coinbase!.subsidy).toBeUndefined();
+      expect(inspectTransaction(tx, [], networks[name], { height: 0, blockFees: 0n }).coinbase).toMatchObject({ subsidy: 0n, unclaimed: -info.coinbase!.reward });
+    });
+  }
+
+  it('reads heights as the script builder writes them and refuses any other encoding', () => {
+    const at = (script: number[]): number | null => {
+      const tx = createTransaction(1);
+      tx.addInput(new Uint8Array(32), 0xffffffff, 0xffffffff, Uint8Array.from(script));
+      tx.addOutput(hexToBytes(`5120${'11'.repeat(32)}`), 1n);
+      return inspectTransaction(tx, [], networks.regtest).coinbase!.height;
+    };
+    expect(at([0x00])).toBe(0);
+    expect(at([0x51])).toBe(1);
+    expect(at([0x60, 0xff])).toBe(16);
+    expect(at([0x01, 0x11])).toBe(17);
+    expect(at([0x01, 0x7f])).toBe(127);
+    // 128 needs a second byte to keep the sign bit clear.
+    expect(at([0x02, 0x80, 0x00])).toBe(128);
+    expect(at([0x01, 0x80])).toBeNull();
+    expect(at([0x03, 0xa0, 0x86, 0x01, 0x07])).toBe(100_000);
+    expect(at([0x04, 0xff, 0xff, 0xff, 0x7f])).toBe(0x7fffffff);
+    // Not minimal, a small number as a push, a negative number, a push that runs past the end.
+    expect(at([0x02, 0x64, 0x00])).toBeNull();
+    expect(at([0x01, 0x05])).toBeNull();
+    expect(at([0x04, 0xff, 0xff, 0x00, 0x9d])).toBeNull();
+    expect(at([0x04, 0xfe, 0xff, 0x00, 0x1d])).toBe(0x1d00fffe);
+    expect(at([0x03, 0x01])).toBeNull();
+    expect(at([0x05, 1, 2, 3, 4, 5])).toBeNull();
+    expect(at([])).toBeNull();
+  });
+
+  it('refuses prevouts for a coinbase and a wrong count for anything else', () => {
+    const block = blockOf('v1-one-spend');
+    const prevout = { script: new Uint8Array(0), value: 0n };
+    expect(() => inspectTransaction(block.transactions[0]!, [prevout], networks.regtest)).toThrow(
+      expect.objectContaining({ code: 'INSPECT_PREVOUTS', message: 'a coinbase transaction spends nothing: pass no prevouts' }),
+    );
+    expect(() => inspectTransaction(block.transactions[1]!, [], networks.regtest)).toThrow(
+      expect.objectContaining({ code: 'INSPECT_PREVOUTS', message: 'prevouts must match the transaction inputs' }),
+    );
+    expect(() => inspectTransaction(block.transactions[1]!, [prevout], networks.regtest)).toThrow(
+      expect.objectContaining({ code: 'INSPECT_PREVOUTS', message: 'the prevouts are worth less than the transaction spends' }),
+    );
+  });
+});
+
+describe('inspectTransaction details an explorer shows', () => {
+  for (const vector of vectors.xmss.spends) {
+    it(`reports the one-time index of the XMSS spend ${vector.name}`, () => {
+      const info = inspectTransaction(parseTransaction(vector.finalTxHex), prevoutsOf(vector.prevouts), network);
+      const spend = scriptPath(info.inputs[vector.inputIndex]!.spend);
+      expect(spend.xmssIndex).toBe({ a: 0, b: 3, c: 30 }[vector.key]);
+    });
+  }
+
+  it('reports the index a signature made here was given', () => {
+    const vector = vectors.xmss.spends[0]!;
+    const key = vectors.xmss.keys.find((item) => item.name === vector.key)!;
+    const tx = parseTransaction(vector.finalTxHex);
+    const witness = tx.ins[vector.inputIndex]!.witness;
+    for (const index of [17]) {
+      const signature = xmssSign(hexToBytes(key.secretKey), index, new Uint8Array(32).fill(index));
+      tx.setWitness(vector.inputIndex, [...[0, 1, 2, 3, 4].map((i) => signature.slice(i * 468, (i + 1) * 468)), ...witness.slice(-2)]);
+      expect(scriptPath(inspectTransaction(tx, prevoutsOf(vector.prevouts), network).inputs[vector.inputIndex]!.spend).xmssIndex).toBe(index);
+    }
+  });
+
+  it('reports no XMSS index for a stack that is not one whole signature, or for another leaf', () => {
+    const vector = vectors.xmss.spends[0]!;
+    const tx = parseTransaction(vector.finalTxHex);
+    const witness = tx.ins[vector.inputIndex]!.witness;
+    tx.setWitness(vector.inputIndex, [witness[0]!.slice(1), ...witness.slice(1)]);
+    expect(scriptPath(inspectTransaction(tx, prevoutsOf(vector.prevouts), network).inputs[vector.inputIndex]!.spend).xmssIndex).toBeUndefined();
+    const checksig = vectors.scriptPathSpends[0]!;
+    const other = inspectTransaction(parseTransaction(checksig.finalTxHex), prevoutsOf(checksig.prevouts), network);
+    expect('xmssIndex' in scriptPath(other.inputs[checksig.inputIndex]!.spend)).toBe(false);
+  });
+
+  it('reports what an OP_RETURN output carries when it is a single push', () => {
+    const dataOf = (script: Uint8Array): Uint8Array | undefined => {
+      const tx = createTransaction(2);
+      tx.addInput(new Uint8Array(32).fill(7), 0);
+      tx.addOutput(script, 0n);
+      return inspectTransaction(tx, [{ script: hexToBytes(`5120${'22'.repeat(32)}`), value: 1000n }], network).outputs[0]!.data;
+    };
+    const payload = new Uint8Array(80).map((_, i) => i);
+    expect(dataOf(embed({ data: payload.slice(0, 5) }).output)).toEqual(payload.slice(0, 5));
+    expect(dataOf(embed({ data: payload }).output)).toEqual(payload);
+    expect(dataOf(embed({ data: new Uint8Array(0) }).output)).toEqual(new Uint8Array(0));
+    // A bare OP_RETURN, two pushes, and a push that claims more than is there.
+    expect(dataOf(Uint8Array.from([0x6a]))).toBeUndefined();
+    expect(dataOf(Uint8Array.from([0x6a, 0x01, 0xaa, 0x01, 0xbb]))).toBeUndefined();
+    expect(dataOf(Uint8Array.from([0x6a, 0x05, 0xaa]))).toBeUndefined();
+    expect(dataOf(Uint8Array.from([0x6a, 0x4c]))).toBeUndefined();
   });
 });

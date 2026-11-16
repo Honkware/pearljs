@@ -397,6 +397,8 @@
       "HttpTransportOptions",
       "IndexedDbStoreOptions",
       "InputSpend",
+      "InspectOptions",
+      "InspectedCoinbase",
       "InspectedInput",
       "InspectedOutput",
       "InspectedTransaction",
@@ -827,6 +829,8 @@
     ],
     "types": [
       "InputSpend",
+      "InspectOptions",
+      "InspectedCoinbase",
       "InspectedInput",
       "InspectedOutput",
       "InspectedTransaction",

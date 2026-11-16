@@ -133,6 +133,8 @@ export type PearlErrorCode =
   | 'INVOICE_JSON_INVALID'
   | 'INVOICE_PAYER_UNKNOWN'
   | 'INVOICE_GAP_LIMIT'
+  // Reading the chain
+  | 'INSPECT_PREVOUTS'
   // Wallet stores
   | 'STORE_LOCKED'
   | 'STORE_NOT_FOUND'

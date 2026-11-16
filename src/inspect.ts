@@ -12,9 +12,11 @@
 
 import type { Transaction } from 'bitcoinjs-lib';
 import { fromOutputScript } from './address.js';
+import { blockSubsidy } from './consensus.js';
+import { PearlError } from './errors.js';
 import { parseMultiA } from './multia.js';
 import type { PearlNetwork } from './networks.js';
-import { classifyOutputScript, TAPROOT_ANNEX_TAG, tapLeafHash } from './script.js';
+import { classifyOutputScript, encodeScriptNumber, scriptPush, TAPROOT_ANNEX_TAG, tapLeafHash } from './script.js';
 import type { ScriptClass } from './script.js';
 import type { TxOutput } from './transaction.js';
 import {
@@ -23,9 +25,11 @@ import {
   verifyP2mrLeafCommitment,
   verifyTaprootLeafCommitment,
 } from './scripttree.js';
-import { toHex } from './internal/bytes.js';
+import { concat, equalBytes, toHex } from './internal/bytes.js';
 import type { FeeRate } from './amount.js';
 
+// xmss.ts has the same number; importing it would bring the XMSS code in with every inspect.
+const XMSS_SIGNATURE_LENGTH = 2340;
 // mempool.MaxRBFSequence.
 const MAX_RBF_SEQUENCE = 0xfffffffd;
 
@@ -50,11 +54,19 @@ export type InputSpend =
       keys: Uint8Array[];
       /** Signatures a multi_a leaf needs. */
       threshold?: number;
+      /**
+       * The one-time index an XMSS signature was made with, 0 to 30: the first
+       * four bytes of the signature. Two spends of one key with the same index
+       * expose the key. Left out when the stack is not a whole XMSS signature.
+       */
+      xmssIndex?: number;
       /** Witness items the script runs on, signatures included. */
       stack: Uint8Array[];
       /** Whether the control block and script open the spent output. */
       commits: boolean;
     }
+  /** The input of a coinbase transaction, which spends nothing. */
+  | { type: 'coinbase' }
   /** No witness yet. */
   | { type: 'unsigned' }
   /** The spent output is not P2TR or P2MR, or the witness cannot spend it. */
@@ -83,6 +95,42 @@ export interface InspectedOutput {
   type: ScriptClass;
   /** Null for OP_RETURN and non-standard outputs. */
   address: string | null;
+  /** What an OP_RETURN output carries when it is one push, as `embed` writes it. */
+  data?: Uint8Array;
+}
+
+/** What inspectTransaction reports about a coinbase transaction. Amounts are in grain. */
+export interface InspectedCoinbase {
+  /**
+   * The block height the coinbase script starts with (BIP 34), or null when
+   * the script does not start with one, as in the genesis blocks.
+   */
+  height: number | null;
+  /** The coinbase script: the height, then whatever the miner added. */
+  script: Uint8Array;
+  /** Everything the outputs pay. */
+  reward: bigint;
+  /** blockSubsidy at the height given in the options or read from the script; left out when neither is known. */
+  subsidy?: bigint;
+  /** The block's fees, as given in the options. */
+  fees?: bigint;
+  /**
+   * Subsidy plus fees minus the reward, when both are known: 0n for a miner
+   * that claimed everything, negative for a coinbase no node accepts.
+   */
+  unclaimed?: bigint;
+  /** Index of the output that carries the witness commitment, or -1. */
+  witnessCommitmentIndex: number;
+  /** The 32-byte witness commitment, or null when the coinbase has none. */
+  witnessCommitment: Uint8Array | null;
+}
+
+/** What inspectTransaction can be told about the block a transaction is in. */
+export interface InspectOptions {
+  /** Fees of every other transaction in the block, in grain, to hold a coinbase's reward against. */
+  blockFees?: bigint;
+  /** Height of the block, for a coinbase whose script does not carry it. */
+  height?: number;
 }
 
 /** What inspectTransaction reports. Amounts are in grain. */
@@ -95,27 +143,45 @@ export interface InspectedTransaction {
   size: number;
   weight: number;
   vsize: number;
-  /** Inputs minus outputs, in grain. */
+  /** Inputs minus outputs, in grain. 0n for a coinbase. */
   fee: bigint;
   /** Grain per 1000 vbytes, rounded down. */
   feeRate: FeeRate;
-  /** Whether any input signals replace-by-fee (sequence of 0xfffffffd or less). */
+  /** Whether any input signals replace-by-fee (sequence of 0xfffffffd or less). Never for a coinbase. */
   rbf: boolean;
   inputs: InspectedInput[];
   outputs: InspectedOutput[];
+  /** Present on a coinbase transaction only. */
+  coinbase?: InspectedCoinbase;
 }
 
-/** Describes a transaction given the outputs it spends, in input order, and the network its addresses are on. */
+/**
+ * Describes a transaction given the outputs it spends, in input order, and
+ * the network its addresses are on. A coinbase spends nothing and takes an
+ * empty list; `options` says what is known of its block.
+ *
+ * Throws INSPECT_PREVOUTS when the prevouts do not match the inputs or are
+ * worth less than the outputs.
+ */
 export function inspectTransaction(
   tx: Transaction,
   prevouts: readonly TxOutput[],
   network: PearlNetwork,
+  options: InspectOptions = {},
 ): InspectedTransaction {
-  if (prevouts.length !== tx.ins.length) throw new Error('prevouts must match the transaction inputs');
+  const coinbase = tx.isCoinbase();
+  if (prevouts.length !== (coinbase ? 0 : tx.ins.length)) {
+    throw new PearlError(
+      'INSPECT_PREVOUTS',
+      coinbase ? 'a coinbase transaction spends nothing: pass no prevouts' : 'prevouts must match the transaction inputs',
+    );
+  }
   const inputValue = prevouts.reduce((sum, prevout) => sum + prevout.value, 0n);
   const outputValue = tx.outs.reduce((sum, output) => sum + output.value, 0n);
-  if (inputValue < outputValue) throw new Error('the prevouts are worth less than the transaction spends');
-  const fee = inputValue - outputValue;
+  if (!coinbase && inputValue < outputValue) {
+    throw new PearlError('INSPECT_PREVOUTS', 'the prevouts are worth less than the transaction spends');
+  }
+  const fee = coinbase ? 0n : inputValue - outputValue;
   const vsize = tx.virtualSize();
   return {
     txid: tx.getId(),
@@ -127,15 +193,15 @@ export function inspectTransaction(
     vsize,
     fee,
     feeRate: (fee * 1000n) / BigInt(vsize),
-    rbf: tx.ins.some((input) => input.sequence <= MAX_RBF_SEQUENCE),
+    rbf: !coinbase && tx.ins.some((input) => input.sequence <= MAX_RBF_SEQUENCE),
     inputs: tx.ins.map((input, i) => {
+      const outpoint = { txid: toHex(Uint8Array.from(input.hash).reverse()), vout: input.index, sequence: input.sequence };
+      if (coinbase) return { ...outpoint, value: 0n, script: new Uint8Array(0), address: null, spend: { type: 'coinbase' as const } };
       const prevout = prevouts[i]!;
       const annexed = input.witness.length >= 2 && input.witness[input.witness.length - 1]![0] === TAPROOT_ANNEX_TAG;
       const stack = annexed ? input.witness.slice(0, -1) : input.witness;
       return {
-        txid: toHex(Uint8Array.from(input.hash).reverse()),
-        vout: input.index,
-        sequence: input.sequence,
+        ...outpoint,
         value: prevout.value,
         script: prevout.script,
         address: addressOf(prevout.script, network),
@@ -143,13 +209,80 @@ export function inspectTransaction(
         ...(annexed ? { annex: input.witness[input.witness.length - 1]! } : {}),
       };
     }),
-    outputs: tx.outs.map((output) => ({
-      value: output.value,
-      script: output.script,
-      type: classifyOutputScript(output.script),
-      address: addressOf(output.script, network),
-    })),
+    outputs: tx.outs.map((output) => {
+      const type = classifyOutputScript(output.script);
+      const data = type === 'nulldata' ? embeddedData(output.script) : null;
+      return {
+        value: output.value,
+        script: output.script,
+        type,
+        address: addressOf(output.script, network),
+        ...(data === null ? {} : { data }),
+      };
+    }),
+    ...(coinbase ? { coinbase: inspectCoinbase(tx, outputValue, network, options) } : {}),
   };
+}
+
+function inspectCoinbase(tx: Transaction, reward: bigint, network: PearlNetwork, options: InspectOptions): InspectedCoinbase {
+  const script = tx.ins[0]!.script;
+  const height = coinbaseHeight(script);
+  const at = options.height ?? height;
+  const subsidy = at === null ? undefined : blockSubsidy(network, at);
+  let witnessCommitmentIndex = -1;
+  // ValidateWitnessCommitment takes the last output that carries one.
+  for (let i = tx.outs.length - 1; i >= 0 && witnessCommitmentIndex < 0; i -= 1) {
+    const out = tx.outs[i]!.script;
+    if (out.length >= WITNESS_COMMITMENT_LENGTH && equalBytes(out.subarray(0, WITNESS_MAGIC.length), WITNESS_MAGIC)) witnessCommitmentIndex = i;
+  }
+  return {
+    height,
+    script,
+    reward,
+    ...(subsidy === undefined ? {} : { subsidy }),
+    ...(options.blockFees === undefined ? {} : { fees: options.blockFees }),
+    ...(subsidy === undefined || options.blockFees === undefined ? {} : { unclaimed: subsidy + options.blockFees - reward }),
+    witnessCommitmentIndex,
+    witnessCommitment:
+      witnessCommitmentIndex < 0 ? null : tx.outs[witnessCommitmentIndex]!.script.slice(WITNESS_MAGIC.length, WITNESS_COMMITMENT_LENGTH),
+  };
+}
+
+// OP_RETURN, a push of 36 bytes, then the tag aa21a9ed (blockchain.WitnessMagicBytes).
+const WITNESS_MAGIC = Uint8Array.from([0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed]);
+const WITNESS_COMMITMENT_LENGTH = WITNESS_MAGIC.length + 32;
+
+const GENESIS_PREFIX = Uint8Array.from([0x04, 0xff, 0xff, 0x00, 0x1d]);
+
+/**
+ * blockchain.ExtractCoinbaseHeight with the check checkSerializedHeight adds:
+ * the script must start with the height as a script builder pushes it.
+ */
+function coinbaseHeight(script: Uint8Array): number | null {
+  const first = script[0];
+  if (first === undefined) return null;
+  if (first === 0) return 0;
+  if (first >= 0x51 && first <= 0x60) return first - 0x50;
+  if (first > 4 || script.length < 1 + first) return null;
+  // Every Pearl genesis coinbase starts with Bitcoin's push of 0x1d00ffff, which would read as a height.
+  if (equalBytes(script.subarray(0, GENESIS_PREFIX.length), GENESIS_PREFIX)) return null;
+  let height = 0;
+  for (let i = first; i >= 1; i -= 1) height = height * 256 + script[i]!;
+  if (height > 0x7fffffff) return null;
+  const canonical = scriptPush(encodeScriptNumber(BigInt(height)));
+  return equalBytes(script.subarray(0, canonical.length), canonical) ? height : null;
+}
+
+// The payload of `OP_RETURN <push>`, or null for any other shape.
+function embeddedData(script: Uint8Array): Uint8Array | null {
+  const opcode = script[1];
+  if (opcode === undefined) return null;
+  let start = 2;
+  let length = opcode;
+  if (opcode === 0x4c) [start, length] = [3, script[2] ?? -1];
+  else if (opcode === 0x4d) [start, length] = [4, script.length >= 4 ? script[2]! | (script[3]! << 8) : -1];
+  else if (opcode > 0x4b) return null;
+  return length >= 0 && script.length === start + length ? script.slice(start) : null;
 }
 
 function addressOf(script: Uint8Array, network: PearlNetwork): string | null {
@@ -186,18 +319,29 @@ function inputSpend(stack: readonly Uint8Array[], prevScript: Uint8Array): Input
   } catch {
     commits = false;
   }
+  const details = leafDetails(script);
+  const items = stack.slice(0, -2);
+  const xmssIndex = details.leaf === 'xmss' ? xmssSignatureIndex(items) : null;
   return {
     type: 'scriptPath',
     p2mr,
-    ...leafDetails(script),
+    ...details,
+    ...(xmssIndex === null ? {} : { xmssIndex }),
     script,
     leafVersion,
     leafHash: tapLeafHash(script, leafVersion),
     controlBlock,
     ...(internalPubkey === undefined ? {} : { internalPubkey }),
-    stack: stack.slice(0, -2),
+    stack: items,
     commits,
   };
+}
+
+// An XMSS signature is spread over witness items of at most 520 bytes and starts with its index, big-endian.
+function xmssSignatureIndex(items: readonly Uint8Array[]): number | null {
+  const signature = concat(items);
+  if (signature.length !== XMSS_SIGNATURE_LENGTH) return null;
+  return ((signature[0]! << 24) | (signature[1]! << 16) | (signature[2]! << 8) | signature[3]!) >>> 0;
 }
 
 function leafDetails(script: Uint8Array): { leaf: LeafKind; keys: Uint8Array[]; threshold?: number } {
