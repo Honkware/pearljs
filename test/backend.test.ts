@@ -6,6 +6,10 @@ import { describe, expect, it } from 'vitest';
 import {
   MissingIndexError,
   OYSTER_DEFAULT_FEE_RATE,
+  PEARLD_LIMITED_METHODS,
+  PearldClient,
+  UnsupportedMethodError,
+  probePearld,
   PearlRpcError,
   assembleScriptTree,
   buildFilter,
@@ -36,7 +40,7 @@ import {
   tipHeight,
   txids,
 } from './backend-helpers.js';
-import { expected, fixture, rejection } from './rpc-helpers.js';
+import { expected, fakeFetch, fixture, rejection, type Route } from './rpc-helpers.js';
 
 const outpoints = (utxos: { txid: string; vout: number }[]) => utxos.map((u) => `${u.txid}:${u.vout}`).sort();
 const heightOf = (confirmations: number) => tipHeight - confirmations + 1;
@@ -220,8 +224,8 @@ describe('pearld backend and P2MR addresses', () => {
         calls.push(method);
         const answer = (): unknown => {
           switch (method) {
-            case 'getblockchaininfo':
-              return { blocks: blocks.length - 1, bestblockhash: hashAt(blocks.length - 1) };
+            case 'getbestblock':
+              return { height: blocks.length - 1, hash: hashAt(blocks.length - 1) };
             case 'getblockhash':
               return hashAt(params[0] as number);
             case 'getcfilter': {
@@ -385,5 +389,100 @@ describe('Oyster backend', () => {
     await expect(backend.broadcast('00')).rejects.toThrow('send with sendMany instead');
     expect(await backend.estimateFeeRate()).toBe(OYSTER_DEFAULT_FEE_RATE);
     expect(await backend.getSpendStatus({ txid: txids.a1, vout: 0 })).toEqual({ status: 'unknown' });
+  });
+});
+
+// What pearld lets its limited RPC user call (rpcLimited, node/rpcserver.go),
+// with refusals served by pearld's own HTTP handler for that user.
+describe('the limited RPC user', () => {
+  const probe = (routes: Record<string, Route>) =>
+    probePearld(
+      new PearldClient({
+        url: 'https://127.0.0.1:18334',
+        fetch: fakeFetch({
+          getbestblock: 'backend-getbestblock',
+          getblock: 'getblock-verbose',
+          getrawmempool: 'getrawmempool',
+          getcfilter: 'getcfilter',
+          ...routes,
+        }).fetch,
+      }),
+    );
+
+  it('is told apart from the admin, with the indexes each node keeps', async () => {
+    const admin = await probe({
+      sendrawtransaction: 'sendrawtransaction-undecodable',
+      gettxspendingprevout: 'gettxspendingprevout-empty',
+      searchrawtransactions: 'searchrawtransactions-none',
+      getrawtransaction: 'getrawtransaction-hex',
+    });
+    expect(admin).toEqual({ limited: false, broadcast: true, mempoolSpends: true, mempool: true, addrIndex: true, txIndex: true, cfIndex: true, backend: 'pearld' });
+
+    const limited = await probe({
+      sendrawtransaction: 'limited-sendrawtransaction',
+      gettxspendingprevout: 'limited-gettxspendingprevout',
+      searchrawtransactions: 'searchrawtransactions-noindex',
+      getrawtransaction: 'getrawtransaction-noindex',
+    });
+    expect(limited).toEqual({ limited: true, broadcast: false, mempoolSpends: false, mempool: true, addrIndex: false, txIndex: false, cfIndex: true, backend: 'filters' });
+
+    const bare = await probe({
+      sendrawtransaction: 'sendrawtransaction-undecodable',
+      gettxspendingprevout: 'gettxspendingprevout-empty',
+      searchrawtransactions: 'searchrawtransactions-noindex',
+      getrawtransaction: 'getrawtransaction-noindex',
+      getcfilter: 'getcfilter-noindex',
+    });
+    expect(bare).toMatchObject({ limited: false, addrIndex: false, cfIndex: false, backend: null });
+  });
+
+  it('lets an unreachable node fail the probe instead of reading it as a refusal', async () => {
+    const down = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: (async () => Promise.reject(new TypeError('fetch failed'))) as typeof fetch });
+    await expect(probePearld(down)).rejects.toMatchObject({ kind: 'network' });
+  });
+
+  it('may call every method the backends and the filter scan use to read, and none that send', () => {
+    for (const method of ['getbestblock', 'getblockhash', 'getblock', 'getblockheader', 'getcfilter', 'getcfilterheader', 'getrawmempool', 'getrawtransaction', 'gettxout', 'searchrawtransactions', 'estimatefee', 'getinfo']) {
+      expect(PEARLD_LIMITED_METHODS.has(method)).toBe(true);
+    }
+    for (const method of ['getblockchaininfo', 'sendrawtransaction', 'gettxspendingprevout', 'testmempoolaccept', 'stopnotifyblocks']) {
+      expect(PEARLD_LIMITED_METHODS.has(method)).toBe(false);
+    }
+  });
+
+  it('reads the tip with getbestblock, which the limited user may call', async () => {
+    const { client, sent } = indexedPearld({ getbestblock: 'limited-getbestblock', getblockchaininfo: 'limited-getblockchaininfo' });
+    expect(await pearldBackend(client, { network }).getTip()).toEqual({ height: 0, hash: expected('getblock-raw', 'hash') });
+    expect(sent.map((s) => s.body.method)).toEqual(['getbestblock']);
+  });
+
+  it('refuses a broadcast with a typed error that names the method and the way out', async () => {
+    const { client } = indexedPearld({ sendrawtransaction: 'limited-sendrawtransaction' });
+    const err = await pearldBackend(client, { network }).broadcast('00').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(UnsupportedMethodError);
+    expect(err).toMatchObject({ code: 'BACKEND_UNSUPPORTED', method: 'sendrawtransaction' });
+    expect((err as Error).message).toMatch(/limited RPC user.*proxy/);
+    expect((err as Error).cause).toBeInstanceOf(PearlRpcError);
+  });
+
+  it('broadcasts through the endpoint given for it while reading through the limited one', async () => {
+    const reader = indexedPearld({ sendrawtransaction: 'limited-sendrawtransaction' });
+    const writer = indexedPearld();
+    const backend = pearldBackend(reader.client, { network, broadcast: writer.client });
+    expect(await backend.broadcast('00')).toBe(expected('getrawtransaction-hex', 'txid'));
+    expect(reader.sent).toEqual([]);
+    expect(writer.sent.map((s) => s.body.method)).toEqual(['sendrawtransaction']);
+  });
+
+  it('finds a mempool spend from the address index when gettxspendingprevout is refused, and stops asking for it', async () => {
+    const { client, sent } = indexedPearld({ gettxout: 'backend-gettxout-a1', gettxspendingprevout: 'limited-gettxspendingprevout' });
+    const backend = pearldBackend(client, { network });
+    expect(await backend.getSpendStatus({ txid: txids.a1, vout: 0 })).toEqual({ status: 'spent', spender: txids.m1, confirmed: false });
+    const unspent = indexedPearld({ gettxout: 'backend-gettxout-a3', gettxspendingprevout: 'limited-gettxspendingprevout' });
+    const other = pearldBackend(unspent.client, { network });
+    expect(await other.getSpendStatus({ txid: txids.a3, vout: 0 })).toEqual({ status: 'unspent', confirmations: 3 });
+    expect(await other.getSpendStatus({ txid: txids.a3, vout: 0 })).toEqual({ status: 'unspent', confirmations: 3 });
+    expect(unspent.sent.filter((s) => s.body.method === 'gettxspendingprevout')).toHaveLength(1);
+    expect(sent.filter((s) => s.body.method === 'gettxspendingprevout')).toHaveLength(1);
   });
 });

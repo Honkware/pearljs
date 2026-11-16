@@ -432,7 +432,7 @@ describe('decimalToGrain', () => {
 describe('pearldChainClient', () => {
   it('reports address payments and tip for the invoice monitor', async () => {
     const { client, sent } = pearld({
-      getblockchaininfo: 'getblockchaininfo',
+      getbestblock: 'backend-getbestblock',
       // The fixture holds one confirmed and one mempool transaction; the
       // mempool is then read from the confirmed count on, in one request.
       searchrawtransactions: (r) =>
@@ -503,7 +503,7 @@ describe('pearldChainClient', () => {
 
   it('feeds the invoice monitor, which waits on the unconfirmed payment', async () => {
     const { client } = pearld({
-      getblockchaininfo: 'getblockchaininfo',
+      getbestblock: 'backend-getbestblock',
       searchrawtransactions: 'searchrawtransactions',
       getblockheader: 'getblockheader',
       getrawtransaction: 'getrawtransaction-verbose',
@@ -1188,8 +1188,8 @@ describe('address paging', () => {
   });
 
   it('refuses a tip height that is not a block height', async () => {
-    const bad = fixture('getblockchaininfo').body.replace('"blocks":321', '"blocks":3.5');
-    const { client } = pearld({ getblockchaininfo: (r) => new Response(bad.replace(/"id":\d+}/, `"id":${r.body.id}}`)) });
+    const bad = fixture('backend-getbestblock').body.replace('"height":321', '"height":3.5');
+    const { client } = pearld({ getbestblock: (r) => new Response(bad.replace(/"id":\d+}/, `"id":${r.body.id}}`)) });
     expect((await rejection(pearldChainClient(client).getTip())).message).toContain('expected a block height, got 3.5');
   });
 });

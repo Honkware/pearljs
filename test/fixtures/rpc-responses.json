@@ -350,8 +350,23 @@
       "spender": "97a6a6bc61f0f42df4132aa9fa72b11180d29abd1f20412a9473ba3a343b2281"
     }
   },
+  "gettxspendingprevout-empty": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":[],\"error\":null,\"id\":7}\n"
+  },
   "importprivkey": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":null,\"id\":34}\n"
+  },
+  "limited-getbestblock": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":{\"hash\":\"78d0ab27df6a51a8e9dbbdefffca1ebbbeb3818cb083ce2c2f43b047247e5832\",\"height\":0},\"error\":null,\"id\":11}\n"
+  },
+  "limited-getblockchaininfo": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-32603,\"message\":\"limited user not authorized for this method\"},\"id\":8}\n"
+  },
+  "limited-gettxspendingprevout": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-32603,\"message\":\"limited user not authorized for this method\"},\"id\":10}\n"
+  },
+  "limited-sendrawtransaction": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-32603,\"message\":\"limited user not authorized for this method\"},\"id\":9}\n"
   },
   "limited-user": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-32603,\"message\":\"limited user not authorized for this method\"},\"id\":26}\n"
@@ -456,6 +471,9 @@
   },
   "sendrawtransaction-rejected": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-26,\"message\":\"TX rejected: transaction version 3 is not standard\"},\"id\":20}\n"
+  },
+  "sendrawtransaction-undecodable": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-22,\"message\":\"TX decode failed: unexpected EOF\"},\"id\":6}\n"
   },
   "sendtoaddress": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":\"17374efc4cd0c7601f5785b7e09a8dbcff6741225109960bf026e95c20e11505\",\"error\":null,\"id\":37}\n"

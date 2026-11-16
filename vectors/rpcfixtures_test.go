@@ -392,16 +392,25 @@ func servedFixtures(t *testing.T, params *chaincfg.Params, mm *mempool.MockTxMem
 	}))
 	defer server.Close()
 
+	// The same handler as pearld serves its limited user (--rpclimituser):
+	// methods outside rpcLimited are refused, the rest answered as for the
+	// admin.
+	limited := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.jsonRPCRead(w, r, false)
+	}))
+	defer limited.Close()
+
 	fixtures := map[string]rpcFixture{}
-	post := func(body string) string {
+	postTo := func(url, body string) string {
 		t.Helper()
-		resp, err := http.Post(server.URL, "application/json", bytes.NewBufferString(body))
+		resp, err := http.Post(url, "application/json", bytes.NewBufferString(body))
 		must(err)
 		defer resp.Body.Close()
 		out, err := io.ReadAll(resp.Body)
 		must(err)
 		return string(out)
 	}
+	post := func(body string) string { return postTo(server.URL, body) }
 	id := 100
 	request := func(method string, params ...any) string {
 		t.Helper()
@@ -494,6 +503,19 @@ func servedFixtures(t *testing.T, params *chaincfg.Params, mm *mempool.MockTxMem
 	fixtures["batch"] = rpcFixture{Body: post(batch), Expect: map[string]any{"hash": genesisHash, "relayFee": grains(int64(mempool.DefaultMinRelayTxFee))}}
 	fixtures["batch-empty"] = rpcFixture{Body: post("[]")}
 	fixtures["batch-unreadable"] = rpcFixture{Body: post("[{]")}
+
+	// What a capability probe sends: harmless calls whose answers tell the
+	// admin from the limited user and show which indexes are on.
+	serve("sendrawtransaction-undecodable", nil, "sendrawtransaction", "00")
+	serve("gettxspendingprevout-empty", nil, "gettxspendingprevout", []any{})
+	serveLimited := func(name, method string, params ...any) {
+		t.Helper()
+		fixtures[name] = rpcFixture{Body: postTo(limited.URL, request(method, params...))}
+	}
+	serveLimited("limited-getblockchaininfo", "getblockchaininfo")
+	serveLimited("limited-sendrawtransaction", "sendrawtransaction", "00")
+	serveLimited("limited-gettxspendingprevout", "gettxspendingprevout", []any{})
+	serveLimited("limited-getbestblock", "getbestblock")
 	return fixtures
 }
 

@@ -204,6 +204,28 @@ describe('pearld websocket client', () => {
     await ws.close();
   });
 
+  it('keeps a subscription the limited user may not stop, without reporting an error', async () => {
+    const ws = client();
+    await Promise.all([ws.connect(), serve()]);
+    const socket = last();
+    const errors = collect(ws, 'error');
+    const stop = ws.watchBlocks({ onBlock: () => {} });
+    await flush();
+    socket.reply('notifyblocks');
+    stop();
+    await flush();
+    expect(socket.methods().at(-1)).toBe('stopnotifyblocks');
+    socket.push(replyFrame('reply-limited', socket.sent.at(-1)!.id));
+    await flush();
+    expect(errors).toEqual([]);
+    // pearld still sends blocks, so a new watcher needs no notifyblocks.
+    const blocks: BlockEvent[] = [];
+    ws.watchBlocks({ onBlock: (event) => blocks.push(event) });
+    await flush();
+    expect(socket.methods().filter((m) => m === 'notifyblocks')).toHaveLength(1);
+    await ws.close();
+  });
+
   it('converts amounts both ways and keeps the session id exact', async () => {
     const ws = client();
     await Promise.all([ws.connect(), serve()]);
@@ -706,7 +728,7 @@ describe('pearld websocket client', () => {
 
     // The chain client for the invoice monitor takes the websocket client as it takes the fetch one.
     const tip = pearldChainClient(ws).getTip();
-    await answer('getblockchaininfo');
+    await answer('backend-getbestblock');
     expect((await tip).height).toBe(321);
 
     const balance = new OysterRpc(ws).getBalance();

@@ -28,6 +28,7 @@ import {
   PearlRpcError,
   PearldRpc,
   RPC_ERROR_CODES,
+  isLimitedUserRefusal,
   isUnknownTransaction,
   paidTo,
   pearldChainClient,
@@ -35,7 +36,7 @@ import {
 } from './rpc.js';
 import { toHex } from './internal/bytes.js';
 import { safeHeight } from './internal/rpc-wire.js';
-import type { OutPointParam, Rpc, SearchRawTransactionsResult, WalletTransactionEntry } from './rpc.js';
+import type { OutPointParam, Rpc, SearchRawTransactionsResult, TxOutResult, WalletTransactionEntry } from './rpc.js';
 import { PearlError } from './errors.js';
 import { parseTransaction } from './transaction.js';
 import type { FeeRate } from './amount.js';
@@ -126,6 +127,87 @@ export class MissingIndexError extends PearlError {
   }
 }
 
+/**
+ * The server will not do this for these credentials or in this mode: a
+ * method pearld refuses its limited RPC user, or a raw broadcast through an
+ * Oyster in SPV mode. `method` names the RPC method refused.
+ */
+export class UnsupportedMethodError extends PearlError {
+  override name = 'UnsupportedMethodError';
+  readonly method: string;
+
+  constructor(method: string, message: string, cause?: unknown) {
+    super('BACKEND_UNSUPPORTED', message, cause === undefined ? undefined : { cause });
+    this.method = method;
+  }
+}
+
+/** What a pearld endpoint lets a set of credentials do, as probePearld finds it. */
+export interface PearldCapabilities {
+  /** The credentials are pearld's limited RPC user (--rpclimituser). */
+  readonly limited: boolean;
+  /** sendrawtransaction is allowed. The limited user may not broadcast. */
+  readonly broadcast: boolean;
+  /** gettxspendingprevout is allowed, so a mempool spend is found by outpoint. Not for the limited user. */
+  readonly mempoolSpends: boolean;
+  /** getrawmempool is allowed, so mempool transactions can be seen at all. */
+  readonly mempool: boolean;
+  /** pearld runs with --addrindex: pearldBackend works. */
+  readonly addrIndex: boolean;
+  /** pearld runs with --txindex (which --addrindex turns on): getrawtransaction finds confirmed transactions. */
+  readonly txIndex: boolean;
+  /** pearld keeps its compact filter index (on unless --nocfilters): filterBackend works. */
+  readonly cfIndex: boolean;
+  /** The backend this endpoint serves best: pearldBackend with the address index, filterBackend with only filters, or neither. */
+  readonly backend: 'pearld' | 'filters' | null;
+}
+
+/**
+ * Finds out what a pearld endpoint allows with the credentials `rpc`
+ * carries and which indexes it keeps, with eight calls that change nothing:
+ * getbestblock, sendrawtransaction of an undecodable "00",
+ * gettxspendingprevout of no outputs, getrawmempool, searchrawtransactions,
+ * getcfilter and getblock of the tip, and getrawtransaction of the tip's
+ * coinbase. On a chain of only the genesis block, whose coinbase no index
+ * holds, `txIndex` follows `addrIndex`.
+ */
+export async function probePearld(rpc: Rpc): Promise<PearldCapabilities> {
+  const node = new PearldRpc(rpc);
+  // The error reply a call ends in, or null when it succeeds. Anything but an
+  // error reply, such as an unreachable node, is thrown.
+  const answer = async (run: () => Promise<unknown>): Promise<PearlRpcError | null> => {
+    try {
+      await run();
+      return null;
+    } catch (err) {
+      if (err instanceof PearlRpcError && err.kind === 'rpc') return err;
+      throw err;
+    }
+  };
+  const best = await node.getBestBlock();
+  const [send, spends, mempool, search, filter, coinbase] = await Promise.all([
+    answer(() => node.sendRawTransaction('00')),
+    answer(() => node.getTxSpendingPrevOut([])),
+    answer(() => node.getRawMempool()),
+    answer(() => node.searchRawTransactions('probe', { count: 1 })),
+    answer(() => node.getCFilter(best.hash)),
+    best.height === 0 ? Promise.resolve(undefined) : node.getBlock(best.hash).then((block) => answer(() => node.getRawTransactionHex(block.tx[0]!))),
+  ]);
+  const refused = [send, spends, mempool, search, filter, coinbase].some(isLimitedUserRefusal);
+  const addrIndex = !(search !== null && search.message.includes('Address index must be enabled'));
+  const cfIndex = !(filter !== null && filter.message.includes('CF index must be enabled'));
+  return {
+    limited: refused,
+    broadcast: !isLimitedUserRefusal(send),
+    mempoolSpends: !isLimitedUserRefusal(spends),
+    mempool: !isLimitedUserRefusal(mempool),
+    addrIndex,
+    txIndex: coinbase === undefined ? addrIndex : coinbase === null,
+    cfIndex,
+    backend: addrIndex ? 'pearld' : cfIndex ? 'filters' : null,
+  };
+}
+
 /** Splits unspent outputs into confirmed, unconfirmed and immature grains. */
 export function sumBalance(utxos: readonly Utxo[], coinbaseMaturity: number): WalletBalance {
   const balance: WalletBalance = { confirmed: 0n, unconfirmed: 0n, immature: 0n };
@@ -150,6 +232,13 @@ export interface PearldBackendOptions {
    * wallet's first P2MR address was made in, when known. 0 unless given.
    */
   scanFrom?: number;
+  /**
+   * Where broadcast sends transactions instead of `rpc`: a pearld endpoint
+   * with full credentials, or a proxy that forwards sendrawtransaction to
+   * one. Needed when `rpc` carries pearld's limited user, which may not
+   * broadcast.
+   */
+  broadcast?: Rpc;
 }
 
 // The fields of a transaction the backend reads, from the address index or from a block.
@@ -177,6 +266,8 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletBa
   const { network, pageSize = 100, concurrency = 8, scanFrom = 0 } = options;
   if (!Number.isSafeInteger(scanFrom) || scanFrom < 0) throw new RangeError('scanFrom must be a block height');
   const node = new PearldRpc(rpc);
+  const sender = options.broadcast === undefined ? node : new PearldRpc(options.broadcast);
+  const mempoolSpender = mempoolSpends(node);
   const chain = pearldChainClient(node, { pageSize });
   const scans = new Map<string, FilterScan>();
 
@@ -294,6 +385,15 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletBa
     return { status: 'spent', confirmed: true };
   };
 
+  // Without gettxspendingprevout, as for the limited user, the address's
+  // transactions show a mempool spend, since they include the mempool.
+  const listedSpender = async (txid: string, vout: number, out: TxOutResult): Promise<string | null> => {
+    const address = out.scriptPubKey.address;
+    if (address === undefined) return null;
+    const spender = (await search(address)).find((tx) => tx.vin.some((input) => 'txid' in input && input.txid === txid && input.vout === vout));
+    return spender?.txid ?? null;
+  };
+
   return {
     network,
     getTip: () => chain.getTip(),
@@ -345,14 +445,14 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletBa
       return history;
     },
 
-    broadcast: (tx) => node.sendRawTransaction(tx),
+    broadcast: (tx) => sendRaw(sender, tx),
 
     async estimateFeeRate(blocks = 6) {
       const floor = grains((await node.getInfo()).relayfee, 'getinfo');
       return maxRate(await estimateOrZero(node, blocks), floor);
     },
 
-    getSpendStatus: (outpoint) => nodeSpendStatus(node, outpoint, spenderOf),
+    getSpendStatus: (outpoint) => nodeSpendStatus(node, outpoint, mempoolSpender, spenderOf, listedSpender),
   };
 }
 
@@ -382,6 +482,7 @@ export function oysterBackend(rpc: Rpc, options: OysterBackendOptions): WalletBa
   const { network } = options;
   const wallet = new OysterRpc(rpc);
   const node = new PearldRpc(rpc);
+  const mempoolSpender = mempoolSpends(node);
 
   const getTip = async (): Promise<BlockRef> => {
     const best = await wallet.getBestBlock();
@@ -489,9 +590,11 @@ export function oysterBackend(rpc: Rpc, options: OysterBackendOptions): WalletBa
         return await node.sendRawTransaction(tx);
       } catch (err) {
         if (!isChainInactive(err)) throw err;
-        throw new PearlError('BACKEND_UNSUPPORTED', 'Oyster has no RPC connection to a pearld (SPV mode), so it cannot broadcast a raw transaction; send with sendMany instead', {
-          cause: err,
-        });
+        throw new UnsupportedMethodError(
+          'sendrawtransaction',
+          'Oyster has no RPC connection to a pearld (SPV mode), so it cannot broadcast a raw transaction; send with sendMany instead',
+          err,
+        );
       }
     },
 
@@ -508,7 +611,7 @@ export function oysterBackend(rpc: Rpc, options: OysterBackendOptions): WalletBa
       const held = (await wallet.listUnspent(0)).find((utxo) => utxo.txid === outpoint.txid && utxo.vout === outpoint.vout);
       if (held !== undefined) return { status: 'unspent', confirmations: held.confirmations };
       try {
-        return await nodeSpendStatus(node, outpoint, async (txid, vout) => {
+        return await nodeSpendStatus(node, outpoint, mempoolSpender, async (txid, vout) => {
           // Spent in a block, if the node can show the output ever existed.
           try {
             return (await node.getRawTransaction(txid)).vout[vout] === undefined ? { status: 'unknown' } : { status: 'spent', confirmed: true };
@@ -535,23 +638,62 @@ export function oysterBackend(rpc: Rpc, options: OysterBackendOptions): WalletBa
 
 // The mempool spender first, since gettxout keeps reporting an output that
 // only the mempool has spent; then gettxout; then whatever can tell a spent
-// output from one that never existed.
+// output from one that never existed. When pearld will not say which mempool
+// transaction spends an output, `listed` looks elsewhere, or the output
+// counts as unspent while gettxout has it.
 async function nodeSpendStatus(
   node: PearldRpc,
   outpoint: OutPointParam,
+  spends: MempoolSpender,
   gone: (txid: string, vout: number) => Promise<SpendStatus>,
+  listed?: (txid: string, vout: number, out: TxOutResult) => Promise<string | null>,
 ): Promise<SpendStatus> {
   const { txid, vout } = outpoint;
-  const [spends, out] = await Promise.all([node.getTxSpendingPrevOut([{ txid, vout }]), node.getTxOut(txid, vout, true)]);
-  const spender = spends[0]?.spendingtxid;
-  if (spender !== undefined && spender !== '') return { status: 'spent', spender, confirmed: false };
+  const [spender, out] = await Promise.all([spends(outpoint), node.getTxOut(txid, vout, true)]);
+  if (spender !== null && spender !== undefined) return { status: 'spent', spender, confirmed: false };
   if (out !== null) {
     if (!Number.isSafeInteger(out.confirmations) || out.confirmations < 0) {
       throw new PearlRpcError('response', 'gettxout', `output ${txid}:${vout} has no valid confirmation count`);
     }
+    const fallback = spender === undefined && listed !== undefined ? await listed(txid, vout, out) : null;
+    if (fallback !== null) return { status: 'spent', spender: fallback, confirmed: false };
     return { status: 'unspent', confirmations: out.confirmations };
   }
   return gone(txid, vout);
+}
+
+// The mempool transaction spending an outpoint, null for none, or undefined
+// when pearld will not say.
+type MempoolSpender = (outpoint: OutPointParam) => Promise<string | null | undefined>;
+
+// gettxspendingprevout until pearld refuses it to a limited user; then
+// undefined without asking again.
+function mempoolSpends(node: PearldRpc): MempoolSpender {
+  let allowed = true;
+  return async ({ txid, vout }) => {
+    if (!allowed) return undefined;
+    try {
+      const spender = (await node.getTxSpendingPrevOut([{ txid, vout }]))[0]?.spendingtxid;
+      return spender === undefined || spender === '' ? null : spender;
+    } catch (err) {
+      if (!isLimitedUserRefusal(err)) throw err;
+      allowed = false;
+      return undefined;
+    }
+  };
+}
+
+async function sendRaw(node: PearldRpc, tx: string | Uint8Array): Promise<string> {
+  try {
+    return await node.sendRawTransaction(tx);
+  } catch (err) {
+    if (!isLimitedUserRefusal(err)) throw err;
+    throw new UnsupportedMethodError(
+      'sendrawtransaction',
+      "pearld refuses sendrawtransaction to its limited RPC user; broadcast through an endpoint with full credentials or a proxy that forwards the call, given as the backend's `broadcast` option",
+      err,
+    );
+  }
 }
 
 // estimatefee, or 0 when pearld has no estimate yet: it answers code -1

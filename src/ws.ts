@@ -25,6 +25,7 @@ import {
   DEFAULT_MAX_REPLY_SIZE,
   DEFAULT_RPC_TIMEOUT,
   PearlRpcError,
+  isLimitedUserRefusal,
   oysterMethods,
   pearldMethods,
   type CallOptions,
@@ -864,15 +865,20 @@ export class JsonRpcWsClient implements Rpc {
     const wantBlocks = this.#blockWatchers > 0;
     const wantTx = this.#wantedTx();
     if (!this.#live && !wantBlocks && wantTx === null) return;
-    const next = (): [string, unknown[]] | null => {
+    // The command that moves one subscription toward what the watchers want,
+    // and how to take the move back if pearld refuses it.
+    const next = (): [string, unknown[], () => void] | null => {
       if (this.#blockWatchers > 0 !== this.#serverBlocks) {
         this.#serverBlocks = !this.#serverBlocks;
-        return [this.#serverBlocks ? 'notifyblocks' : 'stopnotifyblocks', []];
+        const undo = () => (this.#serverBlocks = !this.#serverBlocks);
+        return [this.#serverBlocks ? 'notifyblocks' : 'stopnotifyblocks', [], undo];
       }
       const tx = this.#wantedTx();
       if (tx !== this.#serverTx) {
+        const was = this.#serverTx;
         this.#serverTx = tx;
-        return tx === null ? ['stopnotifynewtransactions', []] : ['notifynewtransactions', [tx]];
+        const undo = () => (this.#serverTx = was);
+        return tx === null ? ['stopnotifynewtransactions', [], undo] : ['notifynewtransactions', [tx], undo];
       }
       return null;
     };
@@ -883,7 +889,18 @@ export class JsonRpcWsClient implements Rpc {
         if (socket === null || !this.#live) continue;
         const commands: Promise<unknown>[] = [];
         for (let command = next(); command !== null; command = next()) {
-          commands.push(this.#request(socket, command[0], command[1], () => null));
+          const [method, params, undo] = command;
+          const sent = this.#request(socket, method, params, () => null);
+          // pearld's limited user may subscribe but not unsubscribe. The
+          // subscription then stays, and its notifications reach no listener.
+          commands.push(
+            method.startsWith('stop')
+              ? sent.catch((err: unknown) => {
+                  if (!isLimitedUserRefusal(err)) throw err;
+                  undo();
+                })
+              : sent,
+          );
         }
         await Promise.all(commands);
         return;

@@ -185,6 +185,61 @@ export const RPC_ERROR_CODES = {
 } as const;
 
 /**
+ * The methods pearld lets its limited RPC user (--rpclimituser) call, from
+ * rpcLimited in node/rpcserver.go. Everything else is refused with "limited
+ * user not authorized for this method", code -32603 over HTTP and -32602 on
+ * the websocket. Left out, among others: getblockchaininfo, getmempoolinfo,
+ * getnetworkinfo, gettxspendingprevout, sendrawtransaction,
+ * testmempoolaccept, and on the websocket the stopnotify commands.
+ */
+export const PEARLD_LIMITED_METHODS: ReadonlySet<string> = new Set([
+  // Websocket only.
+  'loadtxfilter',
+  'notifyblocks',
+  'notifynewtransactions',
+  'notifyreceived',
+  'notifyspent',
+  'rescan',
+  'rescanblocks',
+  'session',
+  // Both.
+  'help',
+  // HTTP, and the websocket, which takes any command.
+  'createrawtransaction',
+  'decoderawtransaction',
+  'decodescript',
+  'estimatefee',
+  'getbestblock',
+  'getbestblockhash',
+  'getblock',
+  'getblockcount',
+  'getblockhash',
+  'getblockheader',
+  'getchaintips',
+  'getcfilter',
+  'getcfilterheader',
+  'getcurrentnet',
+  'getdifficulty',
+  'getheaders',
+  'getinfo',
+  'getnettotals',
+  'getnetworkhashps',
+  'getrawmempool',
+  'getrawtransaction',
+  'gettxout',
+  'searchrawtransactions',
+  'uptime',
+  'validateaddress',
+  'verifymessage',
+  'version',
+]);
+
+/** Whether an error is pearld refusing a method to its limited RPC user. */
+export function isLimitedUserRefusal(err: unknown): boolean {
+  return err instanceof PearlRpcError && err.kind === 'rpc' && err.message.includes('limited user not authorized');
+}
+
+/**
  * Marks a param as an amount in grains, sent as the exact PRL number the
  * servers expect: `call('sendtoaddress', [address, prlAmount(150000000n), prlAmount(1000n)])`.
  * A bare bigint is sent as an integer, which is right for heights and counts
@@ -1721,7 +1776,7 @@ export async function searchAllTransactions(
  * searchrawtransactions, so pearld must run with --addrindex and --txindex.
  */
 export function pearldChainClient(
-  client: Pick<PearldRpc, 'getBlockchainInfo' | 'getBlockHeader' | 'getRawTransaction' | 'searchRawTransactions'>,
+  client: Pick<PearldRpc, 'getBestBlock' | 'getBlockHeader' | 'getRawTransaction' | 'searchRawTransactions'>,
   options: { pageSize?: number } = {},
 ): ChainClient {
   const pageSize = options.pageSize ?? 100;
@@ -1738,9 +1793,10 @@ export function pearldChainClient(
 
   return {
     async getTip() {
-      // One call, so the height and hash come from the same snapshot.
-      const info = await client.getBlockchainInfo();
-      return { height: safeHeight(info.blocks, 'getblockchaininfo'), hash: info.bestblockhash };
+      // One call, so the height and hash come from the same snapshot, and
+      // one pearld's limited user may make.
+      const best = await client.getBestBlock();
+      return { height: safeHeight(best.height, 'getbestblock'), hash: best.hash };
     },
 
     async getAddressActivity(address) {

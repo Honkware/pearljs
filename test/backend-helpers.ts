@@ -33,7 +33,7 @@ export function indexedPearld(routes: Record<string, Route> = {}) {
   const fake = fakeFetch({
     searchrawtransactions: byAddress('backend-search', 'searchrawtransactions-none'),
     getblockheader: (r) => `backend-header-${tipHeight - blockHeights[r.body.params[0] as string]! + 1}`,
-    getblockchaininfo: 'getblockchaininfo',
+    getbestblock: 'backend-getbestblock',
     getinfo: 'getinfo',
     estimatefee: 'estimatefee',
     sendrawtransaction: 'sendrawtransaction',
