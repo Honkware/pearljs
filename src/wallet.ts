@@ -48,6 +48,7 @@ import { checkStandard } from './policy.js';
 import type { Rpc } from './rpc.js';
 import { taggedHash, xmssLeafScript } from './script.js';
 import { DEFAULT_MAX_FEE_RATE, signXmssP2mrInput } from './scriptpath.js';
+import type { KeyPathSignerAsync } from './scriptpath.js';
 import { assembleScriptTree } from './scripttree.js';
 import type { ScriptTree } from './scripttree.js';
 import { sweepKey } from './sweep.js';
@@ -288,6 +289,13 @@ export interface SendOptions {
   strategy?: CoinSelectionStrategy<WalletCoin>;
   /** A note kept with the transaction. */
   label?: string;
+  /**
+   * Signs the account coins in place of the keystore: a device or service
+   * that holds the account's keys and answers key-path requests. With it a
+   * send needs no unlocked keystore, and may spend a watch-only account's
+   * coins, as long as it spends account coins only.
+   */
+  signer?: KeyPathSignerAsync;
 }
 
 /** What send, bumpFee and sweep return. Amounts in grain. */
@@ -1753,16 +1761,17 @@ export class PearlWallet {
    */
   async send(options: SendOptions): Promise<SendResult> {
     return this.#exclusive(async (events) => {
-      await this.#unlocked();
+      const external = options.signer !== undefined;
+      if (!external) await this.#unlocked();
       const { feeRate, maxFeeRate } = await this.#feeRates(options);
-      const { payment, changeAccount, changeIndex, changeAddress } = this.#build(options, feeRate, false);
+      const { payment, changeAccount, changeIndex, changeAddress } = this.#build(options, feeRate, external);
       if (payment.changeIndex >= 0) {
         changeAccount.change = changeIndex + 1;
         this.#putAccount(changeAccount);
         this.#extend(changeAccount.id, true);
       }
       const maxOutput = options.recipients.findIndex((recipient) => recipient.amount === 'max');
-      return this.#signAndBroadcast(payment, { label: options.label, changeAddress: payment.changeIndex >= 0 ? changeAddress : null, maxFeeRate, maxOutput }, events);
+      return this.#signAndBroadcast(payment, { label: options.label, changeAddress: payment.changeIndex >= 0 ? changeAddress : null, maxFeeRate, maxOutput, signer: options.signer }, events);
     });
   }
 
@@ -1819,9 +1828,6 @@ export class PearlWallet {
         if (owner.type === 'account') this.#chains.get(owner.account)!.account.prepareInput(psbt, i, { index: owner.index, change: owner.change, value: coin.value });
         else psbt.updateInput(i, { witnessUtxo: { script: coin.script, value: coin.value } });
       }
-      // SEAM (signing work): once the builder can write a change output's tapBip32Derivation, write it
-      // here for payment.changeIndex, from changeAccount and changeIndex, so a cold signer can tell its
-      // own change from a swapped output. Until then changeAddress in the result is what there is to check.
       const hasChange = payment.changeIndex >= 0;
       let id: string | null = null;
       let expiresAt: number | null = null;
@@ -1962,9 +1968,10 @@ export class PearlWallet {
    * or, when the original had neither, out of another confirmed coin, with
    * what is left of it as new change.
    */
-  async bumpFee(txid: string, options: { feeRate: FeeRate; maxFeeRate?: FeeRate }): Promise<SendResult> {
+  async bumpFee(txid: string, options: { feeRate: FeeRate; maxFeeRate?: FeeRate; signer?: KeyPathSignerAsync }): Promise<SendResult> {
     return this.#exclusive(async (events) => {
-      await this.#unlocked();
+      const external = options.signer !== undefined;
+      if (!external) await this.#unlocked();
       const { maxFeeRate } = await this.#feeRates(options);
       const original = this.#txs.get(txid);
       const ledger = this.#ledger();
@@ -2011,11 +2018,11 @@ export class PearlWallet {
       } else {
         // Every recipient was promised an amount, so the fee needs a new input and what that leaves is change.
         const owner = originals[0]!.owner;
-        newChange = this.#changeAccount(owner.type === 'account' ? { account: owner.account } : undefined);
+        newChange = this.#changeAccount(owner.type === 'account' ? { account: owner.account } : undefined, external);
         changeAddress = this.#derive(newChange.id, true, newChange.change);
       }
       // pearld refuses a replacement that adds unconfirmed inputs, and the original's own outputs vanish with it.
-      const others = this.#spendable(this.#sourceOf(originals[0]!.owner)).filter((coin) => coin.txid !== txid && coin.confirmations >= 1);
+      const others = this.#spendable(this.#sourceOf(originals[0]!.owner), external).filter((coin) => coin.txid !== txid && coin.confirmations >= 1);
       const originalFee = original.prevouts.reduce((sum, p) => sum + p!.value, 0n) - original.tx.outs.reduce((sum, o) => sum + o.value, 0n);
       const originalVsize = original.tx.virtualSize();
       let feeRate = options.feeRate;
@@ -2054,7 +2061,7 @@ export class PearlWallet {
         this.#putAccount(newChange);
         this.#extend(newChange.id, true);
       }
-      const result = await this.#signAndBroadcast(payment, { label: original.label, changeAddress, replaces: original, maxFeeRate, maxOutput: original.maxOutput ?? -1 }, events);
+      const result = await this.#signAndBroadcast(payment, { label: original.label, changeAddress, replaces: original, maxFeeRate, maxOutput: original.maxOutput ?? -1, signer: options.signer }, events);
       return { ...result, replaces: txid };
     });
   }
@@ -2635,7 +2642,8 @@ export class PearlWallet {
         utxos: coins,
         recipients: options.recipients,
         feeRate,
-        changeAddress,
+        // From the account, so the PSBT's change output carries its derivation and a signer elsewhere can prove the change is its own.
+        changeFrom: { account: this.#chains.get(changeAccount.id)!.account, index: changeIndex },
         rbf: options.rbf === true,
         minConfirmations,
         coinbaseMaturity: this.network.coinbaseMaturity,
@@ -3094,7 +3102,7 @@ export class PearlWallet {
 
   async #signAndBroadcast(
     payment: Payment<WalletCoin>,
-    meta: { label?: string | undefined; changeAddress: string | null; replaces?: TxEntry; maxFeeRate: FeeRate; maxOutput: number },
+    meta: { label?: string | undefined; changeAddress: string | null; replaces?: TxEntry; maxFeeRate: FeeRate; maxOutput: number; signer?: KeyPathSignerAsync | undefined },
     events: PendingEvent[],
   ): Promise<SendResult> {
     // Before any key is used: an XMSS signature spent on a refused payment is an index gone.
@@ -3103,7 +3111,7 @@ export class PearlWallet {
       const record = this.#xmss.get(id)!;
       if (XMSS_MAX_SIGNATURES - record.next < count) throw new XmssError('XMSS_INDEX_EXHAUSTED', `XMSS key ${id.slice(0, 16)} has ${XMSS_MAX_SIGNATURES - record.next} signatures left, and this payment needs ${count}`);
     }
-    const signed = await this.#sign(payment, meta.maxFeeRate);
+    const signed = await this.#sign(payment, meta.maxFeeRate, meta.signer);
     const final = finalizePayment(payment, { signed });
     const entry = this.#record(final.transaction, final.prevouts.map((p) => ({ script: Uint8Array.from(p.script), value: p.value })), {
       broadcast: false,
@@ -3197,20 +3205,31 @@ export class PearlWallet {
   // whose key-path signatures are copied out, imported keys directly, and
   // XMSS inputs last, with the previous transactions the all-P2MR check
   // needs, which the wallet has recorded.
-  async #sign(payment: Payment<WalletCoin>, maxFeeRate: FeeRate): Promise<Transaction> {
-    const keystore = this.#requireUnlocked();
+  async #sign(payment: Payment<WalletCoin>, maxFeeRate: FeeRate, external?: KeyPathSignerAsync): Promise<Transaction> {
     const signed = payment.transaction.clone();
     const { psbt, inputs, prevouts } = payment;
-    // SEAM (signing work): account inputs are signed here, synchronously, with keys derived from the
-    // seed. A signer that answers asynchronously (a device holding the account key) goes through
-    // prepareSend and submitSigned today; when the account interface gains an async key-path signer,
-    // it can be called here on the same prepared PSBT, and send can take it as an option.
     // Every input is prepared from the watch-only accounts before any key is decrypted.
     for (const [i, coin] of inputs.entries()) {
       const owner = coin.owner;
       if (owner.type === 'account') this.#chains.get(owner.account)!.account.prepareInput(psbt, i, { index: owner.index, change: owner.change, value: coin.value });
       else psbt.updateInput(i, { witnessUtxo: { script: coin.script, value: coin.value } });
     }
+    const copySignature = (i: number): void => {
+      const signature = psbt.data.inputs[i]?.tapKeySig;
+      if (signature === undefined) throw new SigningError('SIGNATURES_MISSING', `input ${i} was not signed`);
+      signed.setWitness(i, [Uint8Array.from(signature)]);
+    };
+    if (external !== undefined) {
+      // The keys are elsewhere: each account input is signed by whoever holds them, asked through the
+      // account, which checks the request against the input first and the signature against the output after.
+      for (const [i, coin] of inputs.entries()) {
+        if (coin.owner.type !== 'account') throw new WalletError('WALLET_WATCH_ONLY', 'a send with a signer spends account coins only; imported and XMSS keys sign from the keystore');
+        await this.#chains.get(coin.owner.account)!.account.signInputAsync(psbt, i, external);
+        copySignature(i);
+      }
+      return signed;
+    }
+    const keystore = this.#requireUnlocked();
     const signers = new Map<string, PearlSigningAccount>();
     try {
       for (const [i, coin] of inputs.entries()) {
@@ -3226,9 +3245,7 @@ export class PearlWallet {
         }
         // The child comes from the input's derivation, which prepareInput wrote.
         signer.signInput(psbt, i);
-        const signature = psbt.data.inputs[i]?.tapKeySig;
-        if (signature === undefined) throw new SigningError('SIGNATURES_MISSING', `input ${i} was not signed`);
-        signed.setWitness(i, [Uint8Array.from(signature)]);
+        copySignature(i);
       }
     } finally {
       for (const signer of signers.values()) signer.destroy();

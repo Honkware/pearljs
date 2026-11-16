@@ -230,6 +230,45 @@ describe('wallet: payments signed elsewhere', () => {
     expect(wallet.version).toBe(version + 1);
   });
 
+  it('records on the change output of a prepared payment that it is the account\'s own', async () => {
+    const { wallet } = await watching(['3']);
+    const prepared = await wallet.prepareSend(payment);
+    const psbt = parsePsbt(prepared.psbt);
+    const change = psbt.data.outputs[prepared.outputs.findIndex((output) => output.change)]!;
+    expect(change.tapBip32Derivation).toHaveLength(1);
+    expect(Buffer.from(change.tapBip32Derivation![0]!.masterFingerprint).toString('hex')).toBe(origin.masterFingerprint);
+    expect(change.tapBip32Derivation![0]!.path).toBe("m/86'/1'/0'/1/0");
+    // The signer, holding the account, finds the change to be its own and the payment to be nothing else.
+    const signer = deriveSigningAccountFromSeed(seed, network, 0);
+    const outputs = psbt.txOutputs.map((_, i) => signer.watchOnlyAccount().findChild(psbt.data.outputs[i]!.tapBip32Derivation ?? []));
+    signer.destroy();
+    expect(outputs).toEqual([null, { index: 0, change: true }]);
+    await wallet.cancelPrepared(prepared.id!);
+  });
+
+  it('sends from a watch-only wallet through a signer that holds the keys, and bumps the fee the same way', async () => {
+    const { chain, wallet } = await watching(['3', '2']);
+    const device = deriveSigningAccountFromSeed(seed, network, 0);
+    const asked: Uint8Array[] = [];
+    const inner = device.keyPathSigner();
+    const signer = { signKeyPath: (request: Parameters<typeof inner.signKeyPath>[0]) => (asked.push(request.hash), inner.signKeyPath(request)) };
+    await expect(wallet.send(payment)).rejects.toMatchObject({ code: 'WALLET_WATCH_ONLY' });
+    const sent = await wallet.send({ ...payment, rbf: true, signer });
+    expect(chain.mempool.has(sent.txid)).toBe(true);
+    expect(asked).toHaveLength(1);
+    expect(wallet.transaction(sent.txid)).toMatchObject({ status: 'pending', direction: 'outgoing', broadcast: true });
+    await expect(wallet.bumpFee(sent.txid, { feeRate: 10_000n })).rejects.toMatchObject({ code: 'WALLET_WATCH_ONLY' });
+    const bumped = await wallet.bumpFee(sent.txid, { feeRate: 10_000n, signer });
+    expect(chain.mempool.has(bumped.txid)).toBe(true);
+    expect(chain.mempool.has(sent.txid)).toBe(false);
+    // A signer for other keys is refused before anything is recorded.
+    const stranger = deriveSigningAccountFromSeed(mnemonicToSeed('legal winner thank year wave sausage worth useful legal winner thank yellow'), network, 0);
+    await expect(wallet.send({ ...payment, signer: stranger.keyPathSigner() })).rejects.toThrow();
+    expect(wallet.history().filter((entry) => entry.direction === 'outgoing' && entry.status === 'pending')).toHaveLength(1);
+    device.destroy();
+    stranger.destroy();
+  });
+
   it('prepares from a wallet with keys while it is locked, and a send it then signs itself is unaffected', async () => {
     const chain = new FakeChain();
     const wallet = await PearlWallet.create({ store: createMemoryStore(), backend: chain, transactions: chain, passphrase: PASSPHRASE, mnemonic: MNEMONIC, kdf: FAST_KDF, gapLimit: 10, unlockTimeoutMs: 0 });
