@@ -22,6 +22,7 @@
 import { blockHashHex, parseBlockHeader, type PearlBlockHeader } from './blockheader.js';
 import { UNBOUNDED_METHODS, basicAuth, decimalToGrain, encodeJson, parseJson, rpcEndpoint, rpcError } from './internal/rpc-wire.js';
 import {
+  DEFAULT_MAX_REPLY_SIZE,
   DEFAULT_RPC_TIMEOUT,
   PearlRpcError,
   oysterMethods,
@@ -88,6 +89,12 @@ export interface PearlWsClientOptions {
   readonly notifications?: boolean;
   /** Both logins send the password as it is, so ws:// is refused for any host but loopback unless this is set. */
   readonly allowInsecureAuth?: boolean;
+  /**
+   * Frames longer than this many characters are refused and the connection
+   * is dropped, failing the calls waiting on it; it reconnects as after any
+   * drop. Default DEFAULT_MAX_REPLY_SIZE.
+   */
+  readonly maxReplySize?: number;
 }
 
 /** The websocket client takes the same per-call options as the fetch clients. */
@@ -234,6 +241,7 @@ export class JsonRpcWsClient implements Rpc {
   readonly #reconnect: Required<ReconnectOptions> | null;
   readonly #timeout: number | undefined;
   readonly #oyster: boolean;
+  readonly #maxReplySize: number;
 
   #socket: Socket | null = null;
   #live = false;
@@ -249,6 +257,8 @@ export class JsonRpcWsClient implements Rpc {
   #closeTimer: ReturnType<typeof setTimeout> | undefined;
   #id = 0;
   readonly #pending = new Map<number, Pending>();
+  // Ids of calls given up on by timeout or abort, so a late reply is dropped quietly.
+  readonly #abandoned = new Set<number>();
   readonly #listeners = new Map<string, Set<Listener>>();
 
   // Server-side state, replayed after a reconnect.
@@ -284,6 +294,13 @@ export class JsonRpcWsClient implements Rpc {
         : { initialDelay: 1000, maxDelay: 30000, retries: Infinity, ...(reconnect === true ? {} : reconnect) };
     this.#timeout = options.timeout;
     this.#oyster = options.notifications === false;
+    this.#maxReplySize = options.maxReplySize ?? DEFAULT_MAX_REPLY_SIZE;
+    if (!Number.isSafeInteger(this.#maxReplySize) || this.#maxReplySize < 1) throw new RangeError('maxReplySize must be a positive integer');
+  }
+
+  /** Calls sent and still waiting for their reply. */
+  get pending(): number {
+    return this.#pending.size;
   }
 
   /** Opens the connection now instead of on first use. */
@@ -317,7 +334,7 @@ export class JsonRpcWsClient implements Rpc {
     };
   }
 
-  /** Block connects and disconnects (notifyblocks), in the style of viem's watchBlocks. */
+  /** Block connects and disconnects (notifyblocks). */
   watchBlocks(options: { onBlock: (event: BlockEvent) => void; onError?: (error: Error) => void }): () => void {
     return this.#watch(BLOCK_EVENTS, options.onBlock, options.onError, 'blocks');
   }
@@ -460,6 +477,7 @@ export class JsonRpcWsClient implements Rpc {
     const timeout = limit > 0 ? limit : undefined;
     const { signal } = options;
     let abandoned: PearlRpcError | null = null;
+    let sent: number | undefined;
     const run = async (): Promise<unknown> => {
       for (;;) {
         try {
@@ -470,13 +488,14 @@ export class JsonRpcWsClient implements Rpc {
         if (abandoned !== null) throw abandoned;
         const socket = this.#socket;
         if (socket === null || !this.#live) continue;
-        return this.#request(socket, method, params, parse);
+        return this.#request(socket, method, params, parse, (id) => (sent = id));
       }
     };
     if (timeout === undefined && signal === undefined) return run();
     return new Promise((resolve, reject) => {
       const give = (error: PearlRpcError) => {
         abandoned = error;
+        if (sent !== undefined && this.#pending.delete(sent)) this.#abandoned.add(sent);
         reject(error);
       };
       const timer =
@@ -495,8 +514,9 @@ export class JsonRpcWsClient implements Rpc {
     });
   }
 
-  #request(socket: Socket, method: string, params: readonly unknown[], parse: (text: string) => unknown): Promise<unknown> {
+  #request(socket: Socket, method: string, params: readonly unknown[], parse: (text: string) => unknown, onSent?: (id: number) => void): Promise<unknown> {
     const id = ++this.#id;
+    onSent?.(id);
     // pearld rejects requests without params.
     const body = encodeJson({ jsonrpc: '1.0', id, method, params });
     return new Promise((resolve, reject) => {
@@ -633,6 +653,7 @@ export class JsonRpcWsClient implements Rpc {
   #dropped(opened: boolean, failure: Failure): void {
     const authenticating = this.#authenticating;
     this.#authenticating = false;
+    this.#abandoned.clear();
     for (const [id, pending] of this.#pending) {
       this.#pending.delete(id);
       pending.reject(new PearlRpcError('network', pending.method, `${failure.message} before the reply`));
@@ -716,6 +737,13 @@ export class JsonRpcWsClient implements Rpc {
       this.#emit('error', this.#bad(`a non-text frame from ${this.#origin}`));
       return;
     }
+    if (text.length > this.#maxReplySize) {
+      this.#emit('error', this.#bad(`a frame from ${this.#origin} is larger than maxReplySize, ${this.#maxReplySize} characters; dropping the connection`));
+      // The close fails the calls waiting on this socket. Browsers refuse
+      // 1009 from a client, so the code is the plain one.
+      this.#socket?.close(1000);
+      return;
+    }
     let message: unknown;
     try {
       message = JSON.parse(text);
@@ -733,6 +761,7 @@ export class JsonRpcWsClient implements Rpc {
       return;
     }
     const pending = typeof id === 'number' ? this.#pending.get(id) : undefined;
+    if (pending === undefined && typeof id === 'number' && this.#abandoned.delete(id)) return;
     if (pending === undefined) {
       const err = isError(error)
         ? rpcError('websocket', error)

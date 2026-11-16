@@ -140,6 +140,13 @@ const NO_KEYS: ReadonlySet<string> = new Set();
 export function parseJson(text: string, amountKeys: ReadonlySet<string> = NO_KEYS, integerKeys: ReadonlySet<string> = NO_KEYS): unknown {
   if (amountKeys.size === 0 && integerKeys.size === 0) return JSON.parse(text);
   const everyAmount = amountKeys.has('*');
+  // Each converted number becomes a string naming its slot under a random
+  // tag, so no string the server sends can pass for one.
+  const nonce = randomTag();
+  // The tag as JSON text, and the string JSON.parse makes of it.
+  const tag = `\\u0000${nonce}:`;
+  const marker = `\u0000${nonce}:`;
+  const converted: bigint[] = [];
   let out = '';
   let copied = 0;
   let lastString = '';
@@ -168,8 +175,8 @@ export function parseJson(text: string, amountKeys: ReadonlySet<string> = NO_KEY
             ? 'a'
             : null;
       if (kind !== null) {
-        // A NUL in front tells these apart from strings the server sent.
-        out += `${text.slice(copied, i)}"\\u0000${kind}${match[0]}"`;
+        out += `${text.slice(copied, i)}"${tag}${converted.length}"`;
+        converted.push(kind === 'a' ? decimalToGrain(match[0]) : BigInt(match[0]));
         copied = i + match[0].length;
       }
       underKey = null;
@@ -181,10 +188,18 @@ export function parseJson(text: string, amountKeys: ReadonlySet<string> = NO_KEY
     }
   }
   out += text.slice(copied);
+  if (converted.length === 0) return JSON.parse(text);
   return JSON.parse(out, (_key, value: unknown) => {
-    if (typeof value !== 'string' || value.charCodeAt(0) !== 0) return value;
-    return value[1] === 'a' ? decimalToGrain(value.slice(2)) : BigInt(value.slice(2));
+    if (typeof value !== 'string' || !value.startsWith(marker)) return value;
+    const slot = value.slice(marker.length);
+    return /^\d+$/.test(slot) && Number(slot) < converted.length ? converted[Number(slot)] : value;
   });
+}
+
+function randomTag(): string {
+  const bytes = new Uint8Array(12);
+  globalThis.crypto.getRandomValues(bytes);
+  return toHex(bytes);
 }
 
 const DECIMAL_RE = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/;

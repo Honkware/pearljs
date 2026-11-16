@@ -30,7 +30,7 @@ import {
   verifyMessage,
 } from '../src/index.js';
 import { expected, fakeFetch, fixture, rejection, type Route } from './rpc-helpers.js';
-import { decimalToGrain } from '../src/internal/rpc-wire.js';
+import { decimalToGrain, parseJson } from '../src/internal/rpc-wire.js';
 
 function pearld(routes: Record<string, Route>) {
   const fake = fakeFetch(routes);
@@ -1191,5 +1191,82 @@ describe('address paging', () => {
     const bad = fixture('getblockchaininfo').body.replace('"blocks":321', '"blocks":3.5');
     const { client } = pearld({ getblockchaininfo: (r) => new Response(bad.replace(/"id":\d+}/, `"id":${r.body.id}}`)) });
     expect((await rejection(pearldChainClient(client).getTip())).message).toContain('expected a block height, got 3.5');
+  });
+});
+
+describe('hardening', () => {
+  it('refuses a redirect instead of resending the body, passphrase and all, to another URL', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetch = (async (url: string, init: RequestInit) => {
+      calls.push({ url, init });
+      return new Response('', { status: 307, headers: { Location: 'https://evil.example/' } });
+    }) as unknown as typeof globalThis.fetch;
+    const oyster = new OysterClient({ url: 'https://127.0.0.1:18332', username: 'u', password: 'p', fetch });
+    const err = await rejection(oyster.walletPassphrase('correct horse', 60));
+    expect(err).toMatchObject({ kind: 'http', status: 307, code: 'RPC_HTTP', method: 'walletpassphrase' });
+    expect(err.message).toMatch(/redirect/);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.init.redirect).toBe('manual');
+  });
+
+  it('refuses the opaque redirect a browser fetch reports, and a caller init cannot turn following back on', async () => {
+    let redirect: RequestRedirect | undefined;
+    const opaque = { type: 'opaqueredirect', status: 0, ok: false, headers: new Headers(), body: null, text: async () => '' };
+    const fetch = (async (_url: string, init: RequestInit) => {
+      redirect = init.redirect;
+      return opaque;
+    }) as unknown as typeof globalThis.fetch;
+    const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch, init: { redirect: 'follow' } });
+    expect(await rejection(client.getBlockCount())).toMatchObject({ kind: 'http', status: 0 });
+    expect(redirect).toBe('manual');
+  });
+
+  it('stops reading a reply past maxReplySize, by its declared length or as it streams', async () => {
+    const big = '{"jsonrpc":"1.0","result":"' + 'a'.repeat(2000) + '","error":null,"id":1}';
+    const declared = new PearldClient({
+      url: 'https://127.0.0.1:18334',
+      maxReplySize: 1000,
+      fetch: (async () => new Response(big, { headers: { 'Content-Length': String(big.length) } })) as typeof globalThis.fetch,
+    });
+    expect(await rejection(declared.getBestBlockHash())).toMatchObject({ kind: 'response', message: expect.stringMatching(/maxReplySize/) });
+
+    let pulled = 0;
+    const stream = () =>
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          pulled += 1;
+          controller.enqueue(new TextEncoder().encode('x'.repeat(400)));
+        },
+      });
+    const streamed = new PearldClient({
+      url: 'https://127.0.0.1:18334',
+      maxReplySize: 1000,
+      fetch: (async () => new Response(stream())) as typeof globalThis.fetch,
+    });
+    expect(await rejection(streamed.getBestBlockHash())).toMatchObject({ kind: 'response' });
+    expect(pulled).toBeLessThan(10);
+    expect(() => new PearldClient({ url: 'https://127.0.0.1:18334', maxReplySize: 0 })).toThrow(RangeError);
+  });
+
+  it('reads replies under the limit in full, multi-byte text included', async () => {
+    const body = '{"jsonrpc":"1.0","result":"sécret ✓","error":null,"id":1}';
+    const client = new PearldClient({
+      url: 'https://127.0.0.1:18334',
+      maxReplySize: new TextEncoder().encode(body).length,
+      fetch: (async () => new Response(body)) as typeof globalThis.fetch,
+    });
+    expect(await client.call('echo')).toBe('sécret ✓');
+  });
+
+  it('never turns a string the server sent into a bigint, whatever it holds', async () => {
+    const sneaky = ['\\u0000a5', '\\u0000i12345678901234567890', '\\u0000a0:0', '\\u00000'];
+    for (const value of sneaky) {
+      const text = `{"result":{"address":"${value}","amount":1.5,"list":["${value}",2]},"error":null,"id":1}`;
+      const parsed = parseJson(text, new Set(['amount', '*']), new Set(['list'])) as { result: { address: unknown; amount: unknown; list: unknown[] } };
+      expect(parsed.result.address).toBe(JSON.parse(`"${value}"`));
+      expect(parsed.result.list[0]).toBe(JSON.parse(`"${value}"`));
+      expect(parsed.result.amount).toBe(150000000n);
+      expect(parsed.result.list[1]).toBe(200000000n);
+    }
   });
 });

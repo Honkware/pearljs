@@ -607,6 +607,46 @@ describe('pearld websocket client', () => {
     await ws.close();
   });
 
+  it('forgets a call it gave up on, and drops its late reply quietly', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const ws = client({ timeout: 50 });
+    const ready = ws.connect();
+    await serve();
+    await ready;
+    const errors = collect(ws, 'error');
+    const call = ws.call('getblockcount');
+    const failed = expect(call).rejects.toMatchObject({ kind: 'network' });
+    await flush();
+    expect(ws.pending).toBe(1);
+    await vi.advanceTimersByTimeAsync(50);
+    await failed;
+    expect(ws.pending).toBe(0);
+    const controller = new AbortController();
+    const aborted = ws.call('getbestblockhash', [], { signal: controller.signal });
+    await flush();
+    expect(ws.pending).toBe(1);
+    controller.abort();
+    await expect(aborted).rejects.toThrow(/aborted/);
+    expect(ws.pending).toBe(0);
+    for (const sent of last().sent.slice(1)) last().push(`{"jsonrpc":"1.0","result":1,"error":null,"id":${sent.id}}`);
+    expect(errors).toEqual([]);
+    await ws.close();
+  });
+
+  it('drops the connection on a frame past maxReplySize and fails the calls waiting on it', async () => {
+    const ws = client({ maxReplySize: 100, reconnect: false });
+    const ready = ws.connect();
+    await serve();
+    await ready;
+    const errors = collect(ws, 'error');
+    const call = ws.call('getblock', ['00'.repeat(32), 0]);
+    await flush();
+    last().push(`{"jsonrpc":"1.0","result":"${'00'.repeat(100)}","error":null,"id":${last().sent.at(-1)!.id}}`);
+    await expect(call).rejects.toMatchObject({ kind: 'network' });
+    expect(errors[0]?.message).toMatch(/maxReplySize/);
+    expect(() => client({ maxReplySize: -1 })).toThrow(RangeError);
+  });
+
   it('gives up on a silent server after the default timeout, except for calls that are slow by design', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const ws = client();

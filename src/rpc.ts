@@ -61,6 +61,16 @@ export const DESKTOP_OYSTER_URL = 'http://127.0.0.1:8335';
 /** Applied when neither the call nor the client names a timeout, in ms. */
 export const DEFAULT_RPC_TIMEOUT = 60_000;
 
+/**
+ * The largest reply a client reads, in bytes, unless told otherwise: 64 MiB.
+ * pearld reads requests of up to 16 MB (maxRequestSize, 4 * MaxBlockPayload),
+ * and its largest ordinary reply, getblock with verbosity 2 for a block at
+ * the 4 MB limit, decodes every input and output and comes to a few times
+ * the block's size. A verbose getrawmempool of a full mempool can be larger;
+ * raise the limit for that.
+ */
+export const DEFAULT_MAX_REPLY_SIZE = 64 * 1024 * 1024;
+
 /** Where and how httpTransport sends requests. */
 export interface HttpTransportOptions {
   /** Server URL, e.g. https://127.0.0.1:44107. Credentials in the URL are moved to the auth header. */
@@ -81,6 +91,8 @@ export interface HttpTransportOptions {
    * refused for any host but loopback unless this is set.
    */
   readonly allowInsecureAuth?: boolean;
+  /** Replies longer than this many bytes fail with kind "response" before they are read in full. Default DEFAULT_MAX_REPLY_SIZE. */
+  readonly maxReplySize?: number;
 }
 
 /** How a client retries read-only methods. */
@@ -200,7 +212,11 @@ export interface RpcTransport {
   send(body: string, request: RpcRequestInfo): Promise<string>;
 }
 
-/** POSTs to one pearld or Oyster with Basic auth. */
+/**
+ * POSTs to one pearld or Oyster with Basic auth. Redirects are refused, not
+ * followed: a 307 or 308 would send the body, which can hold a wallet
+ * passphrase or a private key, to wherever the server pointed.
+ */
 export function httpTransport(options: HttpTransportOptions): RpcTransport {
   const endpoint = rpcEndpoint(options);
   if (endpoint.url.protocol !== 'http:' && endpoint.url.protocol !== 'https:') {
@@ -212,6 +228,8 @@ export function httpTransport(options: HttpTransportOptions): RpcTransport {
   const fetcher = options.fetch ?? globalThis.fetch;
   if (typeof fetcher !== 'function') throw new TypeError('no fetch implementation available');
   const init = options.init ?? {};
+  const maxReplySize = options.maxReplySize ?? DEFAULT_MAX_REPLY_SIZE;
+  if (!Number.isSafeInteger(maxReplySize) || maxReplySize < 1) throw new RangeError('maxReplySize must be a positive integer');
 
   return {
     origin,
@@ -250,9 +268,20 @@ export function httpTransport(options: HttpTransportOptions): RpcTransport {
         let response: Response;
         let text: string;
         try {
-          response = await Promise.race([fetcher(url, { ...init, method: 'POST', headers, body, signal: controller.signal }), aborted]);
-          text = await Promise.race([response.text(), aborted]);
+          response = await Promise.race([
+            fetcher(url, { ...init, method: 'POST', headers, body, signal: controller.signal, redirect: 'manual' }),
+            aborted,
+          ]);
+          if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+            void response.body?.cancel().catch(() => {});
+            const status = response.status === 0 ? '' : ` (HTTP ${response.status})`;
+            throw new PearlRpcError('http', method, `${origin} answered with a redirect${status}, which is not followed: it would resend the request, credentials and all, elsewhere`, {
+              status: response.status,
+            });
+          }
+          text = await Promise.race([readBounded(response, maxReplySize, method, origin), aborted]);
         } catch (err) {
+          if (err instanceof PearlRpcError) throw err;
           const message = timedOut ? `no reply from ${origin} within ${timeout} ms` : networkMessage(err, origin);
           throw new PearlRpcError('network', method, message, { cause: err });
         }
@@ -276,8 +305,7 @@ export interface FallbackOptions {
 }
 
 /**
- * Tries each transport in order until one answers, in the style of viem's
- * `fallback`. An RPC error reply is an answer and is not retried elsewhere,
+ * Tries each transport in order until one answers. An RPC error reply is an answer and is not retried elsewhere,
  * and a call the caller aborted stops at once. A send that timed out on one
  * server may still have reached it: the next server can then answer that it
  * already has the transaction.
@@ -1774,6 +1802,38 @@ function isUnusedAddress(err: unknown): boolean {
     err.rpcCode === RPC_ERROR_CODES.INVALID_ADDRESS_OR_KEY &&
     err.message.includes('No information available about address')
   );
+}
+
+// The body as text, refused once it passes `limit` bytes.
+async function readBounded(response: Response, limit: number, method: string, origin: string): Promise<string> {
+  const tooLarge = () => new PearlRpcError('response', method, `the reply from ${origin} is larger than maxReplySize, ${limit} bytes`);
+  const declared = Number(response.headers.get('content-length') ?? NaN);
+  if (Number.isFinite(declared) && declared > limit) {
+    void response.body?.cancel().catch(() => {});
+    throw tooLarge();
+  }
+  const body = response.body;
+  if (body === null || typeof body.getReader !== 'function') {
+    const text = await response.text();
+    // UTF-8 takes at most three bytes per UTF-16 unit, so short text needs no count.
+    if (text.length * 3 > limit && new TextEncoder().encode(text).length > limit) throw tooLarge();
+    return text;
+  }
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let size = 0;
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      void reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
 }
 
 function holdsErrorReply(text: string): boolean {
