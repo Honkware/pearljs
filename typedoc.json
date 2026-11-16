@@ -6,6 +6,7 @@
     "src/address.ts",
     "src/amount.ts",
     "src/backend.ts",
+    "src/backend-filters.ts",
     "src/block.ts",
     "src/blockheader.ts",
     "src/builder.ts",

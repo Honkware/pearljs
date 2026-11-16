@@ -9,6 +9,7 @@
 export * from './address.js';
 export * from './amount.js';
 export * from './backend.js';
+export * from './backend-filters.js';
 export * from './block.js';
 export * from './blockheader.js';
 export * from './builder.js';

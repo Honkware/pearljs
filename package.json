@@ -23,6 +23,10 @@
       "types": "./dist/backend.d.ts",
       "default": "./dist/backend.js"
     },
+    "./backend-filters": {
+      "types": "./dist/backend-filters.d.ts",
+      "default": "./dist/backend-filters.js"
+    },
     "./block": {
       "types": "./dist/block.d.ts",
       "default": "./dist/block.js"

@@ -178,6 +178,7 @@
       "feeRateToGrainPerVbyte",
       "feeRateToPearlPerKvB",
       "fetchPayerInputs",
+      "filterBackend",
       "filterHash",
       "filterHeader",
       "filterHeaderHex",
@@ -376,6 +377,11 @@
       "FeeAndVsize",
       "FeeGuardOptions",
       "FeeRate",
+      "FilterBackend",
+      "FilterBackendOptions",
+      "FilterBackendStatus",
+      "FilterSyncOptions",
+      "FilterSyncProgress",
       "FilteredBlockEvent",
       "ForkHeights",
       "GcsParams",
@@ -626,6 +632,18 @@
       "WalletBalance",
       "WalletUtxo",
       "Watched"
+    ]
+  },
+  "backend-filters": {
+    "values": [
+      "filterBackend"
+    ],
+    "types": [
+      "FilterBackend",
+      "FilterBackendOptions",
+      "FilterBackendStatus",
+      "FilterSyncOptions",
+      "FilterSyncProgress"
     ]
   },
   "block": {
