@@ -1,6 +1,8 @@
 // Helpers the live tests share: the node connection, a funded pearljs miner,
 // broadcasting, mining and confirming.
 
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, inject } from 'vitest';
 import {
   createPsbt,
@@ -13,12 +15,14 @@ import {
   networks,
   parseBlock,
   parseTransaction,
+  PearlRpcError,
   serializeTransaction,
   toOutputScript,
   transactionId,
+  verifyTransaction,
   witnessTransactionId,
 } from '../src/index.js';
-import type { TxOutput, SpendEstimate, TestMempoolAcceptResult, Transaction, TxRawResult } from '../src/index.js';
+import type { CallOptions, PearldClient, SpendEstimate, TestMempoolAcceptResult, Transaction, TransactionResult, TxOutput, TxRawResult } from '../src/index.js';
 import { MINER_MNEMONIC, mineBlocks, oysterClient, pearldClient, type LiveEndpoint } from './context.js';
 
 export const live = inject('live');
@@ -33,6 +37,91 @@ export const limited = pearldClient(live?.pearld ?? nowhere, live?.limited);
 export const oyster = oysterClient(live?.oyster ?? nowhere);
 
 export const network = networks.regtest;
+
+// Every transaction a test puts to the suite's node through this client,
+// with sendrawtransaction or testmempoolaccept, is first judged by the script
+// interpreter, and the two verdicts are compared: what pearld takes must
+// verify, and what pearld refuses in its script engine must fail here on the
+// same input with the engine's own message. Each comparison is written to a
+// file in the run's directory, which interpreter.test.ts reads at the end.
+export interface Judged {
+  outcome: 'accepted' | 'script' | 'other' | 'unjudged' | 'disagree';
+  via: string;
+  file: string;
+  txid?: string;
+  hex?: string;
+  code?: string;
+  detail?: string;
+}
+export const judgedFile = join(live?.dir ?? '.', 'interpreter.jsonl');
+const SCRIPT_REFUSAL = /failed to validate input [0-9a-f]{64}:(\d+) which references output \S+ - (.*?) \(input witness \[/s;
+const sourceHex = new Map<string, string>();
+
+function hookInterpreter(client: PearldClient): void {
+  const call = client.call.bind(client);
+  const judge = async (hex: unknown): Promise<{ tx: Transaction; verdict: TransactionResult } | null> => {
+    try {
+      const tx = parseTransaction(hex as string);
+      const prevouts: TxOutput[] = [];
+      for (const input of tx.ins) {
+        const txid = Buffer.from(input.hash).reverse().toString('hex');
+        if (!sourceHex.has(txid)) sourceHex.set(txid, await call<string>('getrawtransaction', [txid, 0]));
+        const output = parseTransaction(sourceHex.get(txid)!).outs[input.index]!;
+        prevouts.push({ script: output.script, value: output.value });
+      }
+      return { tx, verdict: verifyTransaction(tx, prevouts) };
+    } catch {
+      // Not a transaction, or one whose inputs the node does not have.
+      return null;
+    }
+  };
+  const compare = (judged: Awaited<ReturnType<typeof judge>>, via: string, hex: unknown, refusal: string | null): void => {
+    const file = (expect.getState().testPath ?? '').split('/').pop() ?? '';
+    const write = (entry: Omit<Judged, 'via' | 'file'>): void => appendFileSync(judgedFile, `${JSON.stringify({ via, file, ...entry })}\n`);
+    if (judged === null) return write({ outcome: 'unjudged' });
+    const { tx, verdict } = judged;
+    const txid = tx.getId();
+    const disagree = (detail: string): never => {
+      write({ outcome: 'disagree', txid, hex: hex as string, detail });
+      throw new Error(`the interpreter and pearld disagree about ${txid}: ${detail}`);
+    };
+    if (refusal === null) {
+      if (!verdict.ok) disagree(`pearld accepts it, the interpreter fails input ${verdict.inputIndex} with ${verdict.code}: ${verdict.message}`);
+      return write({ outcome: 'accepted', txid, ...(via === 'sendrawtransaction' ? { hex: hex as string } : {}) });
+    }
+    const script = SCRIPT_REFUSAL.exec(refusal);
+    if (script === null) return write({ outcome: 'other', txid, detail: refusal.slice(0, 120) });
+    if (verdict.ok) return disagree(`pearld's script engine refuses it (${script[2]}), the interpreter accepts it`);
+    if (verdict.inputIndex !== Number(script[1])) disagree(`pearld fails input ${script[1]}, the interpreter input ${verdict.inputIndex}`);
+    if (verdict.message !== script[2]) disagree(`pearld says "${script[2]}", the interpreter ${verdict.code}: "${verdict.message}"`);
+    return write({ outcome: 'script', txid, code: verdict.code, detail: script[2]! });
+  };
+  client.call = (async (method: string, params: readonly unknown[] = [], options?: CallOptions) => {
+    if (method === 'sendrawtransaction') {
+      const judged = await judge(params[0]);
+      let result: unknown;
+      try {
+        result = await call(method, params, options);
+      } catch (error) {
+        compare(judged, method, params[0], error instanceof PearlRpcError && error.kind === 'rpc' ? error.message : 'not answered');
+        throw error;
+      }
+      compare(judged, method, params[0], null);
+      return result;
+    }
+    if (method === 'testmempoolaccept' && Array.isArray(params[0])) {
+      const hexes = params[0] as unknown[];
+      const judged: Awaited<ReturnType<typeof judge>>[] = [];
+      for (const hex of hexes) judged.push(await judge(hex));
+      const results = await call<{ allowed?: boolean; 'reject-reason'?: string }[]>(method, params, options);
+      results.forEach((result, i) => compare(judged[i]!, method, hexes[i], result.allowed === true ? null : (result['reject-reason'] ?? '')));
+      return results;
+    }
+    return call(method, params, options);
+  }) as PearldClient['call'];
+}
+if (live !== null) hookInterpreter(pearld);
+
 /** Coinbases pay index 0 of this account; change goes to index 1. */
 export const miner = deriveSigningAccountFromSeed(mnemonicToSeed(MINER_MNEMONIC), network);
 const minerScript = toOutputScript(miner.deriveAddress(0), network);

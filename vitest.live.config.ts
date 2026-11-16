@@ -4,9 +4,10 @@ import { BaseSequencer, type TestSpecification } from 'vitest/node';
 // The fresh-chain tests need a node that has seen no transaction. The
 // timelock tests come next, while the median time past is still that of the
 // setup blocks. The files that walk every block run after the ones that make
-// them, the reorg replaces blocks under whatever follows it, and the Oyster
-// feed test leaves Oyster without block notifications.
-const ORDER = ['fresh-chain', 'timelocks', '', 'consensus', 'filters', 'reorg', 'oyster-feed'];
+// them, the reorg replaces blocks under whatever follows it, the interpreter
+// test reads what every file before it sent to the node, and the Oyster feed
+// test leaves Oyster without block notifications.
+const ORDER = ['fresh-chain', 'timelocks', '', 'consensus', 'filters', 'reorg', 'interpreter', 'oyster-feed'];
 const rank = (spec: TestSpecification): number => {
   const name = spec.moduleId.slice(spec.moduleId.lastIndexOf('/') + 1).replace('.test.ts', '');
   return ORDER.includes(name) ? ORDER.indexOf(name) : ORDER.indexOf('');
