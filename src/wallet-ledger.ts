@@ -23,6 +23,7 @@ import type { WalletBalance } from './backend.js';
 import type { BlockRef } from './client.js';
 import { confirmationsFromHeight } from './coinselect.js';
 import type { Utxo } from './coinselect.js';
+import { PearlError } from './errors.js';
 import { toHex } from './internal/bytes.js';
 import type { Transaction } from './transaction.js';
 
@@ -87,6 +88,8 @@ export interface HistoryEntry {
   fee: bigint | null;
   /** The other side: addresses paid for an outgoing transaction, addresses paying for an incoming one, where known. */
   counterparties: string[];
+  /** The wallet's own addresses the transaction pays or spends from. */
+  addresses: string[];
   coinbase: boolean;
   /** Milliseconds since the epoch when the wallet first saw it. */
   seenAt: number;
@@ -217,12 +220,15 @@ export function computeHistory(
     let sent = 0n;
     let outputsOurs = true;
     const paid: string[] = [];
+    const own: string[] = [];
     let outTotal = 0n;
     for (const output of entry.tx.outs) {
       const script = Uint8Array.from(output.script);
       outTotal += output.value;
-      if (ownership.owner(script) !== undefined) {
+      const owned = ownership.owner(script);
+      if (owned !== undefined) {
         received += output.value;
+        if (!own.includes(owned.address)) own.push(owned.address);
       } else {
         outputsOurs = false;
         const address = ownership.address(script);
@@ -238,8 +244,10 @@ export function computeHistory(
         continue;
       }
       inTotal += prevout.value;
-      if (ownership.owner(prevout.script) !== undefined) {
+      const owned = ownership.owner(prevout.script);
+      if (owned !== undefined) {
         sent += prevout.value;
+        if (!own.includes(owned.address)) own.push(owned.address);
       } else {
         const address = ownership.address(prevout.script);
         if (address !== null && !payers.includes(address)) payers.push(address);
@@ -259,6 +267,7 @@ export function computeHistory(
       amount: received - sent,
       fee: known ? inTotal - outTotal : null,
       counterparties: direction === 'incoming' ? payers : direction === 'outgoing' ? paid : [],
+      addresses: own,
       coinbase: entry.tx.isCoinbase(),
       seenAt: entry.seenAt,
       ...(entry.label === undefined ? {} : { label: entry.label }),
@@ -267,4 +276,85 @@ export function computeHistory(
   }
   const rank = (entry: HistoryEntry): number => (entry.block === null ? Number.MAX_SAFE_INTEGER : entry.block.height);
   return entries.sort((a, b) => rank(b) - rank(a) || b.seenAt - a.seenAt || (a.txid < b.txid ? -1 : 1));
+}
+
+// ---- JSON forms. JSON.stringify throws on a bigint, so a balance, coin or
+// history entry has a form with every amount as a decimal string and every
+// script as hex, which goes through JSON, postMessage and storage unchanged,
+// and a function that reads it back, refusing anything that is not one.
+
+/** A balance with its amounts as decimal strings of grain. */
+export type WalletBalanceJson = { [K in keyof WalletStateBalance]: string };
+
+/** A coin with its value as a decimal string and its script as hex. How it will be spent is not part of it. */
+export type WalletCoinJson = Omit<WalletCoin, 'value' | 'script' | 'spend'> & { value: string; script: string };
+
+/** A history entry with its amounts as decimal strings. */
+export type HistoryEntryJson = Omit<HistoryEntry, 'received' | 'sent' | 'amount' | 'fee'> & { received: string; sent: string; amount: string; fee: string | null };
+
+function grain(value: unknown, what: string): bigint {
+  if (typeof value !== 'string' || !/^-?(0|[1-9][0-9]*)$/.test(value)) throw new PearlError('AMOUNT_INVALID', `${what} is not a decimal string of grain`);
+  return BigInt(value);
+}
+
+function object(value: unknown, what: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${what} is not an object`);
+  return value as Record<string, unknown>;
+}
+
+const BALANCE_PARTS = ['confirmed', 'unconfirmed', 'immature', 'locked', 'total'] as const;
+
+/** A balance as JSON can carry it. */
+export function balanceToJson(balance: WalletStateBalance): WalletBalanceJson {
+  return Object.fromEntries(BALANCE_PARTS.map((part) => [part, balance[part].toString(10)])) as WalletBalanceJson;
+}
+
+/** Reads balanceToJson's output back. Throws AMOUNT_INVALID for an amount that is not a decimal string. */
+export function balanceFromJson(json: unknown): WalletStateBalance {
+  const record = object(json, 'balance');
+  return Object.fromEntries(BALANCE_PARTS.map((part) => [part, grain(record[part], `balance ${part}`)])) as unknown as WalletStateBalance;
+}
+
+/** A coin as JSON can carry it. */
+export function coinToJson(coin: WalletCoin): WalletCoinJson {
+  const { txid, vout, address, confirmations, coinbase, height, locked } = coin;
+  return { txid, vout, value: coin.value.toString(10), script: toHex(coin.script), address, owner: { ...coin.owner }, confirmations, coinbase, height, locked };
+}
+
+/** Reads coinToJson's output back. */
+export function coinFromJson(json: unknown): WalletCoin {
+  const record = object(json, 'coin') as unknown as WalletCoinJson;
+  if (typeof record.script !== 'string' || record.script.length % 2 !== 0 || !/^[0-9a-f]*$/.test(record.script)) throw new TypeError('coin script is not lowercase hex');
+  return {
+    ...record,
+    owner: { ...object(record.owner, 'coin owner') } as CoinOwner,
+    value: grain(record.value, 'coin value'),
+    script: Uint8Array.from(record.script.match(/../g) ?? [], (byte) => parseInt(byte, 16)),
+  };
+}
+
+/** A history entry as JSON can carry it. */
+export function historyEntryToJson(entry: HistoryEntry): HistoryEntryJson {
+  return {
+    ...entry,
+    block: entry.block === null ? null : { ...entry.block },
+    counterparties: [...entry.counterparties],
+    addresses: [...entry.addresses],
+    received: entry.received.toString(10),
+    sent: entry.sent.toString(10),
+    amount: entry.amount.toString(10),
+    fee: entry.fee === null ? null : entry.fee.toString(10),
+  };
+}
+
+/** Reads historyEntryToJson's output back. */
+export function historyEntryFromJson(json: unknown): HistoryEntry {
+  const record = object(json, 'history entry') as unknown as HistoryEntryJson;
+  return {
+    ...record,
+    received: grain(record.received, 'history entry received'),
+    sent: grain(record.sent, 'history entry sent'),
+    amount: grain(record.amount, 'history entry amount'),
+    fee: record.fee === null ? null : grain(record.fee, 'history entry fee'),
+  };
 }

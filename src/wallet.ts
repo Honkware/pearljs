@@ -10,8 +10,9 @@
 // operation that fails reloads the state from the store, so memory never
 // holds what the store does not. The one write outside a batch is an XMSS
 // index reservation, which must be durable before its signature exists. A
-// sync does its network calls before it takes its turn (#speculate), so a
-// long scan does not hold up a send.
+// sync does its network calls before it takes its turn (#speculate), on a
+// copy of the state in memory, so a long scan does not hold up a send and a
+// new block does not cost a read of the whole store.
 
 /**
  * Wallet state over a backend and a store: accounts, addresses, sync,
@@ -35,13 +36,15 @@ import type { CoinSelectionStrategy } from './coinselect.js';
 import { deriveAccountFromSeed, deriveSigningAccountFromSeed, importWatchOnlyAccount } from './keys.js';
 import type { KeyOrigin, PearlAccount, PearlSigningAccount } from './keys.js';
 import { createKeystore, openKeystore } from './keystore.js';
+import { MAX_UNLOCK_TIMEOUT_MS } from './keystore.js';
 import type { EncryptedKeystore, Keystore, KeystoreOptions, UnlockOptions } from './keystore.js';
 import { generateMnemonic, mnemonicToSeed, validateMnemonic, normalizeMnemonic } from './mnemonic.js';
 import type { PearlNetwork } from './networks.js';
 import { p2mr } from './payments.js';
 import { replacementFee, signalsReplacement } from './rbf.js';
 import { PearldRpc, OysterRpc, isUnknownTransaction } from './rpc.js';
-import { verifyInput } from './interpreter.js';
+import { verifyInput, verifyTransaction } from './interpreter.js';
+import { checkStandard } from './policy.js';
 import type { Rpc } from './rpc.js';
 import { taggedHash, xmssLeafScript } from './script.js';
 import { DEFAULT_MAX_FEE_RATE, signXmssP2mrInput } from './scriptpath.js';
@@ -59,7 +62,8 @@ import { computeHistory, computeLedger, outpointKey, prevTxid } from './wallet-l
 import type { CoinOwner, HistoryEntry, Ledger, LedgerOwnership, LedgerTransaction, TransactionStatus, WalletCoin, WalletStateBalance } from './wallet-ledger.js';
 import { OYSTER_RECOVERY_WINDOW } from './discovery.js';
 
-export type { CoinOwner, HistoryEntry, TransactionStatus, WalletCoin, WalletStateBalance } from './wallet-ledger.js';
+export type { CoinOwner, HistoryEntry, HistoryEntryJson, TransactionStatus, WalletBalanceJson, WalletCoin, WalletCoinJson, WalletStateBalance } from './wallet-ledger.js';
+export { balanceFromJson, balanceToJson, coinFromJson, coinToJson, historyEntryFromJson, historyEntryToJson } from './wallet-ledger.js';
 
 /** The version of the stored records this pearljs writes. */
 export const WALLET_SCHEMA_VERSION = 1;
@@ -73,6 +77,8 @@ export const DEFAULT_CREATE_UNLOCK_MS = 300_000;
 const SCAN_BATCH = 25;
 /** Addresses one sync scans on one chain past the next index before it stops and reports the backend. */
 export const DEFAULT_SCAN_LIMIT = 10_000;
+/** How many syncs pass between two looks at an address that has been paid, holds nothing and has nothing pending. */
+export const DEFAULT_QUIET_SYNC_INTERVAL = 10;
 const CONCURRENCY = 8;
 const XMSS_SEED_BYTES = 96;
 const decoder = new TextDecoder();
@@ -122,13 +128,83 @@ export function oysterTransactionSource(rpc: Rpc): TransactionSource {
 /** The part of PearlWsClient the wallet listens to. */
 export type WalletNotifier = Pick<PearlWsClient, 'on' | 'watchBlocks' | 'notifyReceived'>;
 
+/**
+ * A backend that can say what touched a set of addresses since a block, as
+ * one that scans blocks or compact filters can. A wallet whose backend has
+ * this asks it once per sync, in place of one history query per address.
+ */
+export interface ActivityScanner {
+  /**
+   * Every transaction that pays or spends from any of the watched addresses
+   * and is in a block after `after` on the best chain, or in the mempool.
+   * Null when it cannot answer from that block: `after` is not on its chain
+   * any more, or lies before what it keeps. The wallet then asks address by
+   * address.
+   */
+  getActivitySince(watched: readonly Watched[], after: BlockRef): Promise<{ txid: string; block: BlockRef | null }[] | null>;
+}
+
 /** What every wallet is opened with. */
 export interface WalletConnection {
   store: WalletStore;
   backend: WalletBackend;
-  transactions: TransactionSource;
+  /** Where full transactions come from. May be left out when the backend itself has getRawTransaction, as one object serving both roles does. */
+  transactions?: TransactionSource;
   /** Milliseconds since the epoch; Date.now unless given. */
   now?: () => number;
+  /**
+   * How many syncs pass between two looks at an address that has been paid,
+   * holds nothing and has nothing pending, when the backend has to be asked
+   * address by address. DEFAULT_QUIET_SYNC_INTERVAL unless given; 1 asks
+   * about every address in every sync.
+   */
+  quietSyncInterval?: number;
+}
+
+/** Options for sync. */
+export interface SyncOptions {
+  /** Scan the whole gap limit past the last used address and ask about every address, as the first sync does. */
+  full?: boolean;
+  /** Addresses to scan on one chain past its next index before giving the backend up. DEFAULT_SCAN_LIMIT unless given. */
+  scanLimit?: number;
+  /** Stops the sync while it is still asking the backend: it rejects with the signal's reason and changes nothing. */
+  signal?: AbortSignal;
+}
+
+/** How far a sync has got, as the `sync` event reports it. */
+export interface WalletSyncProgress {
+  /** scanning: asking about addresses; fetching: taking in transactions; settling: spends and pending transactions; done: applied. */
+  phase: 'scanning' | 'fetching' | 'settling' | 'done';
+  /** Addresses asked about so far. */
+  addresses: number;
+  /** Transactions looked at so far. */
+  transactions: number;
+}
+
+/** Which history entries to return. */
+export interface HistoryOptions {
+  /** Only transactions that pay or spend from this account. */
+  account?: string;
+  /** Only transactions that pay or spend from this address of the wallet. */
+  address?: string;
+  /** Entries to skip, newest first. 0 unless given. */
+  offset?: number;
+  /** The most entries to return. All unless given. */
+  limit?: number;
+}
+
+/** The wallet at one version, for a UI to render from. The same object is returned until something changes. */
+export interface WalletSnapshot {
+  /** Counts every change to what the wallet holds or to whether it is locked or syncing. */
+  readonly version: number;
+  readonly tip: BlockRef | null;
+  readonly balance: Readonly<WalletStateBalance>;
+  readonly locked: boolean;
+  readonly watchOnly: boolean;
+  readonly syncing: boolean;
+  /** Recorded transactions, and how many of them are pending. */
+  readonly transactions: number;
+  readonly pending: number;
 }
 
 /** Options for PearlWallet.create. */
@@ -228,6 +304,80 @@ export interface SendResult {
   replaces?: string;
 }
 
+/** How long prepareSend holds what it chose unless told otherwise: ten minutes. */
+export const DEFAULT_PREPARE_HOLD_MS = 600_000;
+
+/** Options for prepareSend: those of send, and how long to hold what it chooses. */
+export interface PrepareSendOptions extends SendOptions {
+  /**
+   * How long the chosen coins and the change address are kept for
+   * submitSigned, in milliseconds. DEFAULT_PREPARE_HOLD_MS unless given. 0
+   * holds nothing: the result is a preview and cannot be submitted.
+   */
+  holdMs?: number;
+}
+
+/** A payment built and not signed, as prepareSend returns it. Amounts in grain. */
+export interface PreparedSend {
+  /** Names the hold, for cancelPrepared; null for a preview that holds nothing. */
+  id: string | null;
+  txid: string;
+  /** The unsigned transaction as a base64 PSBT: every input with the output it spends and, for an account's coins, the key and derivation a signer needs. */
+  psbt: string;
+  /** The unsigned transaction, hex. */
+  hex: string;
+  fee: bigint;
+  vsize: number;
+  feeRate: FeeRate;
+  /** The change output's value, 0n when there is none. */
+  change: bigint;
+  changeAddress: string | null;
+  inputs: { txid: string; vout: number; value: bigint; address: string }[];
+  /** Every output in order; `change` marks the wallet's own change. */
+  outputs: { address: string | null; value: bigint; change: boolean }[];
+  /** The transactions the inputs spend, hex, which a signer of P2MR inputs checks the spent values against. */
+  previousTransactions: string[];
+  /** When the hold ends, in milliseconds since the epoch; null for a preview. */
+  expiresAt: number | null;
+}
+
+/** What a send would cost at one fee rate, as estimateSend returns it. */
+export interface SendEstimate {
+  feeRate: FeeRate;
+  /** Null when the send cannot be built at this rate; `error` says why. */
+  fee: bigint | null;
+  vsize: number | null;
+  inputs: number;
+  change: bigint | null;
+  error: Error | null;
+}
+
+/**
+ * InsufficientFundsError from a wallet, with what the source holds and
+ * could not spend. None of these amounts is part of `available`.
+ */
+export class WalletInsufficientFundsError extends InsufficientFundsError {
+  override name = 'WalletInsufficientFundsError';
+  /** Held by lockOutpoint or by a prepared send that has not been submitted, cancelled or expired. */
+  readonly locked: bigint;
+  /** Coinbase outputs short of maturity. */
+  readonly immature: bigint;
+  /** With fewer confirmations than the send asked for. */
+  readonly unconfirmed: bigint;
+  /** Held by an XMSS key that is frozen until burnXmssIndices. */
+  readonly frozen: bigint;
+
+  constructor(cause: InsufficientFundsError, held: { locked: bigint; immature: bigint; unconfirmed: bigint; frozen: bigint }) {
+    super(cause.available, cause.required, cause.fee);
+    this.locked = held.locked;
+    this.immature = held.immature;
+    this.unconfirmed = held.unconfirmed;
+    this.frozen = held.frozen;
+    const parts = (['locked', 'immature', 'unconfirmed', 'frozen'] as const).filter((part) => held[part] > 0n).map((part) => `${held[part]} grain ${part}`);
+    this.message = cause.message + (parts.length > 0 ? `; the wallet also holds ${parts.join(', ')}, which this send could not spend` : '');
+  }
+}
+
 /** What rebroadcast did with each pending transaction it sent again. */
 export interface RebroadcastResult {
   /** Transactions the backend took, or already had. */
@@ -293,6 +443,8 @@ export interface WalletEvents {
   xmss: { id: string; reason: 'behind' | 'low'; nextIndex: number; highestOnChain: number; remaining: number };
   /** A background sync or notification failed. */
   error: Error;
+  /** A sync got further. Sent as it happens, while the sync is still asking the backend. */
+  sync: WalletSyncProgress;
 }
 
 type Listener<T> = (value: T) => void;
@@ -373,6 +525,56 @@ interface TxEntry extends LedgerTransaction {
   changeOutput: number | null;
   /** For this wallet's own sends: the output of the recipient that was sent the maximum, or -1 when every recipient was sent an amount. */
   maxOutput: number | null;
+}
+
+// A payment prepareSend built and is holding coins for.
+interface PreparedRecord {
+  id: string;
+  tx: Transaction;
+  prevouts: { script: Uint8Array; value: bigint }[];
+  /** "txid:vout" of each input. */
+  inputs: string[];
+  /** The change address's account and index on its change chain, held with the coins. */
+  changeAccount: string | null;
+  changeIndex: number | null;
+  changeOutput: number;
+  maxOutput: number;
+  label: string | null;
+  maxFeeRate: FeeRate;
+  expiresAt: number;
+}
+
+function preparedToJson(record: PreparedRecord): JsonValue {
+  return {
+    hex: record.tx.toHex(),
+    prevouts: record.prevouts.map((prevout) => [toHex(prevout.script), encodeBigint(prevout.value)]),
+    changeAccount: record.changeAccount,
+    changeIndex: record.changeIndex,
+    changeOutput: record.changeOutput,
+    maxOutput: record.maxOutput,
+    label: record.label,
+    maxFeeRate: encodeBigint(record.maxFeeRate),
+    expiresAt: record.expiresAt,
+  };
+}
+
+function preparedFromJson(id: string, value: JsonValue): PreparedRecord {
+  const record = asRecord<{ hex: string; prevouts: [string, string][]; changeAccount: string | null; changeIndex: number | null; changeOutput: number; maxOutput: number; label: string | null; maxFeeRate: string; expiresAt: number }>(value, `prepared send ${id}`);
+  const tx = parseTransaction(record.hex);
+  if (!Array.isArray(record.prevouts) || record.prevouts.length !== tx.ins.length || !Number.isFinite(record.expiresAt)) throw invalid(`prepared send ${id}`);
+  return {
+    id,
+    tx,
+    prevouts: record.prevouts.map((prevout) => ({ script: decodeHex(prevout[0], 'prevout script'), value: decodeBigint(prevout[1], 'prevout value') })),
+    inputs: tx.ins.map((input) => outpointKey(prevTxid(input), input.index)),
+    changeAccount: record.changeAccount,
+    changeIndex: record.changeIndex,
+    changeOutput: record.changeOutput,
+    maxOutput: record.maxOutput,
+    label: record.label,
+    maxFeeRate: decodeBigint(record.maxFeeRate, 'fee ceiling'),
+    expiresAt: record.expiresAt,
+  };
 }
 
 interface ChainCache {
@@ -575,6 +777,10 @@ function memoized(backend: WalletBackend, source: TransactionSource): { backend:
   };
   const findUsed = backend.findUsed?.bind(backend);
   if (findUsed !== undefined) view.findUsed = (addresses) => once(`used:${addresses.join(',')}`, () => findUsed(addresses));
+  const since = (backend as Partial<ActivityScanner>).getActivitySince?.bind(backend);
+  if (since !== undefined) {
+    (view as WalletBackend & ActivityScanner).getActivitySince = (watched, after) => once(`since:${after.hash}:${watched.map(watchedKey).join(',')}`, () => since(watched, after));
+  }
   return { backend: view, source: { getRawTransaction: (txid) => once(`raw:${txid}`, () => source.getRawTransaction(txid)) } };
 }
 
@@ -603,6 +809,7 @@ export class PearlWallet {
   #txs = new Map<string, TxEntry>();
   #externalSpends = new Map<string, string | null>();
   #locks = new Map<string, number | null>();
+  #prepared = new Map<string, PreparedRecord>();
   #tip: BlockRef | null = null;
   // The highest block the wallet knows of: its synced tip, or the block of a transaction it was
   // told of since. Confirmations count from here, so a payment announced in a new block is
@@ -622,12 +829,29 @@ export class PearlWallet {
   #auth: JsonValue | undefined;
   // The identity that tag was last checked against, or made for, in this process; null until then.
   #verified: string | null = null;
+  readonly #quietInterval: number;
+  // Syncs this wallet has run since it was opened; the first asks about every address.
+  #rounds = 0;
+  // Set on the copy a sync runs on first: where to stop, and where its progress goes.
+  #signal: AbortSignal | undefined;
+  #report: ((progress: WalletSyncProgress) => void) | null = null;
+  #progress = { addresses: 0, transactions: 0 };
+  #version = 0;
+  #snapshot: WalletSnapshot | null = null;
+  #subscribers = new Set<() => void>();
+  #syncs = 0;
+  #wrote = false;
+  #watched = new WeakSet<Keystore>();
 
   private constructor(connection: WalletConnection) {
     this.#store = connection.store;
     this.#backend = connection.backend;
-    this.#source = connection.transactions;
+    const both = connection.backend as WalletBackend & Partial<TransactionSource>;
+    const source = connection.transactions ?? (typeof both.getRawTransaction === 'function' ? { getRawTransaction: (txid: string) => both.getRawTransaction!(txid) } : undefined);
+    if (source === undefined) throw new TypeError('a wallet needs transactions, a source of full transactions, unless its backend has getRawTransaction');
+    this.#source = source;
     this.#now = connection.now ?? Date.now;
+    this.#quietInterval = checkPositive(connection.quietSyncInterval ?? DEFAULT_QUIET_SYNC_INTERVAL, 'quietSyncInterval');
     this.network = connection.backend.network;
   }
 
@@ -684,6 +908,7 @@ export class PearlWallet {
         seed.fill(0);
       }
       wallet.#keystore = keystore;
+      wallet.#watchKeystore();
       wallet.#put('keystore', keystore.toJSON() as unknown as JsonValue);
       await wallet.#seal();
       if (timeout === 0) keystore.lock();
@@ -817,9 +1042,8 @@ export class PearlWallet {
     const keystore = this.#requireKeystore();
     await keystore.unlock(passphrase, options);
     // In turn with the wallet's operations, so it checks a state none of them is half way through changing.
-    const checked = this.#queue.then(() => (keystore.locked ? undefined : this.#authenticate()));
-    this.#queue = checked.catch(() => undefined);
-    await checked;
+    await this.#enqueue(async () => (keystore.locked ? undefined : this.#authenticate()));
+    this.#changed();
   }
 
   lock(): void {
@@ -1106,17 +1330,99 @@ export class PearlWallet {
     return this.#ledger().coins;
   }
 
-  /** Every recorded transaction, newest first. */
-  history(): HistoryEntry[] {
+  /**
+   * Recorded transactions, newest first: all of them, or those of one
+   * account or address, a page at a time with offset and limit.
+   */
+  history(options: HistoryOptions = {}): HistoryEntry[] {
+    const all = this.#history(options);
+    const offset = options.offset ?? 0;
+    if (!isIndex(offset) || (options.limit !== undefined && !isIndex(options.limit))) throw new RangeError('offset and limit must be non-negative integers');
+    return options.limit === undefined ? all.slice(offset) : all.slice(offset, offset + options.limit);
+  }
+
+  /** How many transactions history would return for the same account or address, for paging. */
+  historyCount(options: Pick<HistoryOptions, 'account' | 'address'> = {}): number {
+    return this.#history(options).length;
+  }
+
+  #history(filter: Pick<HistoryOptions, 'account' | 'address'>): HistoryEntry[] {
     const ledger = this.#ledger();
-    return computeHistory(this.#txs, ledger.status, this.#ownership(), this.#height);
+    const entries = computeHistory(this.#txs, ledger.status, this.#ownership(), this.#height);
+    if (filter.account === undefined && filter.address === undefined) return entries;
+    if (filter.account !== undefined) this.#account(filter.account);
+    const accountOf = new Map<string, string>();
+    for (const { owner, address } of this.#owned.values()) if (owner.type === 'account') accountOf.set(address, owner.account);
+    return entries.filter(
+      (entry) =>
+        (filter.address === undefined || entry.addresses.includes(filter.address)) &&
+        (filter.account === undefined || entry.addresses.some((address) => accountOf.get(address) === filter.account)),
+    );
   }
 
   transaction(txid: string): (HistoryEntry & { hex: string; broadcast: boolean; missing: boolean }) | null {
     const entry = this.#txs.get(txid);
     if (entry === undefined) return null;
-    const history = this.history().find((item) => item.txid === txid)!;
-    return { ...history, hex: entry.tx.toHex(), broadcast: entry.broadcast, missing: entry.missing };
+    const [history] = computeHistory(new Map([[txid, entry]]), this.#ledger().status, this.#ownership(), this.#height);
+    return { ...history!, hex: entry.tx.toHex(), broadcast: entry.broadcast, missing: entry.missing };
+  }
+
+  /**
+   * A number that goes up whenever what the wallet holds changes, or
+   * whether it is locked or syncing. Equal versions mean equal snapshots.
+   */
+  get version(): number {
+    return this.#version;
+  }
+
+  /** The wallet as it is now. The same frozen object is returned until the version changes, as a store for a UI framework has to. */
+  getSnapshot(): WalletSnapshot {
+    if (this.#snapshot === null) {
+      const ledger = this.#ledger();
+      let pending = 0;
+      for (const status of ledger.status.values()) if (status === 'pending') pending += 1;
+      this.#snapshot = Object.freeze({
+        version: this.#version,
+        tip: this.#tip === null ? null : Object.freeze({ ...this.#tip }),
+        balance: Object.freeze({ ...ledger.balance }),
+        locked: this.locked,
+        watchOnly: this.watchOnly,
+        syncing: this.#syncs > 0,
+        transactions: this.#txs.size,
+        pending,
+      });
+    }
+    return this.#snapshot;
+  }
+
+  /** Calls listener after every change of version. Returns a function that removes it. */
+  subscribe(listener: () => void): () => void {
+    this.#subscribers.add(listener);
+    return () => {
+      this.#subscribers.delete(listener);
+    };
+  }
+
+  #changed(): void {
+    this.#version += 1;
+    this.#snapshot = null;
+    for (const listener of [...this.#subscribers]) {
+      try {
+        listener();
+      } catch {
+        // A listener's failure is its own.
+      }
+    }
+  }
+
+  // A lock by timeout happens outside every operation, and is a change a UI must hear of.
+  #watchKeystore(): void {
+    const keystore = this.#keystore;
+    if (keystore === null || this.#watched.has(keystore)) return;
+    this.#watched.add(keystore);
+    keystore.onLock(() => {
+      if (this.#keystore === keystore) this.#changed();
+    });
   }
 
   /** The block the wallet last synced to, or null before the first sync. */
@@ -1166,44 +1472,67 @@ export class PearlWallet {
 
   /**
    * Brings the wallet up to the chain: checks recorded blocks against it and
-   * rolls back to the fork point if they left it, scans every account chain
-   * (the whole gap limit on the first sync or with full, the lookahead
-   * otherwise), fetches new transactions, finds spends the backend reports,
-   * and settles pending transactions as confirmed, conflicted or missing.
-   * A scan that runs scanLimit addresses (DEFAULT_SCAN_LIMIT unless given)
-   * past the account's next index without reaching the gap is given up as a
-   * backend answering wrongly (BACKEND_RESPONSE).
+   * rolls back to the fork point if they left it, asks the backend what has
+   * touched the wallet's addresses, fetches new transactions, finds spends
+   * the backend reports, and settles pending transactions as confirmed,
+   * conflicted or missing.
+   *
+   * A backend with getActivitySince (ActivityScanner) is asked once, for
+   * everything since the last synced tip. Any other is asked address by
+   * address: every address on the first sync after the wallet is opened
+   * and with full, and otherwise every address that is unused, holds a
+   * coin, has a pending transaction or lies within the lookahead, plus
+   * each of the rest once every quietSyncInterval syncs. The first sync of
+   * a wallet's life, and full, scan the whole gap limit past the last used
+   * address; the others the lookahead. A scan that runs scanLimit addresses
+   * past the account's next index without reaching the gap is given up as
+   * a backend answering wrongly (BACKEND_RESPONSE).
+   *
+   * `sync` events report progress, and signal stops a sync that is still
+   * asking: it rejects with the signal's reason and the wallet is as it was.
    */
-  async sync(options: { full?: boolean; scanLimit?: number } = {}): Promise<void> {
+  async sync(options: SyncOptions = {}): Promise<void> {
     const scanLimit = checkPositive(options.scanLimit ?? DEFAULT_SCAN_LIMIT, 'scanLimit');
-    await this.#speculate((wallet, events) => wallet.#syncBody(events, options.full === true, scanLimit));
+    await this.#speculate((wallet, events) => wallet.#syncBody(events, options.full === true, scanLimit), options.signal);
   }
 
   /** The cheap part of sync: the tip, reorgs and pending transactions, without scanning addresses. */
-  async refresh(): Promise<void> {
+  async refresh(options: Pick<SyncOptions, 'signal'> = {}): Promise<void> {
     await this.#speculate(async (wallet, events) => {
       const tip = await wallet.#backend.getTip();
       await wallet.#reconcile(tip, events);
+      wallet.#tell('settling');
       await wallet.#checkPending(events);
       wallet.#setTip(tip);
-    });
+    }, options.signal);
   }
 
   async #syncBody(events: PendingEvent[], full: boolean, scanLimit: number): Promise<void> {
+    const previous = this.#tip;
     const tip = await this.#backend.getTip();
-    await this.#reconcile(tip, events);
+    const rolledBack = await this.#reconcile(tip, events);
     const scanAll = full || !this.#meta.scanned;
     const seen = new Map<string, BlockRef | null>();
-    for (const record of [...this.#accounts.values()]) {
-      for (const change of [false, true]) await this.#scanChain(record, change, scanAll ? this.#meta.gapLimit : this.#meta.lookahead, seen, scanLimit);
+    this.#tell('scanning');
+    // Blocks the wallet recorded left the chain, or there is no earlier tip: nothing to ask "since" from.
+    const since = scanAll || rolledBack || previous === null ? false : await this.#scanSince(previous, seen, events, scanLimit);
+    if (!since) {
+      const quiet = scanAll || this.#rounds === 0 || this.#quietInterval === 1 ? null : this.#quietAddresses();
+      for (const record of [...this.#accounts.values()]) {
+        for (const change of [false, true]) await this.#scanChain(record, change, scanAll ? this.#meta.gapLimit : this.#meta.lookahead, seen, scanLimit, quiet);
+      }
+      const singles = [...this.#imported.keys(), ...[...this.#xmss.values()].map((record) => record.address)];
+      await this.#collect(singles, seen);
     }
-    const singles = [...this.#imported.keys(), ...[...this.#xmss.values()].map((record) => record.address)];
-    await this.#collect(singles, seen);
+    this.#tell('fetching');
     for (const [txid, block] of seen) {
       const entry = this.#txs.get(txid);
       if (entry !== undefined) this.#observe(entry, block, events);
       else await this.#fetchAndIngest(txid, block, events);
+      this.#progress.transactions += 1;
+      this.#tell('fetching');
     }
+    this.#tell('settling');
     await this.#checkSpends(events);
     await this.#checkPending(events);
     for (const record of this.#xmss.values()) {
@@ -1211,57 +1540,141 @@ export class PearlWallet {
       record.synced = true;
       this.#putXmss(record);
     }
-    this.#meta.scanned = true;
-    this.#put('meta', this.#meta as unknown as JsonValue);
+    this.#rounds += 1;
+    if (!this.#meta.scanned) {
+      this.#meta.scanned = true;
+      this.#put('meta', this.#meta as unknown as JsonValue);
+    }
     this.#setTip(tip);
+  }
+
+  // One question for everything since the last synced tip, where the backend can answer it. Taking
+  // the answers in moves the address indices, which brings addresses into the window that were not
+  // asked about; nothing is known of those, so each is asked for its whole history, until none is new.
+  async #scanSince(previous: BlockRef, seen: Map<string, BlockRef | null>, events: PendingEvent[], scanLimit: number): Promise<boolean> {
+    const scanner = this.#backend as WalletBackend & Partial<ActivityScanner>;
+    if (typeof scanner.getActivitySince !== 'function') return false;
+    const asked = new Set<string>();
+    const limit = this.#watchedAddresses().length + 2 * this.#accounts.size * scanLimit;
+    for (let round = 0; ; round += 1) {
+      const fresh = this.#watchedAddresses().filter((address) => !asked.has(address));
+      if (fresh.length === 0) return true;
+      if (asked.size + fresh.length > limit) throw new PearlError('BACKEND_RESPONSE', `the backend reports addresses in use ${scanLimit} past the next index with no gap; if the wallet really has that many, sync with a higher scanLimit`);
+      for (const address of fresh) asked.add(address);
+      if (round === 0) {
+        this.#signal?.throwIfAborted();
+        const activity = await scanner.getActivitySince(fresh, previous);
+        if (activity === null) return false;
+        for (const item of activity) seen.set(item.txid, item.block);
+        this.#progress.addresses += fresh.length;
+        this.#tell('scanning');
+      } else {
+        await this.#collect(fresh, seen);
+      }
+      for (const [txid, block] of seen) {
+        const entry = this.#txs.get(txid);
+        if (entry !== undefined) this.#observe(entry, block, events);
+        else await this.#fetchAndIngest(txid, block, events);
+      }
+    }
+  }
+
+  // Addresses that have been paid, hold nothing now and have nothing pending: the ones a sync may leave for their turn.
+  #quietAddresses(): Set<string> {
+    const quiet = this.#usedAddresses();
+    const ledger = this.#ledger();
+    for (const coin of ledger.coins) quiet.delete(coin.address);
+    for (const [txid, entry] of this.#txs) {
+      if (ledger.status.get(txid) !== 'pending') continue;
+      for (const script of [...entry.tx.outs.map((output) => output.script), ...entry.prevouts.flatMap((prevout) => (prevout === null ? [] : [prevout.script]))]) {
+        const owned = this.#ownerOf(script);
+        if (owned !== undefined) quiet.delete(owned.address);
+      }
+    }
+    return quiet;
+  }
+
+  #tell(phase: WalletSyncProgress['phase']): void {
+    this.#report?.({ phase, ...this.#progress });
   }
 
   /**
    * Runs a sync without holding the operation lock through its network
-   * calls. A scratch wallet opened from a copy of the store runs it first,
-   * outside the lock, through a view of the backend that remembers every
-   * answer. The real run then takes the lock and goes through the same
-   * view, so the queries it repeats are answered from memory and it only
-   * waits on the network for what changed in between (a send made
-   * meanwhile, say). What it applies is still one operation ending in one
-   * atomic batch, decided on the state as it is under the lock.
+   * calls. A copy of the state in memory runs it first, outside the lock,
+   * through a view of the backend that remembers every answer. The real
+   * run then takes the lock and goes through the same view, so the queries
+   * it repeats are answered from memory and it only waits on the network
+   * for what changed in between (a send made meanwhile, say). What it
+   * applies is still one operation ending in one atomic batch, decided on
+   * the state as it is under the lock. The copy is what a signal stops and
+   * what reports progress; once the real run has begun it finishes.
    */
-  async #speculate(body: (wallet: PearlWallet, events: PendingEvent[]) => Promise<void>): Promise<void> {
+  async #speculate(body: (wallet: PearlWallet, events: PendingEvent[]) => Promise<void>, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     const run = this.#syncing.then(async () => {
       if (this.#closed) throw new WalletError('WALLET_CLOSED', 'this wallet is closed');
+      signal?.throwIfAborted();
       const view = memoized(this.#backend, this.#source);
-      const scratch = await PearlWallet.open({ store: createMemoryStore(await this.#store.list('')), backend: view.backend, transactions: view.source });
-      scratch.#shareDerivations(this);
-      await scratch.#exclusive((events) => body(scratch, events));
-      // Derivations are deterministic, so what the scratch run derived is the real wallet's too.
-      this.#shareDerivations(scratch);
-      await this.#exclusive(async (events) => {
-        const backend = this.#backend;
-        const source = this.#source;
-        this.#backend = view.backend;
-        this.#source = view.source;
-        try {
-          await body(this, events);
-        } finally {
-          this.#backend = backend;
-          this.#source = source;
-        }
-      });
+      // Copied in turn with the wallet's operations, so not of a state one of them is half way through changing.
+      const scratch = await this.#enqueue(async () => this.#fork(view, signal));
+      this.#syncs += 1;
+      this.#changed();
+      try {
+        await scratch.#exclusive((events) => body(scratch, events));
+        signal?.throwIfAborted();
+        await this.#exclusive(async (events) => {
+          const backend = this.#backend;
+          const source = this.#source;
+          this.#backend = view.backend;
+          this.#source = view.source;
+          try {
+            await body(this, events);
+          } finally {
+            this.#backend = backend;
+            this.#source = source;
+          }
+        });
+        this.#emitter.emit('sync', { phase: 'done', ...scratch.#progress });
+      } finally {
+        this.#syncs -= 1;
+        this.#changed();
+      }
     });
     this.#syncing = run.catch(() => undefined);
     return run;
   }
 
-  // Takes over the longer of each derived address list, and the owned scripts that come with them.
-  #shareDerivations(from: PearlWallet): void {
-    for (const [id, chain] of from.#chains) {
-      const mine = this.#chains.get(id);
-      if (mine === undefined || mine.account.extendedPublicKey() !== chain.account.extendedPublicKey()) continue;
-      for (const branch of [0, 1] as const) {
-        if (chain.addresses[branch].length > mine.addresses[branch].length) mine.addresses[branch] = [...chain.addresses[branch]];
-      }
-    }
-    for (const [script, owned] of from.#owned) if (!this.#owned.has(script)) this.#owned.set(script, owned);
+  // A wallet over the same state, copied in memory, with nowhere to store anything: what a sync
+  // runs on first. Transactions and derived addresses are shared, since neither is ever changed
+  // in place; the records a sync does change are copied.
+  #fork(view: { backend: WalletBackend; source: TransactionSource }, signal: AbortSignal | undefined): PearlWallet {
+    const nowhere: WalletStore = {
+      get: async () => undefined,
+      set: async () => undefined,
+      delete: async () => undefined,
+      list: async () => [],
+      batch: async () => undefined,
+      compareAndSet: async () => true,
+      close: async () => undefined,
+    };
+    const copy = new PearlWallet({ store: nowhere, backend: view.backend, transactions: view.source, now: this.#now, quietSyncInterval: this.#quietInterval });
+    copy.#meta = { ...this.#meta };
+    copy.#accounts = new Map([...this.#accounts].map(([id, record]) => [id, { ...record }]));
+    copy.#chains = this.#chains;
+    copy.#owned = this.#owned;
+    copy.#addresses = new Map(this.#addresses);
+    copy.#imported = new Map(this.#imported);
+    copy.#xmss = new Map([...this.#xmss].map(([id, record]) => [id, { ...record }]));
+    copy.#txs = new Map([...this.#txs].map(([txid, entry]) => [txid, { ...entry }]));
+    copy.#externalSpends = new Map(this.#externalSpends);
+    copy.#locks = new Map(this.#locks);
+    copy.#prepared = new Map(this.#prepared);
+    copy.#tip = this.#tip;
+    copy.#height = this.#height;
+    copy.#rounds = this.#rounds;
+    copy.#signal = signal;
+    copy.#report = (progress) => this.#emitter.emit('sync', progress);
+    return copy;
   }
 
   /**
@@ -1342,22 +1755,7 @@ export class PearlWallet {
     return this.#exclusive(async (events) => {
       await this.#unlocked();
       const { feeRate, maxFeeRate } = await this.#feeRates(options);
-      const minConfirmations = options.minConfirmations ?? 1;
-      const coins = this.#spendable(options.from ?? { account: this.#firstSigningAccount().id });
-      const changeAccount = this.#changeAccount(options.from);
-      const changeIndex = changeAccount.change;
-      const changeAddress = this.#derive(changeAccount.id, true, changeIndex);
-      const payment = buildPayment<WalletCoin>({
-        network: this.network,
-        utxos: coins,
-        recipients: options.recipients,
-        feeRate,
-        changeAddress,
-        rbf: options.rbf === true,
-        minConfirmations,
-        coinbaseMaturity: this.network.coinbaseMaturity,
-        ...(options.strategy === undefined ? {} : { strategy: options.strategy }),
-      });
+      const { payment, changeAccount, changeIndex, changeAddress } = this.#build(options, feeRate, false);
       if (payment.changeIndex >= 0) {
         changeAccount.change = changeIndex + 1;
         this.#putAccount(changeAccount);
@@ -1366,6 +1764,192 @@ export class PearlWallet {
       const maxOutput = options.recipients.findIndex((recipient) => recipient.amount === 'max');
       return this.#signAndBroadcast(payment, { label: options.label, changeAddress: payment.changeIndex >= 0 ? changeAddress : null, maxFeeRate, maxOutput }, events);
     });
+  }
+
+  /**
+   * What a send would cost at each of several fee rates: the fee, size,
+   * number of inputs and change, or why it cannot be built at that rate.
+   * Reads the wallet as it is, asks nobody, and holds nothing, so a UI can
+   * call it on every keystroke.
+   */
+  estimateSend(options: SendOptions, feeRates: readonly FeeRate[]): SendEstimate[] {
+    const maxFeeRate = checkRate(options.maxFeeRate ?? DEFAULT_MAX_FEE_RATE, 'maxFeeRate');
+    return feeRates.map((feeRate) => {
+      try {
+        if (checkRate(feeRate, 'feeRate') > maxFeeRate) throw new SigningError('FEE_TOO_HIGH', `feeRate ${feeRate} is above maxFeeRate ${maxFeeRate} (grain per 1000 vbytes); raise maxFeeRate to pay it`);
+        const { payment } = this.#build(options, feeRate, true);
+        checkFeeCeiling(payment.transaction, payment.prevouts, payment.vsize, maxFeeRate);
+        return { feeRate, fee: payment.fee, vsize: payment.vsize, inputs: payment.inputs.length, change: payment.change, error: null };
+      } catch (err) {
+        return { feeRate, fee: null, vsize: null, inputs: 0, change: null, error: err instanceof Error ? err : new Error(String(err)) };
+      }
+    });
+  }
+
+  /** The change address the next send from an account would use. Nothing is recorded: it is the same until a send or a prepared send takes it. */
+  peekChangeAddress(options: { account?: string } = {}): string {
+    const record = options.account === undefined ? this.#changeAccount(undefined, true) : this.#account(options.account);
+    return this.#derive(record.id, true, this.#freeChangeIndex(record));
+  }
+
+  /**
+   * Builds a payment for a signer that is not this wallet: a hardware
+   * device, a cold machine, the holder of a watch-only account's keys. It
+   * selects coins as send does, from a watch-only account too, and returns
+   * the unsigned transaction as a PSBT with its fee, size, inputs and
+   * change. Nothing is signed, recorded as sent or broadcast, and the
+   * wallet need not be unlocked.
+   *
+   * The chosen coins and the change address are held for holdMs, out of
+   * reach of other sends, until submitSigned takes the signed transaction,
+   * cancelPrepared releases them, or the hold runs out. The hold is stored,
+   * so it outlives a restart. With holdMs 0 nothing is held.
+   */
+  async prepareSend(options: PrepareSendOptions): Promise<PreparedSend> {
+    return this.#exclusive(async () => {
+      const holdMs = options.holdMs ?? DEFAULT_PREPARE_HOLD_MS;
+      if (!Number.isSafeInteger(holdMs) || holdMs < 0) throw new RangeError('holdMs must be a non-negative integer of milliseconds');
+      const { feeRate, maxFeeRate } = await this.#feeRates(options);
+      this.#prunePrepared();
+      const { payment, changeAccount, changeIndex, changeAddress } = this.#build(options, feeRate, true);
+      checkFeeCeiling(payment.transaction, payment.prevouts, payment.vsize, maxFeeRate);
+      const { psbt, inputs } = payment;
+      for (const [i, coin] of inputs.entries()) {
+        const owner = coin.owner;
+        if (owner.type === 'account') this.#chains.get(owner.account)!.account.prepareInput(psbt, i, { index: owner.index, change: owner.change, value: coin.value });
+        else psbt.updateInput(i, { witnessUtxo: { script: coin.script, value: coin.value } });
+      }
+      // SEAM (signing work): once the builder can write a change output's tapBip32Derivation, write it
+      // here for payment.changeIndex, from changeAccount and changeIndex, so a cold signer can tell its
+      // own change from a swapped output. Until then changeAddress in the result is what there is to check.
+      const hasChange = payment.changeIndex >= 0;
+      let id: string | null = null;
+      let expiresAt: number | null = null;
+      if (holdMs > 0) {
+        id = toHex(crypto.getRandomValues(new Uint8Array(16)));
+        expiresAt = this.#now() + holdMs;
+        const record: PreparedRecord = {
+          id,
+          tx: payment.transaction,
+          prevouts: payment.prevouts.map((prevout) => ({ script: Uint8Array.from(prevout.script), value: prevout.value })),
+          inputs: inputs.map((coin) => outpointKey(coin.txid, coin.vout)),
+          changeAccount: hasChange ? changeAccount.id : null,
+          changeIndex: hasChange ? changeIndex : null,
+          changeOutput: payment.changeIndex,
+          maxOutput: options.recipients.findIndex((recipient) => recipient.amount === 'max'),
+          label: options.label ?? null,
+          maxFeeRate,
+          expiresAt,
+        };
+        this.#prepared.set(id, record);
+        this.#put(`prepared:${id}`, preparedToJson(record));
+        // The coins come back by themselves when the hold ends, which a UI has to hear of.
+        const timer = setTimeout(() => this.#changed(), Math.min(holdMs, MAX_UNLOCK_TIMEOUT_MS));
+        (timer as { unref?: () => void }).unref?.();
+      }
+      const ownership = this.#ownership();
+      return {
+        id,
+        txid: payment.transaction.getId(),
+        psbt: psbt.toBase64(),
+        hex: payment.transaction.toHex(),
+        fee: payment.fee,
+        vsize: payment.vsize,
+        feeRate,
+        change: payment.change,
+        changeAddress: hasChange ? changeAddress : null,
+        inputs: inputs.map(({ txid, vout, value, address }) => ({ txid, vout, value, address })),
+        outputs: payment.transaction.outs.map((output, i) => ({ address: ownership.address(Uint8Array.from(output.script)), value: output.value, change: i === payment.changeIndex })),
+        previousTransactions: [...new Set(inputs.map((coin) => coin.txid))].map((txid) => this.#txs.get(txid)!.tx.toHex()),
+        expiresAt,
+      };
+    });
+  }
+
+  /**
+   * Takes the signed form of a transaction prepareSend built and is still
+   * holding, checks it, records it as a pending send and broadcasts it, as
+   * send does with one it signed itself. The transaction must be the
+   * prepared one (the same inputs, outputs, sequences and lock time), every
+   * input must carry a witness that the script engine accepts for the
+   * output it spends, and it must pass pearld's relay policy and the fee
+   * ceiling it was prepared under. WALLET_NOT_PREPARED when it is not a
+   * held prepared send, or its coins are no longer the wallet's to spend.
+   */
+  async submitSigned(signed: Transaction | string | Uint8Array, options: { label?: string } = {}): Promise<SendResult> {
+    return this.#exclusive(async (events) => {
+      const tx = typeof signed === 'string' ? parseTransaction(signed) : signed instanceof Uint8Array ? Transaction.fromBuffer(signed) : signed.clone();
+      const txid = tx.getId();
+      const now = this.#now();
+      const prepared = [...this.#prepared.values()].find((record) => record.tx.getId() === txid);
+      if (prepared === undefined || prepared.expiresAt <= now) {
+        throw new WalletError(
+          'WALLET_NOT_PREPARED',
+          prepared === undefined
+            ? `transaction ${txid} is not one this wallet prepared and holds: it was never prepared here, was cancelled, or was changed after it was prepared`
+            : `the hold on prepared transaction ${txid} ran out; prepare it again`,
+        );
+      }
+      // The txid covers everything but the witnesses, so what remains to check is the signatures.
+      const coins = new Set(this.#ledger().coins.map((coin) => outpointKey(coin.txid, coin.vout)));
+      if (!prepared.inputs.every((key) => coins.has(key))) {
+        this.#prepared.delete(prepared.id);
+        this.#del(`prepared:${prepared.id}`);
+        await this.#flush();
+        throw new WalletError('WALLET_NOT_PREPARED', `an output that prepared transaction ${txid} spends is no longer the wallet's to spend; prepare it again`);
+      }
+      const unsigned = tx.ins.findIndex((input) => input.witness.length === 0);
+      if (unsigned >= 0) throw new SigningError('SIGNATURES_MISSING', `input ${unsigned} of transaction ${txid} is not signed`);
+      const verdict = verifyTransaction(tx, prepared.prevouts);
+      if (!verdict.ok) throw new SigningError('SIGNATURE_INVALID', `input ${verdict.inputIndex} of transaction ${txid} does not verify: ${verdict.message}`);
+      checkStandard(tx, { prevouts: prepared.prevouts });
+      checkFeeCeiling(tx, prepared.prevouts, tx.virtualSize(), prepared.maxFeeRate);
+      const entry = this.#record(tx, prepared.prevouts, { broadcast: false, changeOutput: prepared.changeOutput, maxOutput: prepared.maxOutput, label: options.label ?? prepared.label ?? undefined });
+      this.#prepared.delete(prepared.id);
+      this.#del(`prepared:${prepared.id}`);
+      // Stored before broadcast, as a send is.
+      await this.#flush();
+      await this.#broadcast(entry, null);
+      events.push(['transaction', entry.txid]);
+      const change = prepared.changeOutput >= 0 ? tx.outs[prepared.changeOutput]! : undefined;
+      return {
+        txid,
+        hex: tx.toHex(),
+        fee: prepared.prevouts.reduce((sum, prevout) => sum + prevout.value, 0n) - tx.outs.reduce((sum, output) => sum + output.value, 0n),
+        vsize: tx.virtualSize(),
+        change: change?.value ?? 0n,
+        changeAddress: change === undefined ? null : (this.#ownerOf(change.script)?.address ?? null),
+        inputs: tx.ins.map((input, i) => ({ txid: prevTxid(input), vout: input.index, value: prepared.prevouts[i]!.value })),
+      };
+    });
+  }
+
+  /** Releases what a prepared send holds. Returns false when there is no such hold any more. */
+  async cancelPrepared(id: string): Promise<boolean> {
+    return this.#exclusive(async () => {
+      this.#prunePrepared();
+      if (!this.#prepared.delete(id)) return false;
+      this.#del(`prepared:${id}`);
+      return true;
+    });
+  }
+
+  /** The prepared sends still held, with what each holds and until when. */
+  preparedSends(): { id: string; txid: string; inputs: { txid: string; vout: number }[]; expiresAt: number }[] {
+    const now = this.#now();
+    return [...this.#prepared.values()]
+      .filter((record) => record.expiresAt > now)
+      .map((record) => ({ id: record.id, txid: record.tx.getId(), inputs: record.tx.ins.map((input) => ({ txid: prevTxid(input), vout: input.index })), expiresAt: record.expiresAt }));
+  }
+
+  // Forgets holds that have run out. They stopped holding anything when they did; this only tidies the store.
+  #prunePrepared(): void {
+    const now = this.#now();
+    for (const [id, record] of this.#prepared) {
+      if (record.expiresAt > now) continue;
+      this.#prepared.delete(id);
+      this.#del(`prepared:${id}`);
+    }
   }
 
   /**
@@ -1590,9 +2174,11 @@ export class PearlWallet {
     const keystore = map.get('keystore');
     this.#auth = map.get('auth');
     this.#keystore = keystore === undefined ? null : this.#keystore?.locked === false && JSON.stringify(this.#keystore.toJSON()) === JSON.stringify(keystore) ? this.#keystore : openKeystore(keystore);
+    this.#watchKeystore();
     this.#accounts.clear();
-    this.#chains.clear();
-    this.#owned.clear();
+    // New maps, not cleared ones: a sync in flight still reads the old.
+    this.#chains = new Map();
+    this.#owned = new Map();
     this.#addresses.clear();
     this.#imported.clear();
     this.#xmss.clear();
@@ -1600,6 +2186,7 @@ export class PearlWallet {
     this.#txs.clear();
     this.#externalSpends.clear();
     this.#locks.clear();
+    this.#prepared.clear();
     const sync = map.get('sync');
     const tip = sync === undefined ? null : asRecord<BlockRef>(sync, 'sync tip');
     this.#tip = tip === null ? null : { height: tip.height, hash: tip.hash };
@@ -1630,6 +2217,7 @@ export class PearlWallet {
       else if (key.startsWith('tx:')) this.#txs.set(name, txFromJson(name, value));
       else if (key.startsWith('spent:')) this.#externalSpends.set(name, asRecord<{ by: string | null }>(value, key).by);
       else if (key.startsWith('lock:')) this.#locks.set(name, asRecord<{ until: number | null }>(value, key).until);
+      else if (key.startsWith('prepared:')) this.#prepared.set(name, preparedFromJson(name, value));
     }
     for (const [address] of this.#imported) this.#own(toOutputScript(address, this.network), { type: 'imported', id: address }, address);
     for (const record of this.#xmss.values()) this.#own(toOutputScript(record.address, this.network), { type: 'xmss', id: record.publicKey }, record.address);
@@ -1718,6 +2306,7 @@ export class PearlWallet {
 
   async #flush(): Promise<void> {
     if (this.#ops.length === 0) return;
+    this.#wrote = true;
     // Later writes to one key replace earlier ones, so the batch holds each key once.
     const last = new Map<string, StoreOperation>();
     for (const op of this.#ops) last.set(op.key, op);
@@ -1747,17 +2336,19 @@ export class PearlWallet {
    * On failure, the state is reloaded from the store.
    */
   async #exclusive<T>(run: (events: PendingEvent[]) => Promise<T>): Promise<T> {
-    const result = this.#queue.then(async () => {
+    return this.#enqueue(async () => {
       if (this.#closed) throw new WalletError('WALLET_CLOSED', 'this wallet is closed');
       if (this.#broken !== null) throw this.#broken;
       const events: PendingEvent[] = [];
       const before = this.#ledger().balance;
       const verified = this.#verified;
+      this.#wrote = false;
       try {
         const value = await run(events);
         await this.#flush();
+        if (this.#wrote || events.length > 0) this.#changed();
         const after = this.#ledger().balance;
-        const history = events.some(([name]) => name === 'transaction') ? new Map(this.history().map((entry) => [entry.txid, entry])) : null;
+        const history = events.some(([name]) => name === 'transaction') ? new Map(this.#history({}).map((entry) => [entry.txid, entry])) : null;
         for (const [name, payload] of events) {
           if (name !== 'transaction') this.#emitter.emit(name, payload as never);
           else if (history?.has(payload)) this.#emitter.emit('transaction', history.get(payload)!);
@@ -1774,9 +2365,15 @@ export class PearlWallet {
           // The store cannot be read back, so nothing more is done on what memory holds.
           this.#broken = reload;
         }
+        this.#changed();
         throw err;
       }
     });
+  }
+
+  // Runs after every operation already waiting, and before any that comes later.
+  #enqueue<T>(run: () => Promise<T>): Promise<T> {
+    const result = this.#queue.then(run);
     this.#queue = result.catch(() => undefined);
     return result;
   }
@@ -1815,13 +2412,13 @@ export class PearlWallet {
     return record;
   }
 
-  #changeAccount(from: CoinSource | undefined): AccountRecord {
+  #changeAccount(from: CoinSource | undefined, external = false): AccountRecord {
     if (from !== undefined && from !== 'all' && 'account' in from) {
       const record = this.#account(from.account);
-      if (record.kind !== 'seed') throw new WalletError('WALLET_WATCH_ONLY', `account ${record.id} is watch-only and cannot sign`);
+      if (record.kind !== 'seed' && !external) throw new WalletError('WALLET_WATCH_ONLY', `account ${record.id} is watch-only and cannot sign`);
       return record;
     }
-    return this.#firstSigningAccount();
+    return external && ![...this.#accounts.values()].some((item) => item.kind === 'seed') ? this.#account(undefined) : this.#firstSigningAccount();
   }
 
   #derive(account: string, change: boolean, index: number): string {
@@ -1937,9 +2534,24 @@ export class PearlWallet {
       tipHeight: this.#height,
       coinbaseMaturity: this.network.coinbaseMaturity,
       externalSpends: new Set(this.#externalSpends.keys()),
-      locks: this.#locks,
+      locks: this.#heldOutpoints(),
       now: this.#now(),
     });
+  }
+
+  // The locks, and with them the coins of every prepared send that is still held, until its hold ends.
+  #heldOutpoints(): ReadonlyMap<string, number | null> {
+    if (this.#prepared.size === 0) return this.#locks;
+    const now = this.#now();
+    const held = new Map(this.#locks);
+    for (const record of this.#prepared.values()) {
+      if (record.expiresAt <= now) continue;
+      for (const key of record.inputs) {
+        const until = held.get(key);
+        if (until === undefined || (until !== null && until < record.expiresAt)) held.set(key, record.expiresAt);
+      }
+    }
+    return held;
   }
 
   #sum(coins: readonly WalletCoin[]): WalletStateBalance {
@@ -1965,20 +2577,25 @@ export class PearlWallet {
     return { xmss: owner.id };
   }
 
-  // Unlocked coins a source may spend, with what coin selection needs to price them.
-  #spendable(from: CoinSource): WalletCoin[] {
+  #from(from: CoinSource, owner: CoinOwner): boolean {
+    if (from === 'all') return true;
+    if ('account' in from) return owner.type === 'account' && owner.account === from.account;
+    if ('imported' in from) return owner.type === 'imported' && owner.id === from.imported;
+    return owner.type === 'xmss' && owner.id === from.xmss;
+  }
+
+  // Unlocked coins a source may spend, with what coin selection needs to price them. A payment that
+  // is only being prepared for a signer elsewhere may spend a watch-only account's coins too.
+  #spendable(from: CoinSource, external = false): WalletCoin[] {
     const accepts = (owner: CoinOwner): boolean => {
-      if (owner.type === 'account' && this.#accounts.get(owner.account)?.kind !== 'seed') return false;
+      if (owner.type === 'account' && !external && this.#accounts.get(owner.account)?.kind !== 'seed') return false;
       if (owner.type === 'xmss' && this.#xmss.get(owner.id)?.frozen !== null) return false;
-      if (from === 'all') return true;
-      if ('account' in from) return owner.type === 'account' && owner.account === from.account;
-      if ('imported' in from) return owner.type === 'imported' && owner.id === from.imported;
-      return owner.type === 'xmss' && owner.id === from.xmss;
+      return this.#from(from, owner);
     };
     if (from !== 'all') {
       if ('account' in from) {
         const record = this.#account(from.account);
-        if (record.kind !== 'seed') throw new WalletError('WALLET_WATCH_ONLY', `account ${record.id} is watch-only and cannot sign`);
+        if (record.kind !== 'seed' && !external) throw new WalletError('WALLET_WATCH_ONLY', `account ${record.id} is watch-only and cannot sign`);
       } else if ('imported' in from && !this.#imported.has(from.imported)) {
         throw new WalletError('WALLET_UNKNOWN', `no imported key ${from.imported} in the wallet`);
       } else if ('xmss' in from) {
@@ -1990,6 +2607,54 @@ export class PearlWallet {
     return this.#ledger()
       .coins.filter((coin) => !coin.locked && accepts(coin.owner))
       .map((coin) => ({ ...coin, ...this.#spendShape(coin.owner) }));
+  }
+
+  // The first index of an account's change chain that no prepared send is holding.
+  #freeChangeIndex(record: AccountRecord): number {
+    const now = this.#now();
+    const held = new Set<number>();
+    for (const prepared of this.#prepared.values()) if (prepared.expiresAt > now && prepared.changeAccount === record.id && prepared.changeIndex !== null) held.add(prepared.changeIndex);
+    let index = record.change;
+    while (held.has(index)) index += 1;
+    return index;
+  }
+
+  // Chooses coins and builds the unsigned payment, for this wallet's keys or, with external, for a
+  // signer elsewhere. Nothing is recorded. A shortfall is reported with what the source holds and
+  // could not spend.
+  #build(options: SendOptions, feeRate: FeeRate, external: boolean): { payment: Payment<WalletCoin>; changeAccount: AccountRecord; changeIndex: number; changeAddress: string } {
+    const minConfirmations = options.minConfirmations ?? 1;
+    const from = options.from ?? { account: (external ? this.#account(undefined) : this.#firstSigningAccount()).id };
+    const coins = this.#spendable(from, external);
+    const changeAccount = this.#changeAccount(from, external);
+    const changeIndex = this.#freeChangeIndex(changeAccount);
+    const changeAddress = this.#derive(changeAccount.id, true, changeIndex);
+    try {
+      const payment = buildPayment<WalletCoin>({
+        network: this.network,
+        utxos: coins,
+        recipients: options.recipients,
+        feeRate,
+        changeAddress,
+        rbf: options.rbf === true,
+        minConfirmations,
+        coinbaseMaturity: this.network.coinbaseMaturity,
+        ...(options.strategy === undefined ? {} : { strategy: options.strategy }),
+      });
+      return { payment, changeAccount, changeIndex, changeAddress };
+    } catch (err) {
+      if (!(err instanceof InsufficientFundsError)) throw err;
+      const held = { locked: 0n, immature: 0n, unconfirmed: 0n, frozen: 0n };
+      for (const coin of this.#ledger().coins) {
+        if (!this.#from(from, coin.owner)) continue;
+        if (coin.owner.type === 'account' && !external && this.#accounts.get(coin.owner.account)?.kind !== 'seed') continue;
+        if (coin.owner.type === 'xmss' && this.#xmss.get(coin.owner.id)?.frozen !== null) held.frozen += coin.value;
+        else if (coin.locked) held.locked += coin.value;
+        else if (coin.coinbase && coin.confirmations < this.network.coinbaseMaturity) held.immature += coin.value;
+        else if (coin.confirmations < minConfirmations) held.unconfirmed += coin.value;
+      }
+      throw new WalletInsufficientFundsError(err, held);
+    }
   }
 
   #checkXmssUsable(record: XmssRecord): void {
@@ -2089,6 +2754,7 @@ export class PearlWallet {
   }
 
   async #fetch(txid: string): Promise<Transaction | null> {
+    this.#signal?.throwIfAborted();
     const raw = await this.#source.getRawTransaction(txid);
     if (raw === null) return null;
     const tx = typeof raw === 'string' ? parseTransaction(raw) : Transaction.fromBuffer(raw);
@@ -2223,7 +2889,10 @@ export class PearlWallet {
 
   async #collect(addresses: readonly string[], seen: Map<string, BlockRef | null>): Promise<Set<string>> {
     const used = new Set<string>();
+    this.#signal?.throwIfAborted();
     const histories = await mapLimit(addresses, CONCURRENCY, (address) => this.#backend.getHistory(address));
+    this.#progress.addresses += addresses.length;
+    this.#tell('scanning');
     histories.forEach((history, i) => {
       if (history.length > 0) used.add(addresses[i]!);
       for (const item of history) seen.set(item.txid, item.block);
@@ -2233,7 +2902,7 @@ export class PearlWallet {
 
   // Scans one chain of an account from index 0 until `window` unused
   // addresses past the last used one, as discoverAccount does.
-  async #scanChain(record: AccountRecord, change: boolean, window: number, seen: Map<string, BlockRef | null>, scanLimit: number): Promise<void> {
+  async #scanChain(record: AccountRecord, change: boolean, window: number, seen: Map<string, BlockRef | null>, scanLimit: number, quiet: ReadonlySet<string> | null): Promise<void> {
     const known = change ? record.change : record.receive;
     let lastUsed = known - 1;
     for (let start = 0; start < lastUsed + 1 + window; ) {
@@ -2246,12 +2915,15 @@ export class PearlWallet {
         );
       }
       const count = Math.min(SCAN_BATCH, lastUsed + 1 + window - start);
-      const batch = Array.from({ length: count }, (_, i) => this.#derive(record.id, change, start + i));
-      const candidates = this.#backend.findUsed === undefined ? batch : await this.#backend.findUsed(batch);
-      const used = await this.#collect(candidates, seen);
-      batch.forEach((address, i) => {
-        if (used.has(address)) lastUsed = Math.max(lastUsed, start + i);
-      });
+      const batch = new Map<string, number>();
+      for (let index = start; index < start + count; index += 1) {
+        const address = this.#derive(record.id, change, index);
+        // An address that was paid, holds nothing and has nothing pending is asked about in its turn, not every time.
+        if (quiet !== null && index < known - this.#meta.lookahead && quiet.has(address) && (index + this.#rounds) % this.#quietInterval !== 0) continue;
+        batch.set(address, index);
+      }
+      const candidates = this.#backend.findUsed === undefined || batch.size === 0 ? [...batch.keys()] : await this.#backend.findUsed([...batch.keys()]);
+      for (const address of await this.#collect(candidates, seen)) lastUsed = Math.max(lastUsed, batch.get(address) ?? -1);
       start += count;
     }
     const next = lastUsed + 1;
@@ -2308,6 +2980,7 @@ export class PearlWallet {
   async #checkPending(events: PendingEvent[]): Promise<void> {
     for (const entry of [...this.#txs.values()]) {
       if (entry.status !== 'active' || entry.block !== null) continue;
+      this.#signal?.throwIfAborted();
       const found = await this.#backend.getTransaction(entry.txid);
       if (found !== null) {
         this.#observe(entry, found.block, events);
@@ -2369,9 +3042,9 @@ export class PearlWallet {
    * exist outside their block, become orphaned. The scan that follows
    * confirms again whatever the new chain holds.
    */
-  async #reconcile(tip: BlockRef, events: PendingEvent[]): Promise<void> {
+  async #reconcile(tip: BlockRef, events: PendingEvent[]): Promise<boolean> {
     const previous = this.#tip;
-    if (previous !== null && previous.hash === tip.hash) return;
+    if (previous !== null && previous.hash === tip.hash) return false;
     const floor = previous === null ? Number.NEGATIVE_INFINITY : Math.min(previous.height, tip.height) - this.#meta.reorgDepth;
     const blocks = new Map<string, { height: number; hash: string; entries: TxEntry[] }>();
     for (const entry of this.#txs.values()) {
@@ -2393,7 +3066,7 @@ export class PearlWallet {
       if (stands) anchored = true;
       else fork = Math.min(fork, block.height);
     }
-    if (fork === Number.POSITIVE_INFINITY) return;
+    if (fork === Number.POSITIVE_INFINITY) return false;
     for (const entry of this.#txs.values()) {
       if (entry.status !== 'active' || entry.block === null || entry.block.height < fork) continue;
       if (entry.tx.isCoinbase()) {
@@ -2404,6 +3077,7 @@ export class PearlWallet {
       this.#putTx(entry);
     }
     events.push(['reorg', { forkHeight: fork, previousTip: previous, tip }]);
+    return true;
   }
 
   async #notified(hex: string, details: BlockDetails | null): Promise<void> {
@@ -2527,6 +3201,10 @@ export class PearlWallet {
     const keystore = this.#requireUnlocked();
     const signed = payment.transaction.clone();
     const { psbt, inputs, prevouts } = payment;
+    // SEAM (signing work): account inputs are signed here, synchronously, with keys derived from the
+    // seed. A signer that answers asynchronously (a device holding the account key) goes through
+    // prepareSend and submitSigned today; when the account interface gains an async key-path signer,
+    // it can be called here on the same prepared PSBT, and send can take it as an option.
     // Every input is prepared from the watch-only accounts before any key is decrypted.
     for (const [i, coin] of inputs.entries()) {
       const owner = coin.owner;

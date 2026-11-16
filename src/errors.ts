@@ -162,6 +162,7 @@ export type PearlErrorCode =
   | 'WALLET_BROADCAST_REFUSED'
   | 'WALLET_BROADCAST_UNCERTAIN'
   | 'WALLET_BACKUP_INVALID'
+  | 'WALLET_NOT_PREPARED'
   | 'WALLET_CLOSED';
 
 /** What toJSON returns and fromJSON reads. */

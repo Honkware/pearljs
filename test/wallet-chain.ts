@@ -20,6 +20,7 @@ import {
   toOutputScript,
 } from '../src/index.js';
 import type {
+  ActivityScanner,
   AddressHistoryEntry,
   AddressPayment,
   BlockRef,
@@ -260,6 +261,23 @@ export class FakeChain implements WalletBackend, TransactionSource {
     return { status: 'unspent', confirmations: found.block === null ? 0 : this.height - found.block.height + 1 };
   }
 
+  /**
+   * What an ActivityScanner answers: the transactions in blocks after `after`, and in the mempool,
+   * that pay or spend from the watched addresses; null when `after` is not on this chain. A wallet
+   * uses it only when it is installed as getActivitySince, which withActivityScanner does.
+   */
+  async activitySince(watched: readonly Watched[], after: BlockRef): Promise<{ txid: string; block: BlockRef | null }[] | null> {
+    this.#count('getActivitySince');
+    if (this.blocks[after.height]?.hash !== after.hash) return null;
+    const scripts = new Set(watched.map((item) => hex(typeof item === 'string' ? toOutputScript(item, network) : item)));
+    const paying = new Set<string>();
+    for (const { tx } of this.#all()) tx.outs.forEach((out, vout) => void (scripts.has(hex(out.script)) && paying.add(key(tx.getId(), vout))));
+    return this.#all()
+      .filter(({ block }) => block === null || block.height > after.height)
+      .filter(({ tx }) => tx.outs.some((out) => scripts.has(hex(out.script))) || tx.ins.some((input) => paying.has(key(prevTxid(input), input.index))))
+      .map(({ tx, block }) => ({ txid: tx.getId(), block }));
+  }
+
   // ---- internals
 
   #count(name: string): void {
@@ -348,4 +366,9 @@ export class FakeChain implements WalletBackend, TransactionSource {
     tx.ins.forEach((_, i) => tx.setWitness(i, [new Uint8Array(64).fill(9)]));
     return tx;
   }
+}
+
+/** The same chain as a backend that can answer for every address at once. */
+export function withActivityScanner(chain: FakeChain): FakeChain & ActivityScanner {
+  return Object.assign(chain, { getActivitySince: chain.activitySince.bind(chain) });
 }
