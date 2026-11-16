@@ -7,6 +7,15 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  JsonRpcClient,
+  OysterMethods,
+  OysterRpc,
+  OysterWsClient,
+  PearlWsClient,
+  PearldMethods,
+  PearldRpc,
+  oysterMethods,
+  pearldMethods,
   type AddedNodeInfo,
   type ChainName,
   type ChainTipStatus,
@@ -163,8 +172,8 @@ function typedMethods(): { pearld: Set<string>; oyster: Set<string> } {
   const rpc = readFileSync(new URL('../src/rpc.ts', import.meta.url), 'utf8');
   const ws = readFileSync(new URL('../src/ws.ts', import.meta.url), 'utf8');
   const calls = (text: string) => new Set([...text.matchAll(/this\.call(?:<[^(]*>)?\(\s*'([a-z]+)'/g)].map((m) => m[1]!));
-  const pearldPart = rpc.slice(rpc.indexOf('export function pearldMethods'), rpc.indexOf('export function oysterMethods'));
-  const oysterPart = rpc.slice(rpc.indexOf('export function oysterMethods'), rpc.indexOf('/** Typed methods for pearld over fetch. */'));
+  const pearldPart = rpc.slice(rpc.indexOf('export abstract class PearldMethods'), rpc.indexOf('export function pearldMethods'));
+  const oysterPart = rpc.slice(rpc.indexOf('export abstract class OysterMethods'), rpc.indexOf('export function oysterMethods'));
   const sent = new Set([...ws.matchAll(/'((?:stop)?notify\w+|authenticate|session|loadtxfilter|rescan|rescanblocks)'/g)].map((m) => m[1]!));
   return { pearld: new Set([...calls(pearldPart), ...calls(ws), ...sent]), oyster: calls(oysterPart) };
 }
@@ -180,6 +189,37 @@ const UNTYPED_PEARLD: Record<string, string> = {
 const UNTYPED_OYSTER: Record<string, string> = {
   help: 'text for people, not for programs',
 };
+
+describe('the typed method classes', () => {
+  const names = (cls: { prototype: object }) => Object.getOwnPropertyNames(cls.prototype).filter((name) => name !== 'constructor');
+  const method = (cls: { prototype: object }, name: string): unknown => Reflect.get(cls.prototype, name);
+
+  it('put every method of PearldMethods and OysterMethods on each client, written once', () => {
+    for (const client of [PearldClient, PearldRpc, PearlWsClient]) {
+      for (const name of names(PearldMethods)) expect(method(client, name), `${client.name}.${name}`).toBe(method(PearldMethods, name));
+    }
+    for (const client of [OysterClient, OysterRpc, OysterWsClient]) {
+      for (const name of names(OysterMethods)) expect(method(client, name), `${client.name}.${name}`).toBe(method(OysterMethods, name));
+    }
+    expect(names(PearldMethods).length).toBeGreaterThan(50);
+  });
+
+  it('mix the methods into any class with call, keeping its own', async () => {
+    class Recorder extends JsonRpcClient {
+      seen: string[] = [];
+      override async call<T>(method: string): Promise<T> {
+        this.seen.push(method);
+        return 7 as T;
+      }
+    }
+    const Both = pearldMethods(Recorder);
+    const client = new (class extends Both {})({ url: 'https://127.0.0.1:1' });
+    expect(await client.getBlockCount()).toBe(7);
+    expect(client.seen).toEqual(['getblockcount']);
+    const Wallet = oysterMethods(Recorder);
+    expect(await new (class extends Wallet {})({ url: 'https://127.0.0.1:1' }).walletIsLocked()).toBe(7);
+  });
+});
 
 describe('method coverage', () => {
   it('types every method pearld dispatches, but for the ones pinned here', () => {
