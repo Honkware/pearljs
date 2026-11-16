@@ -130,6 +130,7 @@ export type PearlErrorCode =
   | 'BACKEND_RESPONSE'
   // Invoices
   | 'INVOICE_INVALID'
+  | 'INVOICE_JSON_INVALID'
   // Wallet stores
   | 'STORE_LOCKED'
   | 'STORE_NOT_FOUND'

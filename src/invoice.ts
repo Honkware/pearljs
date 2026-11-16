@@ -265,6 +265,11 @@ function applyView(invoice: Invoice, view: ChainView, now: number): Invoice {
     if (!recorded.has(txid)) payments.push(record(txid, undefined));
   }
 
+  const { paidAmount, uncountedAmount, confirmations, conflicted } = summarize(payments);
+  return { ...invoice, payments, paidAmount, uncountedAmount, confirmations, state: stateOf(invoice, paidAmount, confirmations, conflicted, now) };
+}
+
+function summarize(payments: readonly InvoicePayment[]): { paidAmount: bigint; uncountedAmount: bigint; confirmations: number; conflicted: boolean } {
   let paidAmount = 0n;
   let uncountedAmount = 0n;
   let confirmations = Number.MAX_SAFE_INTEGER;
@@ -278,9 +283,7 @@ function applyView(invoice: Invoice, view: ChainView, now: number): Invoice {
     }
     if (payment.onTime && payment.status === 'vanished') conflicted = true;
   }
-  if (confirmations === Number.MAX_SAFE_INTEGER) confirmations = 0;
-
-  return { ...invoice, payments, paidAmount, uncountedAmount, confirmations, state: stateOf(invoice, paidAmount, confirmations, conflicted, now) };
+  return { paidAmount, uncountedAmount, confirmations: confirmations === Number.MAX_SAFE_INTEGER ? 0 : confirmations, conflicted };
 }
 
 function stateOf(invoice: Invoice, paid: bigint, confirmations: number, conflicted: boolean, now: number): InvoiceState {
@@ -321,6 +324,178 @@ export async function refreshInvoice(
   const [tip, activity] = await Promise.all([client.getTip(), client.getAddressActivity(invoice.address)]);
   const tipHeight = blockHeight(tip, 'a tip');
   return applyView(invoice, await readView(invoice, client, tipHeight, activity), now);
+}
+
+/** The JSON form of an InvoicePayment: amounts as decimal strings of grain. */
+export interface InvoicePaymentJson {
+  txid: string;
+  amount: string;
+  status: InvoicePaymentStatus;
+  block: { height: number; hash: string; time?: number } | null;
+  confirmations: number;
+  firstSeenAt: number;
+  firstBlockTime: number | null;
+  onTime: boolean;
+  counted: boolean;
+}
+
+/** The JSON form of an Invoice, as invoiceToJson writes it and invoiceFromJson reads it. */
+export interface InvoiceJson {
+  format: 'pearljs-invoice';
+  version: 1;
+  id: string;
+  address: string;
+  amount: string;
+  createdAt: number;
+  expiresAt: number;
+  requiredConfirmations: number;
+  payments: InvoicePaymentJson[];
+  paidAmount: string;
+  uncountedAmount: string;
+  confirmations: number;
+  state: InvoiceState;
+}
+
+const STATES: readonly InvoiceState[] = ['awaiting', 'underpaid', 'pending', 'confirming', 'confirmed', 'overpaid', 'expired', 'expired-underpaid', 'conflicted'];
+const STATUSES: readonly InvoicePaymentStatus[] = ['unconfirmed', 'confirmed', 'unlisted', 'vanished'];
+
+/** An InvoicePayment as plain JSON. */
+export function invoicePaymentToJson(payment: InvoicePayment): InvoicePaymentJson {
+  const { block } = payment;
+  return {
+    txid: payment.txid,
+    amount: payment.amount.toString(),
+    status: payment.status,
+    block: block === null ? null : block.time === undefined ? { height: block.height, hash: block.hash } : { height: block.height, hash: block.hash, time: block.time },
+    confirmations: payment.confirmations,
+    firstSeenAt: payment.firstSeenAt,
+    firstBlockTime: payment.firstBlockTime,
+    onTime: payment.onTime,
+    counted: payment.counted,
+  };
+}
+
+/** An Invoice as plain JSON that JSON.stringify can write; bigints become decimal strings. */
+export function invoiceToJson(invoice: Invoice): InvoiceJson {
+  return {
+    format: 'pearljs-invoice',
+    version: 1,
+    id: invoice.id,
+    address: invoice.address,
+    amount: invoice.amount.toString(),
+    createdAt: invoice.createdAt,
+    expiresAt: invoice.expiresAt,
+    requiredConfirmations: invoice.requiredConfirmations,
+    payments: invoice.payments.map(invoicePaymentToJson),
+    paidAmount: invoice.paidAmount.toString(),
+    uncountedAmount: invoice.uncountedAmount.toString(),
+    confirmations: invoice.confirmations,
+    state: invoice.state,
+  };
+}
+
+function bad(message: string, cause?: unknown): PearlError {
+  return new PearlError('INVOICE_JSON_INVALID', message, cause === undefined ? undefined : { cause });
+}
+
+function objectOf(value: unknown, what: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw bad(`${what} is not an object`);
+  return value as Record<string, unknown>;
+}
+
+function grainOf(value: unknown, what: string): bigint {
+  if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value) || BigInt(value) > MAX_GRAIN) {
+    throw bad(`${what} is not a decimal string of grain from 0 to MAX_GRAIN`);
+  }
+  return BigInt(value);
+}
+
+function secondsOf(value: unknown, what: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) throw bad(`${what} is not a non-negative integer`);
+  return value as number;
+}
+
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], what: string): T {
+  if (!allowed.includes(value as T)) throw bad(`${what} is not one of ${allowed.join(', ')}`);
+  return value as T;
+}
+
+function booleanOf(value: unknown, what: string): boolean {
+  if (typeof value !== 'boolean') throw bad(`${what} is not a boolean`);
+  return value;
+}
+
+/** Reads what invoicePaymentToJson wrote, refusing anything else with INVOICE_JSON_INVALID. */
+export function invoicePaymentFromJson(value: unknown): InvoicePayment {
+  const json = objectOf(value, 'payment');
+  if (typeof json.txid !== 'string' || json.txid.length === 0) throw bad('payment txid is not a non-empty string');
+  const what = `payment ${json.txid}`;
+  let block: BlockRef | null = null;
+  if (json.block !== null) {
+    const raw = objectOf(json.block, `${what} block`);
+    if (typeof raw.hash !== 'string' || raw.hash.length === 0) throw bad(`${what} block hash is not a non-empty string`);
+    const height = secondsOf(raw.height, `${what} block height`);
+    block = raw.time === undefined ? { height, hash: raw.hash } : { height, hash: raw.hash, time: secondsOf(raw.time, `${what} block time`) };
+  }
+  const payment: InvoicePayment = {
+    txid: json.txid,
+    amount: grainOf(json.amount, `${what} amount`),
+    status: oneOf(json.status, STATUSES, `${what} status`),
+    block,
+    confirmations: secondsOf(json.confirmations, `${what} confirmations`),
+    firstSeenAt: secondsOf(json.firstSeenAt, `${what} firstSeenAt`),
+    firstBlockTime: json.firstBlockTime === null ? null : secondsOf(json.firstBlockTime, `${what} firstBlockTime`),
+    onTime: booleanOf(json.onTime, `${what} onTime`),
+    counted: booleanOf(json.counted, `${what} counted`),
+  };
+  if ((payment.status === 'confirmed') !== (block !== null)) throw bad(`${what} has a block exactly when it is confirmed, and this one does not`);
+  if (block === null && payment.confirmations !== 0) throw bad(`${what} has confirmations without a block`);
+  if (payment.counted && (!payment.onTime || payment.status === 'unlisted' || payment.status === 'vanished')) {
+    throw bad(`${what} is counted although it is late or not listed`);
+  }
+  return payment;
+}
+
+/**
+ * Reads what invoiceToJson wrote, for the network the invoice address is
+ * on. Everything is checked: the format and version, the config as
+ * createInvoice checks it, each payment, and that the totals match the
+ * payments. Anything else throws INVOICE_JSON_INVALID.
+ */
+export function invoiceFromJson(value: unknown, network: PearlNetwork): Invoice {
+  const json = objectOf(value, 'invoice');
+  if (json.format !== 'pearljs-invoice') throw bad('not a pearljs invoice');
+  if (json.version !== 1) throw bad(`invoice version ${String(json.version)} is not one this pearljs reads (1)`);
+  const config: CreateInvoiceConfig = {
+    id: json.id as string,
+    address: json.address as string,
+    amount: grainOf(json.amount, 'invoice amount'),
+    createdAt: json.createdAt as number,
+    expiresAt: json.expiresAt as number,
+    requiredConfirmations: json.requiredConfirmations as number,
+  };
+  try {
+    assertValidConfig(config, network);
+  } catch (error) {
+    if (error instanceof PearlError) throw bad(error.message, error);
+    throw error;
+  }
+  if (!Array.isArray(json.payments)) throw bad('invoice payments is not an array');
+  const payments = json.payments.map(invoicePaymentFromJson);
+  if (new Set(payments.map((payment) => payment.txid)).size !== payments.length) throw bad('invoice lists a payment twice');
+  const invoice: Invoice = {
+    ...config,
+    payments,
+    paidAmount: grainOf(json.paidAmount, 'invoice paidAmount'),
+    uncountedAmount: grainOf(json.uncountedAmount, 'invoice uncountedAmount'),
+    confirmations: secondsOf(json.confirmations, 'invoice confirmations'),
+    state: oneOf(json.state, STATES, 'invoice state'),
+  };
+  const totals = summarize(payments);
+  if (totals.paidAmount !== invoice.paidAmount || totals.uncountedAmount !== invoice.uncountedAmount || totals.confirmations !== invoice.confirmations) {
+    throw bad('invoice totals do not match its payments');
+  }
+  return invoice;
 }
 
 /**

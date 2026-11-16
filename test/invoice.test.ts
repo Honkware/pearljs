@@ -8,7 +8,8 @@ import type { AddressPayment, BlockRef, ChainClient, ChainTransaction } from '..
 import type { CreateInvoiceConfig, Invoice } from '../src/invoice.js';
 import { encodeAddress } from '../src/address.js';
 import { MAX_GRAIN } from '../src/amount.js';
-import { InvoiceMonitor, createInvoice, refreshInvoice } from '../src/invoice.js';
+import { InvoiceMonitor, createInvoice, invoiceFromJson, invoicePaymentFromJson, invoiceToJson, refreshInvoice } from '../src/invoice.js';
+import { PearlError } from '../src/errors.js';
 import { networks } from '../src/networks.js';
 import { ScriptedChain } from './invoice-helpers.js';
 
@@ -552,5 +553,73 @@ describe('state transitions on a scripted chain', () => {
     chain.drop('tx-part');
     invoice = await refreshInvoice(invoice, chain, 2_600);
     expect(invoice.state).toBe('conflicted');
+  });
+});
+
+describe('JSON codecs', () => {
+  // An invoice whose record holds every kind of payment: counted, late, vanished.
+  async function busy(): Promise<{ chain: ScriptedChain; invoice: Invoice }> {
+    const chain = new ScriptedChain();
+    let invoice = createInvoice(config({ requiredConfirmations: 2 }), NETWORK);
+    chain.broadcast('tx-a', { [ADDRESS]: 70_000n }, 1_100);
+    chain.broadcast('tx-gone', { [ADDRESS]: 1_000n }, 1_150);
+    chain.mine(1_200, ['tx-a']);
+    invoice = await refreshInvoice(invoice, chain, 1_300);
+    chain.drop('tx-gone');
+    chain.broadcast('tx-late', { [ADDRESS]: 50_000n }, 2_100);
+    invoice = await refreshInvoice(invoice, chain, 2_200);
+    return { chain, invoice };
+  }
+  const roundTrip = (invoice: Invoice): Invoice => invoiceFromJson(JSON.parse(JSON.stringify(invoiceToJson(invoice))), NETWORK);
+
+  it('writes an invoice JSON.stringify accepts and reads it back unchanged', async () => {
+    const { invoice } = await busy();
+    expect(invoice.state).toBe('conflicted');
+    expect(invoice.payments.map((p) => p.status)).toEqual(['confirmed', 'vanished', 'unconfirmed']);
+    const text = JSON.stringify(invoiceToJson(invoice));
+    expect(text).toContain('"amount":"100000"');
+    expect(roundTrip(invoice)).toEqual(invoice);
+    const fresh = createInvoice(config(), NETWORK);
+    expect(roundTrip(fresh)).toEqual(fresh);
+  });
+
+  it('continues after a restart through JSON exactly as without one', async () => {
+    const { chain, invoice } = await busy();
+    const restored = roundTrip(invoice);
+    chain.mine(2_300);
+    expect(await refreshInvoice(restored, chain, 2_400)).toEqual(await refreshInvoice(invoice, chain, 2_400));
+  });
+
+  it('refuses anything invoiceToJson did not write', async () => {
+    const { invoice } = await busy();
+    const json = invoiceToJson(invoice);
+    const cases: [string, unknown][] = [
+      ['not an object', 'text'],
+      ['another format', { ...json, format: 'other' }],
+      ['another version', { ...json, version: 2 }],
+      ['an amount as a number', { ...json, amount: 100_000 }],
+      ['an amount with a leading zero', { ...json, amount: '0100000' }],
+      ['a negative amount', { ...json, amount: '-1' }],
+      ['a zero invoice amount', { ...json, amount: '0' }],
+      ['an address on another network', { ...json, address: encodeAddress({ version: 1, program: new Uint8Array(32).fill(7) }, networks.mainnet) }],
+      ['an unknown state', { ...json, state: 'paid' }],
+      ['totals that do not match', { ...json, paidAmount: '1' }],
+      ['payments that are not an array', { ...json, payments: {} }],
+      ['a payment listed twice', { ...json, payments: [json.payments[0], json.payments[0]] }],
+      ['a late payment marked counted', { ...json, payments: [{ ...json.payments[2]!, counted: true }] }],
+      ['a confirmed payment without a block', { ...json, payments: [{ ...json.payments[0]!, block: null }] }],
+      ['a fractional block time', { ...json, payments: [{ ...json.payments[0]!, block: { height: 100, hash: 'h100', time: 1.5 } }] }],
+    ];
+    for (const [what, value] of cases) {
+      let caught: unknown;
+      try {
+        invoiceFromJson(value, NETWORK);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught, what).toBeInstanceOf(PearlError);
+      expect((caught as PearlError).code, what).toBe('INVOICE_JSON_INVALID');
+    }
+    expect(() => invoicePaymentFromJson({ ...json.payments[0]!, status: 'lost' })).toThrow('status is not one of');
   });
 });

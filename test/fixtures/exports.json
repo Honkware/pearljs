@@ -179,6 +179,10 @@
       "httpTransport",
       "importWatchOnlyAccount",
       "inspectTransaction",
+      "invoiceFromJson",
+      "invoicePaymentFromJson",
+      "invoicePaymentToJson",
+      "invoiceToJson",
       "isDisabledOpcode",
       "isDust",
       "isMoECertificate",
@@ -358,7 +362,9 @@
       "InspectedOutput",
       "InspectedTransaction",
       "Invoice",
+      "InvoiceJson",
       "InvoicePayment",
+      "InvoicePaymentJson",
       "InvoicePaymentStatus",
       "InvoiceState",
       "JsonValue",
@@ -767,12 +773,18 @@
     "values": [
       "InvoiceMonitor",
       "createInvoice",
+      "invoiceFromJson",
+      "invoicePaymentFromJson",
+      "invoicePaymentToJson",
+      "invoiceToJson",
       "refreshInvoice"
     ],
     "types": [
       "CreateInvoiceConfig",
       "Invoice",
+      "InvoiceJson",
       "InvoicePayment",
+      "InvoicePaymentJson",
       "InvoicePaymentStatus",
       "InvoiceState"
     ]
