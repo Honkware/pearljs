@@ -235,6 +235,26 @@ type TapscriptExtraVector struct {
 	TxID             string                     `json:"txid"`
 }
 
+// CustomLeafVector is a spend through a leaf that takes more than
+// signatures. Stack is the witness without the leaf script and control
+// block; the item at SignatureAt, when not -1, is the signature of the key at
+// account/0/KeyIndex.
+type CustomLeafVector struct {
+	Name           string          `json:"name"`
+	Kind           string          `json:"kind"`
+	InternalPubKey string          `json:"internalPubKey"`
+	Prevouts       []PrevoutVector `json:"prevouts"`
+	LeafScript     string          `json:"leafScript"`
+	ControlBlock   string          `json:"controlBlock"`
+	UnsignedTxHex  string          `json:"unsignedTxHex"`
+	KeyIndex       int             `json:"keyIndex"`
+	SignatureAt    int             `json:"signatureAt"`
+	Sighash        string          `json:"sighash"`
+	Stack          []string        `json:"stack"`
+	FinalTxHex     string          `json:"finalTxHex"`
+	TxID           string          `json:"txid"`
+}
+
 type Vectors struct {
 	Source           string                  `json:"source"`
 	Networks         []NetworkVector         `json:"networks"`
@@ -263,6 +283,7 @@ type Vectors struct {
 	Consensus        ConsensusVectors        `json:"consensus"`
 	CoinSelection    CoinSelectionVectors    `json:"coinSelection"`
 	TapscriptExtras  []TapscriptExtraVector  `json:"tapscriptExtras"`
+	CustomLeaves     []CustomLeafVector      `json:"customLeaves"`
 }
 
 // CoinVector is an unspent output offered to coin selection.
@@ -1172,6 +1193,7 @@ func main() {
 		vectors.Blocks = append(vectors.Blocks, makeBlockVector(net.Name+"-genesis", net.GenesisBlock))
 	}
 	vectors.TapscriptExtras = tapscriptExtraVectors(account, internalPub, script)
+	vectors.CustomLeaves = customLeafVectors(account, script)
 
 	// Synthetic blocks cover every certificate version, the MoE size
 	// threshold, odd transaction counts and witness commitments. Spends are
@@ -3069,6 +3091,112 @@ func tapscriptExtraVectors(account *hdkeychain.ExtendedKey, internalPub *btcec.P
 		vector.FinalTxHex = serializeTx(tx, true)
 		vector.TxID = tx.TxID()
 		out = append(out, vector)
+	}
+	return out
+}
+
+// customLeafVectors spends leaves whose witness holds more than signatures: a
+// hash lock with a signature, a timelock with a preimage and an OP_CAT
+// leaf, each under P2TR and P2MR. The P2TR outputs use the BIP341 NUMS point
+// as their internal key, so only the script path can spend them.
+func customLeafVectors(account *hdkeychain.ExtendedKey, payScript []byte) []CustomLeafVector {
+	const keyIndex = 40
+	priv, err := derive(account, 0, keyIndex).ECPrivKey()
+	check(err)
+	pub := schnorr.SerializePubKey(priv.PubKey())
+	nums, err := schnorr.ParsePubKey(mustHex("50929b74c1a04954b78b4b6035e97a5e078a5a0f28ec96d547bfee9ace803ac0"))
+	check(err)
+	build := func(b *txscript.ScriptBuilder) []byte {
+		out, err := b.Script()
+		check(err)
+		return out
+	}
+	secret := []byte("pearl swap secret")
+	secretHash := chainhash.HashB(secret)
+	blob := []byte("pearl-covenant")
+	blobHash := chainhash.HashB(blob)
+	const lockHeight = 700000
+	hashLock := build(txscript.NewScriptBuilder().
+		AddOp(txscript.OP_SHA256).AddData(secretHash).AddOp(txscript.OP_EQUALVERIFY).
+		AddData(pub).AddOp(txscript.OP_CHECKSIG))
+	timelock := build(txscript.NewScriptBuilder().
+		AddInt64(lockHeight).AddOp(txscript.OP_CHECKLOCKTIMEVERIFY).AddOp(txscript.OP_DROP).
+		AddOp(txscript.OP_SHA256).AddData(secretHash).AddOp(txscript.OP_EQUAL))
+	cat := build(txscript.NewScriptBuilder().
+		AddOp(txscript.OP_CAT).AddOp(txscript.OP_SHA256).AddData(blobHash).AddOp(txscript.OP_EQUAL))
+
+	var out []CustomLeafVector
+	for _, item := range []struct {
+		name string
+		leaf []byte
+		// A nil item stands for the signature.
+		stack    [][]byte
+		lockTime uint32
+	}{
+		{"hashlock-checksig", hashLock, [][]byte{nil, secret}, 0},
+		{"timelock-preimage", timelock, [][]byte{secret}, lockHeight},
+		{"cat", cat, [][]byte{blob[:5], blob[5:]}, 0},
+	} {
+		for _, kind := range []string{"p2tr", "p2mr"} {
+			leaf := txscript.NewBaseTapLeaf(item.leaf)
+			tree := txscript.AssembleTaprootScriptTree(leaf)
+			root := tree.RootNode.TapHash()
+			proof := tree.LeafMerkleProofs[0]
+			var prevScript, controlBlock []byte
+			if kind == "p2tr" {
+				prevScript, err = txscript.PayToTaprootScript(txscript.ComputeTaprootOutputKey(nums, root[:]))
+				check(err)
+				block := proof.ToControlBlock(nums)
+				controlBlock, err = block.ToBytes()
+				check(err)
+			} else {
+				mrAddr, err := btcutil.NewAddressMerkleRoot(root[:], &chaincfg.MainNetParams)
+				check(err)
+				prevScript, err = txscript.PayToAddrScript(mrAddr)
+				check(err)
+				block := txscript.MerkleRootControlBlock{LeafVersion: txscript.BaseLeafVersion, InclusionProof: proof.InclusionProof}
+				controlBlock, err = block.ToBytes()
+				check(err)
+			}
+
+			const amount int64 = 100000000
+			tx := wire.NewMsgTx(2)
+			tx.LockTime = item.lockTime
+			txIn := wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x0c}, 1), nil, nil)
+			txIn.Sequence = 0xfffffffd
+			tx.AddTxIn(txIn)
+			tx.AddTxOut(wire.NewTxOut(amount-10000, payScript))
+			prevOut := wire.NewTxOut(amount, prevScript)
+			fetcher := txscript.NewCannedPrevOutputFetcher(prevScript, amount)
+			sigHashes := txscript.NewTxSigHashes(tx, fetcher)
+
+			vector := CustomLeafVector{
+				Name: kind + "-" + item.name, Kind: kind, KeyIndex: keyIndex, SignatureAt: -1,
+				InternalPubKey: hex.EncodeToString(schnorr.SerializePubKey(nums)),
+				Prevouts:       []PrevoutVector{{Script: hex.EncodeToString(prevScript), Value: amount}},
+				LeafScript:     hex.EncodeToString(item.leaf), ControlBlock: hex.EncodeToString(controlBlock),
+				UnsignedTxHex: serializeTx(tx, false),
+			}
+			var witness wire.TxWitness
+			for i, element := range item.stack {
+				if element == nil {
+					sighash, err := txscript.CalcTapscriptSignaturehash(sigHashes, txscript.SigHashDefault, tx, 0, fetcher, leaf)
+					check(err)
+					signed, err := schnorr.Sign(priv, sighash)
+					check(err)
+					element = signed.Serialize()
+					vector.SignatureAt = i
+					vector.Sighash = hex.EncodeToString(sighash)
+				}
+				witness = append(witness, element)
+				vector.Stack = append(vector.Stack, hex.EncodeToString(element))
+			}
+			tx.TxIn[0].SetWitness(append(witness, item.leaf, controlBlock))
+			verifyInputs(tx, []*wire.TxOut{prevOut})
+			vector.FinalTxHex = serializeTx(tx, true)
+			vector.TxID = tx.TxID()
+			out = append(out, vector)
+		}
 	}
 	return out
 }

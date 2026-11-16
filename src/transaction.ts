@@ -12,7 +12,9 @@ import { Psbt, Transaction } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { MAX_GRAIN } from './amount.js';
 import { fromOutputScript, toOutputScript } from './address.js';
+import { ScriptRejectedError, verifyInput } from './interpreter.js';
 import { multiAStack, parseMultiA } from './multia.js';
+import { OP_CODES } from './opcodes.js';
 import { classifyOutputScript, tapLeafHash } from './script.js';
 import { tapscriptSighash } from './scriptpath.js';
 import { decompileScript } from './scripttools.js';
@@ -210,67 +212,114 @@ export function createPsbt(tx: Transaction): Psbt {
 }
 
 /**
- * Finalizes every input and extracts the transaction. Script-path inputs
- * spending a multi_a leaf, and all P2MR script-path inputs, get the witness
- * Pearl's psbt.Finalize builds, with an empty item for each key that did not
- * sign; Pearl rejects a multi_a witness without them.
+ * Finalizes every input and extracts the transaction. Script-path inputs get
+ * the witness Pearl's psbt.Finalize builds: for a multi_a leaf an empty item
+ * for each key that did not sign, which Pearl requires, and for any other
+ * leaf the signatures of the keys it pushes, the first key's last.
  *
- * For the inputs finalized here, the leaf must open the output and every
- * signature for a key in the leaf must verify, so a PSBT that cannot make a
- * valid spend fails here and not at the node.
+ * Every witness built here is run through Pearl's script rules before it is
+ * kept, so a PSBT that cannot make a valid spend fails here and not at the
+ * node. A leaf that needs more than signatures (a preimage, a number, items
+ * for OP_CAT) cannot be satisfied from the PSBT alone: give its items to
+ * finalizeScriptPathInput first, and this function leaves that input as it
+ * is.
  *
- * Throws when an input lacks the signatures its leaf needs, when a script-path
- * signature does not verify, and when the result pays more than 5000 grain
- * per vbyte.
+ * Throws a SigningError: WITNESS_ITEMS_NEEDED for a leaf its signatures do
+ * not satisfy, SIGNATURES_MISSING, SIGNATURE_INVALID, and
+ * INPUT_NOT_FINALIZED for an input with nothing to finalize it. Throws a
+ * ScriptRejectedError with the engine's code when a witness fails, and when
+ * the result pays more than 5000 grain per vbyte.
  */
 export function finalizePsbt(psbt: Psbt): Transaction {
   ensureEcc();
   psbt.data.inputs.forEach((input, index) => {
     if (input.finalScriptSig !== undefined || input.finalScriptWitness !== undefined) return;
-    const witness = pearlScriptPathWitness(psbt, index);
-    if (witness === null) {
-      psbt.finalizeInput(index);
-    } else {
-      psbt.finalizeTaprootInput(index, undefined, () => ({ finalScriptWitness: serializeWitness(witness) }));
+    if (isScriptPath(input)) {
+      finalizeScriptPath(psbt, index);
+      return;
     }
+    try {
+      psbt.finalizeInput(index);
+    } catch (err) {
+      throw new SigningError(
+        'INPUT_NOT_FINALIZED',
+        `PSBT input ${index} cannot be finalized: it has no key-path signature and no tap leaf to spend through`,
+        { cause: err },
+      );
+    }
+    checkFinalWitness(psbt, index);
   });
   return psbt.extractTransaction();
 }
 
 /**
- * The full witness for a script-path input whose signatures are for a
- * multi_a leaf or that spends a P2MR output, or null when the input is
- * anything else. As in Pearl, all signatures must be for the same leaf. A
- * P2MR leaf that is not multi_a takes the signatures of the keys it pushes,
- * in PSBT order; signatures for other keys are left out.
+ * The leaf's witness items for finalizeScriptPathInput: the items
+ * themselves, or a function that builds them from the input's signatures.
+ * `signatureFor` returns the signature the PSBT holds for a key the leaf
+ * pushes, verified, and throws SIGNATURES_MISSING when there is none.
  */
-function pearlScriptPathWitness(psbt: Psbt, inputIndex: number): Uint8Array[] | null {
-  const input = psbt.data.inputs[inputIndex]!;
-  const signatures = input.tapScriptSig ?? [];
-  if (input.tapKeySig !== undefined || signatures.length === 0) return null;
-  const target = toHex(signatures[0]!.leafHash);
-  if (signatures.some((sig) => toHex(sig.leafHash) !== target)) {
-    throw new SigningError('INPUT_MISMATCH', 'script-path signatures reference different leaves; only one script path is supported');
-  }
-  const leaf = (input.tapLeafScript ?? []).find((item) => toHex(tapLeafHash(item.script, item.leafVersion)) === target);
-  if (leaf === undefined) {
-    throw new SigningError('INPUT_MISMATCH', 'no tap leaf script matches the script-path signatures');
-  }
-  const multiA = parseMultiA(leaf.script);
-  const prevScript = input.witnessUtxo?.script;
-  const kind = prevScript === undefined ? undefined : classifyOutputScript(prevScript);
-  if (multiA === null && kind !== 'p2mr') return null;
-  if (prevScript !== undefined && kind === 'p2mr') {
-    verifyP2mrLeafCommitment(leaf.controlBlock, prevScript.slice(2), leaf.script);
-  } else if (prevScript !== undefined && kind === 'p2tr') {
-    verifyTaprootLeafCommitment(leaf.controlBlock, prevScript.slice(2), leaf.script);
-  }
+export type ScriptPathStack =
+  | readonly Uint8Array[]
+  | ((signatureFor: (publicKey: Uint8Array) => Uint8Array) => readonly Uint8Array[]);
 
-  const leafKeys = new Set(
-    decompileScript(leaf.script)
-      .filter((chunk): chunk is Uint8Array => chunk instanceof Uint8Array && chunk.length === 32)
-      .map(toHex),
-  );
+/** What finalizeScriptPathInput needs besides the PSBT and the input. */
+export interface ScriptPathFinalizeOptions {
+  /**
+   * The items the leaf starts with, in witness order: the last one is on top
+   * of the stack when the leaf runs. The script and the control block are
+   * added after them.
+   */
+  stack: ScriptPathStack;
+  /**
+   * Hash of the leaf to spend through. Needed only when the input lists
+   * several leaves and holds no signature that names one.
+   */
+  leafHash?: Uint8Array;
+}
+
+/**
+ * Finalizes one P2TR or P2MR script-path input with witness items the
+ * caller supplies, for a leaf that takes more than signatures: a hash lock's
+ * preimage, the argument of a timelock branch, the pieces an OP_CAT leaf
+ * joins. finalizePsbt then finalizes the other inputs and extracts.
+ *
+ * The leaf must open the spent output, every signature taken through
+ * `signatureFor` must verify, and the finished witness must pass Pearl's
+ * script rules for this input; otherwise nothing is written.
+ *
+ * Throws a ScriptRejectedError carrying the engine's code when the witness
+ * fails, and a SigningError: INPUT_MISMATCH for an input that is not a
+ * script path or a leaf the input does not list, INPUT_UNPREPARED when an
+ * input of the PSBT has no UTXO, SIGNATURES_MISSING and SIGNATURE_INVALID
+ * for the signatures.
+ */
+export function finalizeScriptPathInput(psbt: Psbt, inputIndex: number, options: ScriptPathFinalizeOptions): void {
+  ensureEcc();
+  const input = psbt.data.inputs[inputIndex];
+  if (!Number.isInteger(inputIndex) || input === undefined) {
+    throw new RangeError(`PSBT input index ${inputIndex} is out of range`);
+  }
+  if (input.finalScriptSig !== undefined || input.finalScriptWitness !== undefined) {
+    throw new SigningError('INPUT_MISMATCH', `PSBT input ${inputIndex} is already finalized`);
+  }
+  if (!isScriptPath(input)) {
+    throw new SigningError('INPUT_MISMATCH', `PSBT input ${inputIndex} is not a script-path input: it has ${input.tapKeySig === undefined ? 'no tap leaf script' : 'a key-path signature'}`);
+  }
+  if (typeof options.stack !== 'function' && !(Array.isArray(options.stack) && options.stack.every((item) => item instanceof Uint8Array))) {
+    throw new TypeError('stack must be an array of byte arrays or a function that returns one');
+  }
+  finalizeScriptPath(psbt, inputIndex, options);
+}
+
+type PsbtInput = Psbt['data']['inputs'][number];
+
+// A key-path signature wins, as in Pearl's finalizer: it makes the smaller witness.
+function isScriptPath(input: PsbtInput): boolean {
+  return input.tapKeySig === undefined && ((input.tapLeafScript ?? []).length > 0 || (input.tapScriptSig ?? []).length > 0);
+}
+
+/** The unsigned transaction and every spent output, which script-path signatures and the script check cover. */
+function psbtSpend(psbt: Psbt, what: string): { tx: Transaction; prevouts: TxOutput[] } {
   const tx = Transaction.fromBuffer(psbt.data.globalMap.unsignedTx.toBuffer());
   const prevouts = tx.ins.map((txInput, index): TxOutput => {
     const other = psbt.data.inputs[index]!;
@@ -280,13 +329,61 @@ function pearlScriptPathWitness(psbt: Psbt, inputIndex: number): Uint8Array[] | 
         ? undefined
         : Transaction.fromBuffer(other.nonWitnessUtxo).outs[txInput.index]);
     if (utxo === undefined) {
-      throw new SigningError('INPUT_UNPREPARED', `PSBT input ${index} has no UTXO to check script-path signatures against`);
+      throw new SigningError('INPUT_UNPREPARED', `PSBT input ${index} has no UTXO to ${what}`);
     }
     return { script: utxo.script, value: utxo.value };
   });
+  return { tx, prevouts };
+}
+
+const CHECKSIG_OPCODES: readonly number[] = [OP_CODES.OP_CHECKSIG, OP_CODES.OP_CHECKSIGVERIFY, OP_CODES.OP_CHECKSIGADD];
+
+/**
+ * Builds the witness of a script-path input, runs it through the script
+ * engine and stores it. As in Pearl, all signatures must be for the same
+ * leaf. Without `supplied` the leaf's arguments are its signatures alone.
+ */
+function finalizeScriptPath(
+  psbt: Psbt,
+  inputIndex: number,
+  supplied?: { stack: ScriptPathStack; leafHash?: Uint8Array },
+): void {
+  const input = psbt.data.inputs[inputIndex]!;
+  const leaves = input.tapLeafScript ?? [];
+  let signatures = input.tapScriptSig ?? [];
+  let target: string;
+  if (supplied?.leafHash !== undefined) {
+    target = toHex(supplied.leafHash);
+    signatures = signatures.filter((sig) => toHex(sig.leafHash) === target);
+  } else if (signatures.length > 0) {
+    target = toHex(signatures[0]!.leafHash);
+    if (signatures.some((sig) => toHex(sig.leafHash) !== target)) {
+      throw new SigningError('INPUT_MISMATCH', 'script-path signatures reference different leaves; only one script path is supported');
+    }
+  } else if (leaves.length === 1) {
+    target = toHex(tapLeafHash(leaves[0]!.script, leaves[0]!.leafVersion));
+  } else {
+    throw new SigningError('INPUT_MISMATCH', `PSBT input ${inputIndex} lists ${leaves.length} tap leaves and no signature names one; pass leafHash`);
+  }
+  const leaf = leaves.find((item) => toHex(tapLeafHash(item.script, item.leafVersion)) === target);
+  if (leaf === undefined) {
+    throw new SigningError(
+      'INPUT_MISMATCH',
+      supplied?.leafHash === undefined ? 'no tap leaf script matches the script-path signatures' : `PSBT input ${inputIndex} has no tap leaf with that hash`,
+    );
+  }
+  const { tx, prevouts } = psbtSpend(psbt, 'check script-path signatures against');
+  const prevScript = prevouts[inputIndex]!.script;
+  const kind = classifyOutputScript(prevScript);
+  if (kind === 'p2mr') verifyP2mrLeafCommitment(leaf.controlBlock, prevScript.slice(2), leaf.script);
+  else if (kind === 'p2tr') verifyTaprootLeafCommitment(leaf.controlBlock, prevScript.slice(2), leaf.script);
+  else throw new SigningError('INPUT_MISMATCH', `PSBT input ${inputIndex} does not spend a P2TR or P2MR output`);
+
+  const chunks = decompileScript(leaf.script);
+  const leafKeys = chunks.filter((chunk): chunk is Uint8Array => chunk instanceof Uint8Array && chunk.length === 32).map(toHex);
   const forLeaf = signatures.filter((sig) => {
     const key = toHex(sig.pubkey);
-    if (!leafKeys.has(key)) return false;
+    if (!leafKeys.includes(key)) return false;
     const { signature } = sig;
     const sighashType = signature.length === 65 ? signature[64]! : Transaction.SIGHASH_DEFAULT;
     const wellFormed =
@@ -299,15 +396,62 @@ function pearlScriptPathWitness(psbt: Psbt, inputIndex: number): Uint8Array[] | 
     throw new SigningError('SIGNATURE_INVALID', `PSBT input ${inputIndex} has an invalid script-path signature for key ${key}`);
   });
 
-  if (multiA === null) {
-    if (forLeaf.length === 0) {
+  const multiA = parseMultiA(leaf.script);
+  const checksig = chunks.length === 2 && leafKeys.length === 1 && chunks[1] === OP_CODES.OP_CHECKSIG;
+  let stack: readonly Uint8Array[];
+  if (supplied !== undefined) {
+    const signatureFor = (publicKey: Uint8Array): Uint8Array => {
+      const key = toHex(publicKey.length === 33 ? publicKey.subarray(1) : publicKey);
+      const found = forLeaf.find((sig) => toHex(sig.pubkey) === key);
+      if (found === undefined) {
+        throw new SigningError('SIGNATURES_MISSING', `PSBT input ${inputIndex} has no signature for key ${key} on this leaf`);
+      }
+      return found.signature;
+    };
+    stack = typeof supplied.stack === 'function' ? supplied.stack(signatureFor) : supplied.stack;
+  } else if (multiA !== null) {
+    // multiAStack refuses a signature for a key outside the leaf, as Pearl does.
+    stack = multiAStack(multiA, new Map(signatures.map((sig) => [toHex(sig.pubkey), sig.signature])));
+  } else {
+    if (forLeaf.length === 0 && chunks.some((chunk) => typeof chunk === 'number' && CHECKSIG_OPCODES.includes(chunk))) {
       throw new SigningError('SIGNATURES_MISSING', `PSBT input ${inputIndex} has no signature for a key its leaf pushes`);
     }
-    return [...forLeaf.map((sig) => sig.signature), leaf.script, leaf.controlBlock];
+    // The first key the leaf checks is the last one it pushes a signature for.
+    stack = forLeaf
+      .map((sig) => ({ signature: sig.signature, position: leafKeys.indexOf(toHex(sig.pubkey)) }))
+      .sort((a, b) => b.position - a.position)
+      .map((sig) => sig.signature);
   }
-  // multiAStack refuses a signature for a key outside the leaf, as Pearl does.
-  const byKey = new Map(signatures.map((sig) => [toHex(sig.pubkey), sig.signature]));
-  return [...multiAStack(multiA, byKey), leaf.script, leaf.controlBlock];
+
+  const witness = [...stack, leaf.script, leaf.controlBlock].map((item) => Uint8Array.from(item));
+  tx.setWitness(inputIndex, witness);
+  const result = verifyInput(tx, inputIndex, prevouts);
+  if (!result.ok) {
+    const rejected = new ScriptRejectedError(result.code, result.message, {
+      inputIndex,
+      ...(result.at === undefined ? {} : { at: result.at }),
+    });
+    if (supplied !== undefined || multiA !== null || checksig) throw rejected;
+    throw new SigningError(
+      'WITNESS_ITEMS_NEEDED',
+      `PSBT input ${inputIndex}: the leaf is not satisfied by its signatures alone (${result.code}). ` +
+        `Pass the items it takes besides them with finalizeScriptPathInput(psbt, ${inputIndex}, { stack })`,
+      { cause: rejected },
+    );
+  }
+  psbt.finalizeTaprootInput(inputIndex, undefined, () => ({ finalScriptWitness: serializeWitness(witness) }));
+}
+
+/** Runs the script engine over a key-path input finalized here, when every spent output is known. */
+function checkFinalWitness(psbt: Psbt, inputIndex: number): void {
+  if (psbt.data.inputs.some((input) => input.witnessUtxo === undefined && input.nonWitnessUtxo === undefined)) return;
+  const { tx, prevouts } = psbtSpend(psbt, 'verify against');
+  // A key-path witness is one signature of 64 or 65 bytes: a count, a length, the bytes.
+  tx.setWitness(inputIndex, [psbt.data.inputs[inputIndex]!.finalScriptWitness!.subarray(2)]);
+  const result = verifyInput(tx, inputIndex, prevouts);
+  if (!result.ok) {
+    throw new ScriptRejectedError(result.code, result.message, { inputIndex, ...(result.at === undefined ? {} : { at: result.at }) });
+  }
 }
 
 /** A witness stack as it is serialized: item count, then each item with its length. */
