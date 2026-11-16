@@ -1,6 +1,7 @@
 // checkStandard against pearld's mempool: for each transaction checkStandard
-// refuses, testmempoolaccept rejects it with the same reason, and the
-// standard ones are accepted at the vsize estimateVsize predicted. Covers
+// refuses, with a PolicyError of the stable code named here,
+// testmempoolaccept rejects it with the same reason, and the standard ones
+// are accepted at the vsize estimateVsize predicted. Covers
 // the consensus sanity checks, version, finality, signature scripts, size,
 // OP_RETURN outputs, dust and the relay fee. The node runs with
 // --rejectnonstd, as mainnet does by default.
@@ -21,11 +22,12 @@ import {
   minRelayFee,
   mnemonicToSeed,
   OP_CODES,
+  PolicyError,
   serializeTransaction,
   toOutputScript,
   transactionId,
 } from '../src/index.js';
-import type { TxOutput, Transaction } from '../src/index.js';
+import type { PearlErrorCode, TxOutput, Transaction } from '../src/index.js';
 import {
   addChange,
   broadcast,
@@ -78,12 +80,19 @@ function dataScript(size: number): Uint8Array {
   return Uint8Array.from([OP_CODES.OP_RETURN, ...push, ...new Uint8Array(size).fill(0x70)]);
 }
 
-/** checkStandard's error, which pearld wraps when the rule is part of CheckTransactionStandard. */
-async function expectSameRejection(tx: Transaction, wrapped: boolean, prevouts = prevoutsOf(tx, [funding])): Promise<void> {
+/** checkStandard's error and its code, which pearld wraps when the rule is part of CheckTransactionStandard. */
+async function expectSameRejection(
+  tx: Transaction,
+  code: PearlErrorCode,
+  wrapped: boolean,
+  prevouts = prevoutsOf(tx, [funding]),
+): Promise<void> {
   let predicted = '';
   try {
     checkStandard(tx, { prevouts, ...(await nextBlock()) });
   } catch (error) {
+    expect(error).toBeInstanceOf(PolicyError);
+    expect((error as PolicyError).code).toBe(code);
     predicted = (error as Error).message;
   }
   expect(predicted).not.toBe('');
@@ -100,12 +109,12 @@ describeLive('relay policy', () => {
   });
 
   it('agrees with pearld that a 332-grain P2TR output is dust', async () => {
-    await expectSameRejection(spendWithChange([{ script: recipient, value: 332n }]), true);
+    await expectSameRejection(spendWithChange([{ script: recipient, value: 332n }]), 'POLICY_DUST', true);
   });
 
   it('agrees with pearld that a SegWit v0 output is unsupported', async () => {
     const p2wpkh = Uint8Array.from([0x00, 0x14, ...new Uint8Array(20).fill(7)]);
-    await expectSameRejection(spendWithChange([{ script: p2wpkh, value: 10_000_000n }]), false);
+    await expectSameRejection(spendWithChange([{ script: p2wpkh, value: 10_000_000n }]), 'SANITY_OUTPUT_SCRIPT', false);
   });
 
   it('agrees with pearld that two OP_RETURN outputs are non-standard', async () => {
@@ -115,6 +124,7 @@ describeLive('relay policy', () => {
         { script: data, value: 0n },
         { script: data, value: 0n },
       ]),
+      'POLICY_MULTIPLE_NULLDATA',
       true,
     );
   });
@@ -124,20 +134,20 @@ describeLive('relay policy', () => {
     tx.addInput(funding.getHash(), 0);
     tx.addOutput(changeScript, 0n);
     const fee = minRelayFee(estimateVsize(tx, [{ type: 'keyPath' }])) - 1n;
-    await expectSameRejection(spend([{ script: changeScript, value: VALUE - fee }]), false);
+    await expectSameRejection(spend([{ script: changeScript, value: VALUE - fee }]), 'POLICY_FEE_TOO_LOW', false);
   });
 
   it('agrees with pearld that a transaction under 65 bytes without witnesses is too small', async () => {
     // One input and one bare OP_RETURN output: 61 stripped bytes.
     const tx = spend([{ script: Uint8Array.from([0x6a]), value: VALUE - 1_000n }]);
     expect(tx.byteLength(false)).toBe(61);
-    await expectSameRejection(tx, false);
+    await expectSameRejection(tx, 'POLICY_TX_TOO_SMALL', false);
   });
 
   it('agrees with pearld on transaction versions 0 and 3, and both accept version 1', async () => {
     for (const version of [0, 3]) {
       const tx = spendWithChange([], (unsigned) => (unsigned.version = version));
-      await expectSameRejection(tx, true);
+      await expectSameRejection(tx, 'POLICY_VERSION', true);
     }
     const tx = spendWithChange([], (unsigned) => (unsigned.version = 1));
     checkStandard(tx, { prevouts: prevoutsOf(tx, [funding]) });
@@ -153,7 +163,7 @@ describeLive('relay policy', () => {
       });
     // A lock is final once it is below the next block's height or the median time past.
     for (const locktime of [height, medianTimePast]) {
-      await expectSameRejection(locked(locktime), true);
+      await expectSameRejection(locked(locktime), 'POLICY_NOT_FINAL', true);
       for (const tx of [locked(locktime - 1), locked(locktime, 0xffffffff)]) {
         checkStandard(tx, { prevouts: prevoutsOf(tx, [funding]), height, medianTimePast });
         expect((await testMempoolAccept(tx)).allowed).toBe(true);
@@ -164,10 +174,14 @@ describeLive('relay policy', () => {
   it('agrees with pearld on a signature script that is not push only or over 1650 bytes', async () => {
     // Taproot signatures do not cover the signature script, and pearld checks
     // standardness before it runs scripts.
-    for (const script of [Uint8Array.of(OP_CODES.OP_DUP), new Uint8Array(1651).fill(OP_CODES.OP_1)]) {
+    const scripts = [
+      { script: Uint8Array.of(OP_CODES.OP_DUP), code: 'POLICY_SIGSCRIPT_NOT_PUSH_ONLY' },
+      { script: new Uint8Array(1651).fill(OP_CODES.OP_1), code: 'POLICY_SIGSCRIPT_SIZE' },
+    ] as const;
+    for (const { script, code } of scripts) {
       const tx = spendWithChange([]);
       tx.ins[0]!.script = script;
-      await expectSameRejection(tx, true);
+      await expectSameRejection(tx, code, true);
     }
   });
 
@@ -186,7 +200,7 @@ describeLive('relay policy', () => {
 
     const tooLarge = sized(dataSize + 1);
     expect(tooLarge.virtualSize()).toBe(MAX_STANDARD_TX_VSIZE + 1);
-    await expectSameRejection(tooLarge, true);
+    await expectSameRejection(tooLarge, 'POLICY_TX_TOO_LARGE', true);
   });
 
   it('builds an 80-byte OP_RETURN with embed, the most it allows, that pearld mines', async () => {
@@ -218,12 +232,12 @@ describeLive('relay policy', () => {
     // These fail before any signature is checked, so the outputs are changed after signing.
     const tooMuch = spendWithChange([{ script: recipient, value: 1_000_000n }]);
     tooMuch.outs[0]!.value = MAX_GRAIN + 1n;
-    await expectSameRejection(tooMuch, false);
+    await expectSameRejection(tooMuch, 'SANITY_OUTPUT_TOO_LARGE', false);
 
     const together = spendWithChange([{ script: recipient, value: 1_000_000n }]);
     together.outs[0]!.value = MAX_GRAIN;
     together.outs[1]!.value = 1n;
-    await expectSameRejection(together, false);
+    await expectSameRejection(together, 'SANITY_TOTAL_TOO_LARGE', false);
   });
 
   it('agrees with pearld on duplicate inputs and on a null previous output', async () => {
@@ -231,28 +245,55 @@ describeLive('relay policy', () => {
     duplicate.addInput(funding.getHash(), 0);
     duplicate.setWitness(1, duplicate.ins[0]!.witness);
     const prevout = prevoutsOf(duplicate, [funding])[0]!;
-    await expectSameRejection(duplicate, false, [prevout, prevout]);
+    await expectSameRejection(duplicate, 'SANITY_DUPLICATE_INPUTS', false, [prevout, prevout]);
 
     const nullInput = spendWithChange([]);
     nullInput.addInput(new Uint8Array(32), 0xffffffff);
     nullInput.setWitness(1, nullInput.ins[0]!.witness);
-    await expectSameRejection(nullInput, false, [prevout, prevout]);
+    await expectSameRejection(nullInput, 'SANITY_NULL_INPUT', false, [prevout, prevout]);
   });
 
   it('agrees with pearld on a lone coinbase-shaped input', async () => {
-    for (const script of [new Uint8Array(0), Uint8Array.of(OP_CODES.OP_1, OP_CODES.OP_1)]) {
+    const scripts = [
+      { script: new Uint8Array(0), code: 'SANITY_COINBASE_SCRIPT' },
+      { script: Uint8Array.of(OP_CODES.OP_1, OP_CODES.OP_1), code: 'SANITY_COINBASE' },
+    ] as const;
+    for (const { script, code } of scripts) {
       const coinbase = spendWithChange([]);
       coinbase.ins[0]!.hash = new Uint8Array(32);
       coinbase.ins[0]!.index = 0xffffffff;
       coinbase.ins[0]!.script = script;
-      await expectSameRejection(coinbase, false, [{ script: recipient, value: VALUE }]);
+      await expectSameRejection(coinbase, code, false, [{ script: recipient, value: VALUE }]);
     }
   });
 
   it('agrees with pearld that spending more than the inputs is reported before a dust output', async () => {
     const tx = spendWithChange([{ script: recipient, value: 1n }]);
     tx.outs[1]!.value = VALUE;
-    await expectSameRejection(tx, false);
+    await expectSameRejection(tx, 'SANITY_INPUTS_BELOW_OUTPUTS', false);
+  });
+
+  it('agrees with pearld on a transaction without witnesses, and on a fee rate above the one testmempoolaccept is given', async () => {
+    const bare = spendWithChange([]);
+    bare.setWitness(0, []);
+    await expectSameRejection(bare, 'POLICY_NO_WITNESS', false);
+
+    const tx = spendWithChange([]);
+    const prevouts = prevoutsOf(tx, [funding]);
+    const fee = VALUE - tx.outs.reduce((sum, out) => sum + out.value, 0n);
+    const rate = (fee * 1000n) / BigInt(tx.virtualSize());
+    const tooHigh = ((): unknown => {
+      try {
+        return checkStandard(tx, { prevouts, maxFeeRate: rate - 1n });
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(tooHigh).toBeInstanceOf(PolicyError);
+    expect(tooHigh).toMatchObject({ code: 'POLICY_FEE_TOO_HIGH', message: expect.stringMatching(/^max-fee-exceeded: /) as string });
+    expect(await pearld.testMempoolAccept([serializeTransaction(tx)], rate - 1n)).toMatchObject([{ allowed: false, 'reject-reason': 'max-fee-exceeded' }]);
+    checkStandard(tx, { prevouts, maxFeeRate: rate });
+    expect(await pearld.testMempoolAccept([serializeTransaction(tx)], rate)).toMatchObject([{ allowed: true }]);
   });
 
   it('relays and mines a transaction that pays exactly the minimum relay fee', async () => {

@@ -17,6 +17,7 @@ import {
   minRelayFee,
   mnemonicToSeed,
   PearlRpcError,
+  PolicyError,
   replacementFee,
   RPC_ERROR_CODES,
   serializeTransaction,
@@ -24,7 +25,7 @@ import {
   toOutputScript,
   transactionId,
 } from '../src/index.js';
-import type { MempoolTx, Transaction } from '../src/index.js';
+import type { MempoolTx, PearlErrorCode, Transaction } from '../src/index.js';
 import { broadcast, changeScript, confirm, describeLive, FEE_RATE, fund, network, pearld, prevoutsOf, testMempoolAccept } from './chain.js';
 
 const account = deriveSigningAccountFromSeed(mnemonicToSeed('zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong'), network);
@@ -54,11 +55,13 @@ describeLive('replace-by-fee', () => {
   const rate = (tx: Transaction, fee: bigint): bigint => (fee * 1000n) / BigInt(tx.virtualSize());
 
   /** checkReplacement's refusal against a mempool holding only original, which pearld must give too. */
-  async function expectSameRefusal(tx: Transaction, fee: bigint, original: MempoolTx): Promise<string> {
+  async function expectSameRefusal(tx: Transaction, fee: bigint, original: MempoolTx, code: PearlErrorCode): Promise<string> {
     let predicted = '';
     try {
       checkReplacement(tx, fee, new Map([[transactionId(original.tx), original]]));
     } catch (error) {
+      expect(error).toBeInstanceOf(PolicyError);
+      expect((error as PolicyError).code).toBe(code);
       predicted = (error as Error).message;
     }
     expect(predicted).not.toBe('');
@@ -78,7 +81,7 @@ describeLive('replace-by-fee', () => {
     // The same rate is not enough.
     const sameRateFee = (rate(original, fee) * BigInt(size.replacement)) / 1000n;
     const sameRate = pay(0, sameRateFee);
-    expect(await expectSameRefusal(sameRate, sameRateFee, inPool)).toBe(
+    expect(await expectSameRefusal(sameRate, sameRateFee, inPool, 'RBF_FEE_RATE_TOO_LOW')).toBe(
       `${transactionId(sameRate)}: replacement transaction has an insufficient fee rate: needs more than ${rate(original, fee)}, has ${rate(sameRate, sameRateFee)}`,
     );
 
@@ -88,7 +91,7 @@ describeLive('replace-by-fee', () => {
     expect(needed).toBe(fee + minRelayFee(size.replacement));
     const underpaid = pay(0, needed - 1n);
     expect(rate(underpaid, needed - 1n)).toBeGreaterThan(rate(original, fee));
-    expect(await expectSameRefusal(underpaid, needed - 1n, inPool)).toBe(
+    expect(await expectSameRefusal(underpaid, needed - 1n, inPool, 'RBF_FEE_TOO_LOW')).toBe(
       `${transactionId(underpaid)}: replacement transaction has an insufficient absolute fee: needs ${needed}, has ${needed - 1n}`,
     );
 
@@ -108,11 +111,11 @@ describeLive('replace-by-fee', () => {
     // So it cannot be replaced in turn, whatever the fee.
     expect(signalsReplacement(replacement)).toBe(false);
     const second = pay(0, 10n * needed);
-    const spent = await expectSameRefusal(second, 10n * needed, { tx: replacement, fee: needed });
+    const spent = await expectSameRefusal(second, 10n * needed, { tx: replacement, fee: needed }, 'RBF_NOT_REPLACEABLE');
     expect(spent).toBe(`output already spent in mempool: output=${funding.getId()}:0, tx=${transactionId(replacement)}`);
     const refused = await pearld.sendRawTransaction(serializeTransaction(second)).catch((error: unknown) => error);
     expect(refused).toBeInstanceOf(PearlRpcError);
-    expect(refused).toMatchObject({ kind: 'rpc', rpcCode: RPC_ERROR_CODES.TX_REJECTED });
+    expect(refused).toMatchObject({ code: 'RPC_ERROR', kind: 'rpc', rpcCode: RPC_ERROR_CODES.TX_REJECTED });
     expect((refused as PearlRpcError).message).toContain(spent);
 
     await confirm(replacement);
@@ -124,7 +127,7 @@ describeLive('replace-by-fee', () => {
     await broadcast(original);
     expect(signalsReplacement(original)).toBe(false);
     const replacement = pay(1, 10n * fee, { sequence: MAX_RBF_SEQUENCE });
-    expect(await expectSameRefusal(replacement, 10n * fee, { tx: original, fee })).toBe(
+    expect(await expectSameRefusal(replacement, 10n * fee, { tx: original, fee }, 'RBF_NOT_REPLACEABLE')).toBe(
       `output already spent in mempool: output=${funding.getId()}:1, tx=${transactionId(original)}`,
     );
     await confirm(original);
