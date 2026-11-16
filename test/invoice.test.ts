@@ -130,14 +130,27 @@ describe('refreshInvoice', () => {
     ]);
   });
 
-  it('underpaid stays awaiting before expiry and expires after', async () => {
+  it('an underpaid invoice is underpaid before expiry and expired-underpaid after', async () => {
     const chain = new FakeChain();
     chain.pay('tx-under', 50_000n, 100);
     let invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500);
-    expect(invoice.state).toBe('awaiting');
+    expect(invoice.state).toBe('underpaid');
     expect(invoice.paidAmount).toBe(50_000n);
     invoice = await refreshInvoice(invoice, chain, 2_000);
-    expect(invoice.state).toBe('expired');
+    expect(invoice.state).toBe('expired-underpaid');
+  });
+
+  it('an overpaid invoice is pending and confirming like any other, then overpaid', async () => {
+    const chain = new FakeChain();
+    chain.pay('tx-over', 150_000n, null);
+    let invoice = await refreshInvoice(createInvoice(config({ requiredConfirmations: 2 }), NETWORK), chain, 1_500);
+    expect(invoice.state).toBe('pending');
+    chain.moveToBlock('tx-over', 100);
+    invoice = await refreshInvoice(invoice, chain, 1_500);
+    expect(invoice.state).toBe('confirming');
+    chain.tip = { height: 101, hash: 'hash-101' };
+    invoice = await refreshInvoice(invoice, chain, 1_500);
+    expect(invoice).toMatchObject({ state: 'overpaid', paidAmount: 150_000n });
   });
 
   it('expires with no payment at expiry', async () => {
@@ -161,7 +174,7 @@ describe('refreshInvoice', () => {
     chain.pay('tx-dup', 60_000n, 100);
     const invoice = await refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500);
     expect(invoice.paidAmount).toBe(60_000n);
-    expect(invoice.state).toBe('awaiting');
+    expect(invoice.state).toBe('underpaid');
     expect(invoice.payments).toMatchObject([{ txid: 'tx-dup', amount: 60_000n, firstSeenAt: 1_500 }]);
   });
 
@@ -425,7 +438,7 @@ describe('expiry by block time', () => {
     chain.broadcast('tx-part', { [ADDRESS]: 40_000n }, 1_500);
     chain.mine(1_600);
     const invoice = await at(chain, 9_000);
-    expect(invoice).toMatchObject({ state: 'expired', paidAmount: 40_000n });
+    expect(invoice).toMatchObject({ state: 'expired-underpaid', paidAmount: 40_000n });
     expect(invoice.payments).toMatchObject([{ txid: 'tx-part', amount: 40_000n, counted: true }]);
   });
 
@@ -493,5 +506,51 @@ describe('expiry by block time', () => {
     const chain = new FakeChain();
     chain.activity = [{ txid: 'tx-bad', amount: 1n, block: null, seenAt: Number.NaN }];
     await expect(refreshInvoice(createInvoice(config(), NETWORK), chain, 1_500)).rejects.toThrow('a seenAt for tx-bad');
+  });
+});
+
+describe('state transitions on a scripted chain', () => {
+  it('walks awaiting, underpaid, pending, confirming, confirmed, overpaid and back through a reorg', async () => {
+    const chain = new ScriptedChain();
+    let invoice = createInvoice(config({ requiredConfirmations: 2 }), NETWORK);
+    const states: string[] = [];
+    const step = async (now: number) => {
+      invoice = await refreshInvoice(invoice, chain, now);
+      states.push(invoice.state);
+    };
+    await step(1_100);
+    chain.broadcast('tx-1', { [ADDRESS]: 60_000n }, 1_150);
+    await step(1_200);
+    chain.broadcast('tx-2', { [ADDRESS]: 40_000n }, 1_250);
+    await step(1_300);
+    chain.mine(1_350);
+    await step(1_400);
+    chain.mine(1_450);
+    await step(1_500);
+    chain.broadcast('tx-3', { [ADDRESS]: 5_000n }, 1_550);
+    await step(1_600);
+    chain.mine(1_650);
+    chain.mine(1_700);
+    await step(1_750);
+    chain.disconnect(2);
+    await step(1_800);
+    chain.mine(1_850);
+    await step(1_900);
+    expect(states).toEqual(['awaiting', 'underpaid', 'pending', 'confirming', 'confirmed', 'pending', 'overpaid', 'pending', 'confirming']);
+    expect(invoice).toMatchObject({ paidAmount: 105_000n, uncountedAmount: 0n });
+  });
+
+  it('walks expired, expired-underpaid and conflicted', async () => {
+    const chain = new ScriptedChain();
+    const fresh = createInvoice(config(), NETWORK);
+    expect((await refreshInvoice(fresh, chain, 2_000)).state).toBe('expired');
+    chain.broadcast('tx-part', { [ADDRESS]: 1_000n }, 1_500);
+    chain.mine(1_600);
+    let invoice = await refreshInvoice(fresh, chain, 2_500);
+    expect(invoice.state).toBe('expired-underpaid');
+    chain.disconnect(1);
+    chain.drop('tx-part');
+    invoice = await refreshInvoice(invoice, chain, 2_600);
+    expect(invoice.state).toBe('conflicted');
   });
 });

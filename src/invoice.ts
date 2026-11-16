@@ -17,8 +17,11 @@
  *   mempool, does not make it late.
  * - An on-time payment counts toward `paidAmount` while the chain view
  *   lists it. Late payments add to `uncountedAmount` instead.
- * - Confirmations are recomputed from the current tip on every refresh, so
- *   a reorg below requiredConfirmations regresses a confirmed invoice.
+ * - Confirmations are those of the least confirmed counted payment,
+ *   recomputed from the current tip on every refresh, so a reorg below
+ *   requiredConfirmations regresses a confirmed invoice.
+ * - The state follows from the counted amount, those confirmations, the
+ *   clock and any conflict; see InvoiceState.
  * - An on-time payment that the chain view no longer knows at all marks
  *   the invoice "conflicted", which wins over every other state.
  *
@@ -31,13 +34,23 @@ import type { AddressPayment, BlockRef, ChainClient } from './client.js';
 import type { PearlNetwork } from './networks.js';
 import { PearlError } from './errors.js';
 
-/** Lifecycle states of a watch-only invoice. */
+/**
+ * Lifecycle states of a watch-only invoice. Before expiry: "awaiting"
+ * (nothing counted) and "underpaid" (some). Paid in full: "pending" (a
+ * counted payment unconfirmed), "confirming", then "confirmed" for the
+ * exact amount or "overpaid" for more. Not paid in full by expiry:
+ * "expired" (nothing counted) or "expired-underpaid". "conflicted" wins
+ * over all of them.
+ */
 export type InvoiceState =
   | 'awaiting'
+  | 'underpaid'
   | 'pending'
   | 'confirming'
   | 'confirmed'
+  | 'overpaid'
   | 'expired'
+  | 'expired-underpaid'
   | 'conflicted';
 
 /**
@@ -267,18 +280,19 @@ function applyView(invoice: Invoice, view: ChainView, now: number): Invoice {
   }
   if (confirmations === Number.MAX_SAFE_INTEGER) confirmations = 0;
 
-  let state: InvoiceState;
-  if (conflicted) {
-    state = 'conflicted';
-  } else if (paidAmount >= invoice.amount) {
-    if (confirmations >= invoice.requiredConfirmations) state = 'confirmed';
-    else if (confirmations === 0) state = 'pending';
-    else state = 'confirming';
-  } else {
-    state = now >= invoice.expiresAt ? 'expired' : 'awaiting';
-  }
-  return { ...invoice, payments, paidAmount, uncountedAmount, confirmations, state };
+  return { ...invoice, payments, paidAmount, uncountedAmount, confirmations, state: stateOf(invoice, paidAmount, confirmations, conflicted, now) };
 }
+
+function stateOf(invoice: Invoice, paid: bigint, confirmations: number, conflicted: boolean, now: number): InvoiceState {
+  if (conflicted) return 'conflicted';
+  if (paid >= invoice.amount) {
+    if (confirmations >= invoice.requiredConfirmations) return paid > invoice.amount ? 'overpaid' : 'confirmed';
+    return confirmations === 0 ? 'pending' : 'confirming';
+  }
+  if (now >= invoice.expiresAt) return paid > 0n ? 'expired-underpaid' : 'expired';
+  return paid > 0n ? 'underpaid' : 'awaiting';
+}
+
 
 async function readView(invoice: Invoice, client: ChainClient, tipHeight: number, activity: readonly AddressPayment[]): Promise<ChainView> {
   const listed = listedPayments(activity);

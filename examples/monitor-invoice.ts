@@ -37,7 +37,7 @@ console.log(`waiting for ${formatPearl(invoice.amount)} PRL at ${invoice.address
 // A real application stores `invoice` after every refresh and can stop and
 // resume at any point; the record is all the state there is.
 let last = '';
-while (!['confirmed', 'expired', 'conflicted'].includes(invoice.state)) {
+while (!['confirmed', 'overpaid', 'expired', 'expired-underpaid', 'conflicted'].includes(invoice.state)) {
   invoice = await monitor.refreshInvoice(invoice);
   const line = `${invoice.state}: ${formatPearl(invoice.paidAmount)} PRL paid, ${invoice.confirmations} confirmations`;
   if (line !== last) console.log(line);

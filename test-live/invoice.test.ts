@@ -71,7 +71,7 @@ describeLive('invoices over pearld', () => {
     expect(await refresh()).toMatchObject({ state: 'awaiting', paidAmount: 0n, confirmations: 0, payments: [] });
 
     const part = await pay([{ script: script(161), value: 2_000_000n }]);
-    expect(await refresh()).toMatchObject({ state: 'awaiting', paidAmount: 2_000_000n, confirmations: 0 });
+    expect(await refresh()).toMatchObject({ state: 'underpaid', paidAmount: 2_000_000n, confirmations: 0 });
     expect(invoice.payments).toMatchObject([{ txid: transactionId(part), amount: 2_000_000n, firstSeenAt: 1500, counted: true }]);
     expect(await chain.getTransaction(transactionId(part))).toEqual({ txid: transactionId(part), block: null });
 
@@ -96,7 +96,7 @@ describeLive('invoices over pearld', () => {
     await pay([{ script: script(161), value: 1_000_000n }]);
     expect(await refresh()).toMatchObject({ state: 'pending', paidAmount: 6_000_000n, confirmations: 0 });
     await mine(2);
-    expect(await refresh()).toMatchObject({ state: 'confirmed', paidAmount: 6_000_000n, confirmations: 2 });
+    expect(await refresh()).toMatchObject({ state: 'overpaid', paidAmount: 6_000_000n, confirmations: 2 });
     expect(invoice.payments).toHaveLength(3);
   });
 
@@ -105,10 +105,10 @@ describeLive('invoices over pearld', () => {
     let invoice = monitor.createInvoice(config);
     await pay([{ script: script(162), value: 4_999_999n }]);
     invoice = await monitor.refreshInvoice(invoice, 1999);
-    expect(invoice).toMatchObject({ state: 'awaiting', paidAmount: 4_999_999n });
+    expect(invoice).toMatchObject({ state: 'underpaid', paidAmount: 4_999_999n });
     await pay([{ script: script(162), value: 1_000_000n }]);
     invoice = await monitor.refreshInvoice(invoice, 2000);
-    expect(invoice).toMatchObject({ state: 'expired', paidAmount: 4_999_999n });
+    expect(invoice).toMatchObject({ state: 'expired-underpaid', paidAmount: 4_999_999n, uncountedAmount: 1_000_000n });
     await mine(1);
   });
 
