@@ -43,7 +43,7 @@ import { replacementFee, signalsReplacement } from './rbf.js';
 import { PearldRpc, OysterRpc, isUnknownTransaction } from './rpc.js';
 import type { Rpc } from './rpc.js';
 import { taggedHash, xmssLeafScript } from './script.js';
-import { signXmssP2mrInput } from './scriptpath.js';
+import { DEFAULT_MAX_FEE_RATE, signXmssP2mrInput } from './scriptpath.js';
 import { assembleScriptTree } from './scripttree.js';
 import type { ScriptTree } from './scripttree.js';
 import { sweepKey } from './sweep.js';
@@ -185,6 +185,8 @@ export interface SendOptions {
   recipients: readonly Recipient[];
   /** Grain per 1000 vbytes; the backend's estimate unless given. */
   feeRate?: FeeRate;
+  /** The highest fee rate this send may pay, in grain per 1000 vbytes. DEFAULT_MAX_FEE_RATE unless given; raise it to pay more on purpose. */
+  maxFeeRate?: FeeRate;
   /** The first signing account unless given. 'all' spends any signing account, imported key or XMSS key. */
   from?: CoinSource;
   /** Confirmations a coin needs. 1 unless given, as Oyster's sends use. */
@@ -351,6 +353,30 @@ type PendingEvent = { [K in Exclude<keyof WalletEvents, 'transaction'>]: [K, Wal
 function checkPositive(value: number, what: string): number {
   if (!Number.isSafeInteger(value) || value < 1) throw new RangeError(`${what} must be a positive integer`);
   return value;
+}
+
+function checkRate(value: unknown, what: string): FeeRate {
+  if (typeof value !== 'bigint' || value < 0n) throw new PearlError('FEE_RATE_INVALID', `${what} must be a non-negative bigint of grain per 1000 vbytes`);
+  return value;
+}
+
+// The ceiling every wallet spend is held to: the fee is worked out here from
+// the spent values and the outputs, not taken from whoever built the payment.
+// Coin selection charges for Oyster's size estimate, which allows a weight
+// unit more per signature than a Schnorr signature takes, so the limit is
+// for that size and a payment built at exactly maxFeeRate passes.
+function checkFeeCeiling(tx: Transaction, prevouts: readonly { value: bigint }[], vsize: number, maxFeeRate: FeeRate): void {
+  const fee = prevouts.reduce((sum, prevout) => sum + prevout.value, 0n) - tx.outs.reduce((sum, output) => sum + output.value, 0n);
+  if (prevouts.length !== tx.ins.length || fee < 0n) throw new SigningError('OUTPUTS_EXCEED_INPUTS', 'the transaction spends less than it pays');
+  const charged = vsize + Math.ceil((tx.ins.length + 3) / 4);
+  const limit = (BigInt(charged) * maxFeeRate + 999n) / 1000n;
+  if (fee > limit) {
+    throw new SigningError(
+      'FEE_TOO_HIGH',
+      `the transaction would pay a fee of ${fee} grain, above the ${limit} grain that maxFeeRate (${maxFeeRate} grain per 1000 vbytes) allows for ${vsize} vbytes; ` +
+        'pass a lower feeRate, or raise maxFeeRate to pay it',
+    );
+  }
 }
 
 function asRecord<T>(value: JsonValue | undefined, what: string): T {
@@ -1148,7 +1174,7 @@ export class PearlWallet {
   async send(options: SendOptions): Promise<SendResult> {
     return this.#exclusive(async (events) => {
       this.#requireUnlocked();
-      const feeRate = options.feeRate ?? (await this.#backend.estimateFeeRate());
+      const { feeRate, maxFeeRate } = await this.#feeRates(options);
       const minConfirmations = options.minConfirmations ?? 1;
       const coins = this.#spendable(options.from ?? { account: this.#firstSigningAccount().id });
       const changeAccount = this.#changeAccount(options.from);
@@ -1170,7 +1196,7 @@ export class PearlWallet {
         this.#putAccount(changeAccount);
         this.#extend(changeAccount.id, true);
       }
-      return this.#signAndBroadcast(payment, { label: options.label, changeAddress: payment.changeIndex >= 0 ? changeAddress : null }, events);
+      return this.#signAndBroadcast(payment, { label: options.label, changeAddress: payment.changeIndex >= 0 ? changeAddress : null, maxFeeRate }, events);
     });
   }
 
@@ -1180,9 +1206,10 @@ export class PearlWallet {
    * original input, and more inputs only if the change cannot cover the
    * fee. The fee is raised further if pearld's replacement rules need it.
    */
-  async bumpFee(txid: string, options: { feeRate: FeeRate }): Promise<SendResult> {
+  async bumpFee(txid: string, options: { feeRate: FeeRate; maxFeeRate?: FeeRate }): Promise<SendResult> {
     return this.#exclusive(async (events) => {
       this.#requireUnlocked();
+      const { maxFeeRate } = await this.#feeRates(options);
       const original = this.#txs.get(txid);
       const ledger = this.#ledger();
       if (original === undefined || ledger.status.get(txid) !== 'pending') throw new WalletError('WALLET_NOT_REPLACEABLE', `transaction ${txid} is not a pending transaction of this wallet`);
@@ -1255,7 +1282,7 @@ export class PearlWallet {
         payment = undefined;
       }
       if (payment === undefined) throw new WalletError('WALLET_NOT_REPLACEABLE', `could not reach the fee pearld needs to replace ${txid}`);
-      const result = await this.#signAndBroadcast(payment, { label: original.label, changeAddress, replaces: original }, events);
+      const result = await this.#signAndBroadcast(payment, { label: original.label, changeAddress, replaces: original, maxFeeRate }, events);
       return { ...result, replaces: txid };
     });
   }
@@ -1265,17 +1292,18 @@ export class PearlWallet {
    * wallet's WIF, to a new receive address of the wallet. The key is used
    * once and not stored.
    */
-  async sweep(options: { wif: string; feeRate?: FeeRate; account?: string; label?: string }): Promise<SendResult> {
+  async sweep(options: { wif: string; feeRate?: FeeRate; maxFeeRate?: FeeRate; account?: string; label?: string }): Promise<SendResult> {
     return this.#exclusive(async (events) => {
       const { privateKey } = decodeWif(options.wif, this.network);
       try {
         const source = keyPathAddress(privateKey, this.network);
         const utxos = await this.#backend.getUtxos([source]);
         if (utxos.length === 0) throw new PearlError('INSUFFICIENT_FUNDS', `${source} holds nothing to sweep`);
-        const feeRate = options.feeRate ?? (await this.#backend.estimateFeeRate());
+        const { feeRate, maxFeeRate } = await this.#feeRates(options);
         const record = this.#account(options.account);
         const destination = this.#issue(record, false, options.label ?? 'sweep');
         const signed = sweepKey(privateKey, { network: this.network, utxos, destination, feeRate, minConfirmations: 0, coinbaseMaturity: this.network.coinbaseMaturity });
+        checkFeeCeiling(signed.transaction, signed.prevouts, signed.vsize, maxFeeRate);
         const entry = this.#record(signed.transaction, signed.prevouts, { broadcast: false, changeOutput: null, label: options.label });
         await this.#flush();
         await this.#broadcast(entry, null);
@@ -2043,14 +2071,16 @@ export class PearlWallet {
 
   async #signAndBroadcast(
     payment: Payment<WalletCoin>,
-    meta: { label?: string | undefined; changeAddress: string | null; replaces?: TxEntry },
+    meta: { label?: string | undefined; changeAddress: string | null; replaces?: TxEntry; maxFeeRate: FeeRate },
     events: PendingEvent[],
   ): Promise<SendResult> {
+    // Before any key is used: an XMSS signature spent on a refused payment is an index gone.
+    checkFeeCeiling(payment.transaction, payment.prevouts, payment.vsize, meta.maxFeeRate);
     for (const [id, count] of this.#xmssInputCounts(payment.inputs)) {
       const record = this.#xmss.get(id)!;
       if (XMSS_MAX_SIGNATURES - record.next < count) throw new XmssError('XMSS_INDEX_EXHAUSTED', `XMSS key ${id.slice(0, 16)} has ${XMSS_MAX_SIGNATURES - record.next} signatures left, and this payment needs ${count}`);
     }
-    const signed = await this.#sign(payment);
+    const signed = await this.#sign(payment, meta.maxFeeRate);
     const final = finalizePayment(payment, { signed });
     const entry = this.#record(final.transaction, final.prevouts.map((p) => ({ script: Uint8Array.from(p.script), value: p.value })), {
       broadcast: false,
@@ -2109,6 +2139,27 @@ export class PearlWallet {
     this.#putTx(entry);
   }
 
+  // The rate to build with and the ceiling to hold the result to. A rate the
+  // backend estimates is checked like any other answer of its: a value that
+  // is not a positive rate, or one above the ceiling, is refused.
+  async #feeRates(options: { feeRate?: FeeRate; maxFeeRate?: FeeRate }): Promise<{ feeRate: FeeRate; maxFeeRate: FeeRate }> {
+    const maxFeeRate = checkRate(options.maxFeeRate ?? DEFAULT_MAX_FEE_RATE, 'maxFeeRate');
+    if (options.feeRate !== undefined) {
+      const feeRate = checkRate(options.feeRate, 'feeRate');
+      if (feeRate > maxFeeRate) throw new SigningError('FEE_TOO_HIGH', `feeRate ${feeRate} is above maxFeeRate ${maxFeeRate} (grain per 1000 vbytes); raise maxFeeRate to pay it`);
+      return { feeRate, maxFeeRate };
+    }
+    const estimate: unknown = await this.#backend.estimateFeeRate();
+    if (typeof estimate !== 'bigint' || estimate <= 0n) throw new PearlError('BACKEND_RESPONSE', 'the backend estimated a fee rate that is not a positive bigint of grain per 1000 vbytes');
+    if (estimate > maxFeeRate) {
+      throw new SigningError(
+        'FEE_TOO_HIGH',
+        `the backend estimates a fee rate of ${estimate} grain per 1000 vbytes, above maxFeeRate ${maxFeeRate}; pass feeRate, or raise maxFeeRate to pay it`,
+      );
+    }
+    return { feeRate: estimate, maxFeeRate };
+  }
+
   #xmssInputCounts(inputs: readonly WalletCoin[]): Map<string, number> {
     const counts = new Map<string, number>();
     for (const coin of inputs) if (coin.owner.type === 'xmss') counts.set(coin.owner.id, (counts.get(coin.owner.id) ?? 0) + 1);
@@ -2119,7 +2170,7 @@ export class PearlWallet {
   // whose key-path signatures are copied out, imported keys directly, and
   // XMSS inputs last, with the previous transactions the all-P2MR check
   // needs, which the wallet has recorded.
-  async #sign(payment: Payment<WalletCoin>): Promise<Transaction> {
+  async #sign(payment: Payment<WalletCoin>, maxFeeRate: FeeRate): Promise<Transaction> {
     const keystore = this.#requireUnlocked();
     const signed = payment.transaction.clone();
     const { psbt, inputs, prevouts } = payment;
@@ -2176,7 +2227,7 @@ export class PearlWallet {
           const tree = xmssTree(id);
           for (const [i, coin] of inputs.entries()) {
             if (coin.owner.type !== 'xmss' || coin.owner.id !== id) continue;
-            await signXmssP2mrInput(signed, i, signer, { prevouts, tree, leafIndex: 0, previousTransactions });
+            await signXmssP2mrInput(signed, i, signer, { prevouts, tree, leafIndex: 0, previousTransactions, maxFeeRate });
           }
         } finally {
           signer.destroy();
