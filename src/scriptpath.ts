@@ -1,7 +1,7 @@
 // Script-path spends for P2TR and P2MR outputs.
 //
 // Both output types use the BIP342 tapscript sighash, which commits to the
-// leaf hash, so signing is shared; pearlTapscriptSighash computes it the way
+// leaf hash, so signing is shared; pearlTaprootSighash computes it the way
 // Pearl's node does. The two output types differ in how the spend travels:
 //
 // - P2TR script paths go through a BIP371 PSBT. Pearl's Go PSBT code reads
@@ -18,7 +18,8 @@
 
 /**
  * Script-path signing for P2TR and P2MR outputs, on the transaction and
- * through PSBT, and the tapscript signature message as Pearl computes it.
+ * through PSBT, key-path signing with a signer that holds its key elsewhere,
+ * and the Taproot signature messages as Pearl computes them.
  *
  * @module
  */
@@ -189,16 +190,16 @@ function coversInputValues(
 }
 
 /**
- * Pearl's Taproot signature message with the tapscript extension, mirroring
- * calcTaprootSignatureHashRaw and the midstate from NewTxSigHashes. It
- * follows Pearl's consensus code, not bitcoinjs, so P2MR signatures validate
- * on Pearl nodes; the Go vectors pin every case.
+ * Pearl's Taproot signature message, mirroring calcTaprootSignatureHashRaw
+ * and the midstate from NewTxSigHashes: for a key path when leafHash is null,
+ * with the tapscript extension otherwise. It follows Pearl's consensus code,
+ * so P2MR signatures validate on Pearl nodes; the Go vectors pin every case.
  */
-function pearlTapscriptSighash(
+function pearlTaprootSighash(
   tx: Transaction,
   inputIndex: number,
   prevouts: readonly TxOutput[],
-  leafHash: Uint8Array,
+  leafHash: Uint8Array | null,
   sighashType: number,
   options: TapscriptContextOptions,
 ): Uint8Array {
@@ -223,8 +224,8 @@ function pearlTapscriptSighash(
   if (outputMode !== Transaction.SIGHASH_SINGLE && outputMode !== Transaction.SIGHASH_NONE) {
     parts.push(sha256(concat(tx.outs.map((output) => serializeOutput(output.value, output.script)))));
   }
-  // spend_type is ext_flag * 2 + annex_present.
-  parts.push(Uint8Array.of(TAPSCRIPT_SPEND_TYPE | (options.annex === undefined ? 0 : 1)));
+  // spend_type is ext_flag * 2 + annex_present; the extension is the tapscript one.
+  parts.push(Uint8Array.of((leafHash === null ? 0 : TAPSCRIPT_SPEND_TYPE) | (options.annex === undefined ? 0 : 1)));
   if (anyoneCanPay) {
     const input = tx.ins[inputIndex]!;
     const prevout = prevouts[inputIndex]!;
@@ -243,8 +244,33 @@ function pearlTapscriptSighash(
     const output = tx.outs[inputIndex]!;
     parts.push(sha256(serializeOutput(output.value, output.script)));
   }
-  parts.push(leafHash, Uint8Array.of(TAPSCRIPT_KEY_VERSION), uint32le(options.codeSeparatorPosition ?? NO_CODESEPARATOR));
+  if (leafHash !== null) {
+    parts.push(leafHash, Uint8Array.of(TAPSCRIPT_KEY_VERSION), uint32le(options.codeSeparatorPosition ?? NO_CODESEPARATOR));
+  }
   return taggedHash('TapSighash', concat(parts));
+}
+
+/** The argument checks the two signature messages share. Returns the sighash type. */
+function checkSighashArguments(
+  tx: Transaction,
+  inputIndex: number,
+  prevouts: readonly TxOutput[],
+  options: { sighashType?: number; annex?: Uint8Array },
+): number {
+  const sighashType = options.sighashType ?? Transaction.SIGHASH_DEFAULT;
+  if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= tx.ins.length) {
+    throw new RangeError(`input index ${inputIndex} is out of range`);
+  }
+  if (prevouts.length !== tx.ins.length) {
+    throw new Error(`expected ${tx.ins.length} prevouts, got ${prevouts.length}`);
+  }
+  prevouts.forEach((prevout, index) => assertValue(prevout.value, `prevout ${index} value`));
+  assertTaprootSighashType(sighashType);
+  checkAnnex(options.annex);
+  if ((sighashType & SIGHASH_OUTPUT_MASK) === Transaction.SIGHASH_SINGLE && inputIndex >= tx.outs.length) {
+    throw new SigningError('SIGHASH_UNSUPPORTED', 'SIGHASH_SINGLE needs an output at the same index as the input');
+  }
+  return sighashType;
 }
 
 /** What tapscriptSighash needs besides the transaction and the input. */
@@ -266,27 +292,237 @@ export interface TapscriptSighashInput extends TapscriptContextOptions {
  */
 export function tapscriptSighash(tx: Transaction, inputIndex: number, options: TapscriptSighashInput): Uint8Array {
   const { prevouts, leafHash } = options;
-  const sighashType = options.sighashType ?? Transaction.SIGHASH_DEFAULT;
-  if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= tx.ins.length) {
-    throw new RangeError(`input index ${inputIndex} is out of range`);
-  }
-  if (prevouts.length !== tx.ins.length) {
-    throw new Error(`expected ${tx.ins.length} prevouts, got ${prevouts.length}`);
-  }
-  prevouts.forEach((prevout, index) => assertValue(prevout.value, `prevout ${index} value`));
+  const sighashType = checkSighashArguments(tx, inputIndex, prevouts, options);
   if (leafHash.length !== 32) {
     throw new Error(`leaf hash must be 32 bytes, got ${leafHash.length}`);
   }
-  assertTaprootSighashType(sighashType);
-  checkAnnex(options.annex);
   const position = options.codeSeparatorPosition;
   if (position !== undefined && (!Number.isInteger(position) || position < 0 || position >= NO_CODESEPARATOR)) {
     throw new RangeError('codeSeparatorPosition must be an opcode position from codeSeparatorPositions');
   }
-  if ((sighashType & 0x03) === Transaction.SIGHASH_SINGLE && inputIndex >= tx.outs.length) {
-    throw new SigningError('SIGHASH_UNSUPPORTED', 'SIGHASH_SINGLE needs an output at the same index as the input');
+  return pearlTaprootSighash(tx, inputIndex, prevouts, leafHash, sighashType, options);
+}
+
+/** What keyPathSighash needs besides the transaction and the input. */
+export interface KeyPathSighashInput {
+  /** Script and value (in grain) of every input's spent output, in input order. */
+  prevouts: readonly TxOutput[];
+  /** A Taproot sighash type. SIGHASH_DEFAULT unless given. */
+  sighashType?: number;
+  /** The annex the witness will end with; see TapscriptContextOptions. None unless given. */
+  annex?: Uint8Array;
+}
+
+/**
+ * What keyPathSighash takes for a PSBT input. The sighash type is the one
+ * the input asks for, refused unless allowedSighashTypes lists it.
+ */
+export interface PsbtKeyPathSighashOptions extends PsbtSighashOptions {
+  /** The annex the witness will end with; see TapscriptContextOptions. None unless given. */
+  annex?: Uint8Array;
+}
+
+/**
+ * Key-path sighash for one input, as Pearl computes it: the 32 bytes a
+ * Taproot key-path signature signs, for a signer that takes a hash. A
+ * signature over this hash is good for one set of prevouts only.
+ *
+ * Takes a transaction with its prevouts, or a PSBT whose inputs all carry
+ * their UTXO. Throws what tapscriptSighash throws, INPUT_UNPREPARED for a
+ * PSBT input without a UTXO, and SIGHASH_NOT_ALLOWED for a PSBT input asking
+ * for a sighash type outside allowedSighashTypes.
+ */
+export function keyPathSighash(tx: Transaction, inputIndex: number, options: KeyPathSighashInput): Uint8Array;
+export function keyPathSighash(psbt: Psbt, inputIndex: number, options?: PsbtKeyPathSighashOptions): Uint8Array;
+export function keyPathSighash(
+  target: Transaction | Psbt,
+  inputIndex: number,
+  options: KeyPathSighashInput | PsbtKeyPathSighashOptions = {},
+): Uint8Array {
+  if (target instanceof Transaction) {
+    const { prevouts } = options as KeyPathSighashInput;
+    const sighashType = checkSighashArguments(target, inputIndex, prevouts, options as KeyPathSighashInput);
+    return pearlTaprootSighash(target, inputIndex, prevouts, null, sighashType, options);
   }
-  return pearlTapscriptSighash(tx, inputIndex, prevouts, leafHash, sighashType, options);
+  const { tx, prevouts } = psbtSpend(target, inputIndex);
+  const requested = psbtSighashType(target.data.inputs[inputIndex]!.sighashType, inputIndex, options as PsbtKeyPathSighashOptions);
+  const sighashType = checkSighashArguments(tx, inputIndex, prevouts, { ...options, sighashType: requested });
+  return pearlTaprootSighash(tx, inputIndex, prevouts, null, sighashType, options);
+}
+
+/** The unsigned transaction of a PSBT and the output each input spends. */
+function psbtSpend(psbt: Psbt, inputIndex: number): { tx: Transaction; prevouts: TxOutput[] } {
+  if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= psbt.inputCount) {
+    throw new RangeError(`PSBT input index ${inputIndex} is out of range`);
+  }
+  const tx = Transaction.fromBuffer(psbt.data.globalMap.unsignedTx.toBuffer());
+  const prevouts = tx.ins.map((txInput, index): TxOutput => {
+    const input = psbt.data.inputs[index]!;
+    const utxo =
+      input.witnessUtxo ??
+      (input.nonWitnessUtxo === undefined ? undefined : Transaction.fromBuffer(input.nonWitnessUtxo).outs[txInput.index]);
+    if (utxo === undefined) {
+      throw new SigningError(
+        'INPUT_UNPREPARED',
+        `PSBT input ${index} is not prepared: it has no witness UTXO. Prepare every input before signing any`,
+      );
+    }
+    return { script: utxo.script, value: utxo.value };
+  });
+  return { tx, prevouts };
+}
+
+/** What a key-path signer is asked to sign, and everything it needs to find and tweak its key. */
+export interface KeyPathSignRequest {
+  /** The 32-byte signature message, from keyPathSighash. */
+  hash: Uint8Array;
+  /** The x-only key the output pays: the internal key after the taproot tweak. The signature must verify under it. */
+  outputKey: Uint8Array;
+  /** The output's x-only internal key, before the tweak. */
+  internalPubkey: Uint8Array;
+  /** Root of the output's script tree, or null for an output without one, as every BIP86 output is. */
+  merkleRoot: Uint8Array | null;
+  /** The Taproot sighash type the hash was computed for. */
+  sighashType: number;
+  /** The PSBT input being signed. */
+  inputIndex: number;
+  /** Where the internal key sits under the master key, when the account or the caller knows. */
+  derivation?: { masterFingerprint: Uint8Array; path: string };
+}
+
+/**
+ * A signer for Taproot key-path spends whose key lives elsewhere: a hardware
+ * wallet, an HSM, a signing service.
+ *
+ * The signer applies the taproot tweak; pearljs cannot, because the tweak is
+ * added to the private key. Two kinds of signer fit:
+ *
+ * - One that holds the internal key, as a hardware wallet does. It takes the
+ *   key at `derivation` (or the one matching `internalPubkey`), negates it if
+ *   its public key has an odd y, adds
+ *   taggedHash('TapTweak', internalPubkey || merkleRoot), with nothing after
+ *   the key when merkleRoot is null, and signs `hash` with the result.
+ * - One that holds the tweaked key already. It signs `hash` as it is and
+ *   needs nothing else from the request.
+ *
+ * Either way the result is a 64-byte BIP340 signature that verifies under
+ * `outputKey`. It is checked against that key before it is stored, so a
+ * signer that skipped the tweak is refused with SIGNATURE_INVALID.
+ */
+export interface KeyPathSignerAsync {
+  signKeyPath(request: KeyPathSignRequest): Promise<Uint8Array>;
+}
+
+/**
+ * A KeyPathSignerAsync for an internal private key held in memory, such as
+ * one decoded from WIF. It tweaks the key for each request the way a device
+ * that holds the internal key does, and wipes the tweaked copy afterwards.
+ * Signatures use fresh auxiliary randomness unless auxRand fixes it. The
+ * signer reads the caller's array each time and keeps no copy.
+ *
+ * Throws KEY_INVALID for bytes that are not a secp256k1 private key. A
+ * request for another internal key is refused with INPUT_MISMATCH.
+ */
+export function keyPathSignerFromPrivateKey(privateKey: Uint8Array, options: { auxRand?: Uint8Array } = {}): KeyPathSignerAsync {
+  const point = ecc.isPrivate(privateKey) ? ecc.pointFromScalar(privateKey, true) : null;
+  if (point === null) throw new PearlError('KEY_INVALID', 'invalid private key');
+  const { auxRand } = options;
+  if (auxRand !== undefined && (!(auxRand instanceof Uint8Array) || auxRand.length !== 32)) {
+    throw new Error('auxRand must be 32 bytes');
+  }
+  return {
+    signKeyPath(request: KeyPathSignRequest): Promise<Uint8Array> {
+      const { internalPubkey, merkleRoot } = request;
+      if (!equalBytes(internalPubkey, point.subarray(1))) {
+        return Promise.reject(new SigningError('INPUT_MISMATCH', 'the request is for another internal key than this signer holds'));
+      }
+      const evenKey = point[0] === 0x03 ? ecc.privateNegate(privateKey) : privateKey;
+      const tweak = taggedHash('TapTweak', merkleRoot === null ? internalPubkey : concat([internalPubkey, merkleRoot]));
+      const tweakedKey = ecc.privateAdd(evenKey, tweak);
+      if (evenKey !== privateKey) evenKey.fill(0);
+      if (tweakedKey === null) return Promise.reject(new PearlError('KEY_INVALID', 'taproot tweak produced an invalid key'));
+      try {
+        return Promise.resolve(ecc.signSchnorr(request.hash, tweakedKey, auxRand ?? crypto.getRandomValues(new Uint8Array(32))));
+      } finally {
+        tweakedKey.fill(0);
+      }
+    },
+  };
+}
+
+/** Options for signTaprootKeyPathInputAsync. */
+export interface TaprootKeyPathSignOptions extends PsbtSighashOptions {
+  /** The output's x-only internal key. Read from the input's tapInternalKey when left out. */
+  internalPubkey?: Uint8Array;
+  /** Root of the output's script tree. Read from the input's tapMerkleRoot when left out; none when neither is there. */
+  merkleRoot?: Uint8Array;
+  /** Passed to the signer as the request's derivation. */
+  derivation?: { masterFingerprint: Uint8Array; path: string };
+}
+
+/**
+ * Signs a P2TR key-path PSBT input with a signer that holds its key
+ * elsewhere, and stores the signature as the input's tapKeySig. finalizePsbt
+ * then builds the witness.
+ *
+ * Every check runs before the signer is asked, so a refused spend never
+ * prompts anyone: each input of the PSBT has its UTXO, the input's witness
+ * UTXO is the P2TR output of the internal key and Merkle root, and its
+ * sighash type is in allowedSighashTypes, which holds only SIGHASH_DEFAULT
+ * unless the caller lists more. The signature is verified against the output
+ * key before it is stored.
+ *
+ * Throws a SigningError: INPUT_UNPREPARED when an input has no UTXO or no
+ * internal key is known, INPUT_MISMATCH when the witness UTXO is not that
+ * output or the input is already signed, SIGHASH_NOT_ALLOWED, and
+ * SIGNATURE_INVALID for a signature that does not verify.
+ */
+export async function signTaprootKeyPathInputAsync(
+  psbt: Psbt,
+  inputIndex: number,
+  signer: KeyPathSignerAsync,
+  options: TaprootKeyPathSignOptions = {},
+): Promise<void> {
+  const { tx, prevouts } = psbtSpend(psbt, inputIndex);
+  const input = psbt.data.inputs[inputIndex]!;
+  if (input.tapKeySig !== undefined || input.finalScriptWitness !== undefined) {
+    throw new SigningError('INPUT_MISMATCH', `PSBT input ${inputIndex} already has a key-path signature`);
+  }
+  const internalPubkey = options.internalPubkey ?? input.tapInternalKey;
+  if (internalPubkey === undefined) {
+    throw new SigningError('INPUT_UNPREPARED', `PSBT input ${inputIndex} has no Taproot internal key; prepare it or pass internalPubkey`);
+  }
+  if (input.tapInternalKey !== undefined && !equalBytes(input.tapInternalKey, internalPubkey)) {
+    throw new SigningError('INPUT_MISMATCH', 'PSBT Taproot internal key does not match the key to sign for');
+  }
+  const merkleRoot = options.merkleRoot ?? input.tapMerkleRoot ?? null;
+  const expected = p2tr(merkleRoot === null ? { internalPubkey } : { internalPubkey, merkleRoot }).output;
+  if (input.witnessUtxo === undefined || !equalBytes(input.witnessUtxo.script, expected)) {
+    throw new SigningError('INPUT_MISMATCH', `PSBT input ${inputIndex} does not spend the P2TR output of that internal key`);
+  }
+  const requested = psbtSighashType(input.sighashType, inputIndex, options);
+  const sighashType = checkSighashArguments(tx, inputIndex, prevouts, { sighashType: requested });
+  const outputKey = expected.slice(2);
+  const hash = pearlTaprootSighash(tx, inputIndex, prevouts, null, sighashType, {});
+  const signature = await signer.signKeyPath({
+    hash,
+    outputKey,
+    internalPubkey: Uint8Array.from(internalPubkey),
+    merkleRoot: merkleRoot === null ? null : Uint8Array.from(merkleRoot),
+    sighashType,
+    inputIndex,
+    ...(options.derivation === undefined ? {} : { derivation: options.derivation }),
+  });
+  if (!(signature instanceof Uint8Array) || signature.length !== 64 || !ecc.verifySchnorr(hash, outputKey, signature)) {
+    throw new SigningError(
+      'SIGNATURE_INVALID',
+      `invalid Taproot signature for PSBT input ${inputIndex}: the signer must return 64 bytes that verify under the tweaked output key`,
+    );
+  }
+  psbt.updateInput(inputIndex, {
+    ...(input.tapInternalKey === undefined ? { tapInternalKey: Uint8Array.from(internalPubkey) } : {}),
+    tapKeySig: sighashType === Transaction.SIGHASH_DEFAULT ? Uint8Array.from(signature) : Uint8Array.from([...signature, sighashType]),
+  });
 }
 
 /** What signTapscriptUnchecked needs besides the transaction and the signer. */

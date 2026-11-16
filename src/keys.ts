@@ -32,9 +32,11 @@ import { assertTaprootSighashType as assertSighashType, psbtSighashType } from '
 import {
   signP2mrInput,
   signP2mrScriptPathInput,
+  signTaprootKeyPathInputAsync,
   signTaprootScriptPathInput,
 } from './scriptpath.js';
 import type {
+  KeyPathSignerAsync,
   P2mrPsbtSignOptions,
   P2mrSignOptions,
   PsbtSighashOptions,
@@ -103,6 +105,39 @@ export interface PearlAccount {
    * Throws when the value is not a bigint of grain within Pearl's bounds.
    */
   prepareInput(psbt: Psbt, inputIndex: number, options: PearlInputOptions): void;
+  /**
+   * The child of this account that a PSBT's BIP32 derivation records name, or
+   * null when none does. A record is a claim by whoever wrote the PSBT, so it
+   * counts only when the key derived at its path is the key it carries.
+   */
+  findChild(derivations: readonly DerivationRecord[]): AccountChild | null;
+  /**
+   * Signs a BIP86 key-path PSBT input with a signer that holds the account's
+   * keys elsewhere, such as a hardware wallet: signInput for an account that
+   * has only the extended public key. The signer gets the sighash, the
+   * child's internal key and its derivation path, and applies the taproot
+   * tweak; see KeyPathSignerAsync.
+   *
+   * The checks are those of signInput and all run before the signer is
+   * asked. The signature is verified against the child's output key before
+   * it is stored. Throws what signInput throws.
+   */
+  signInputAsync(psbt: Psbt, inputIndex: number, signer: KeyPathSignerAsync, options?: PearlPsbtChildOptions): Promise<void>;
+}
+
+/** A child key of an account: m/86'/coinType'/account'/{0 or 1}/{index}. */
+export interface AccountChild {
+  index: number;
+  /** Whether the child is on the change chain. */
+  change: boolean;
+}
+
+/** A BIP32 derivation record as PSBT inputs and outputs carry it. */
+export interface DerivationRecord {
+  masterFingerprint: Uint8Array;
+  path: string;
+  /** The key the record is for: x-only, or compressed. */
+  pubkey: Uint8Array;
 }
 
 /** Where an extended public key came from, as a descriptor writes it: [fingerprint/86'/coin'/account']. */
@@ -141,15 +176,19 @@ export interface PearlSignOptions {
 }
 
 /**
- * Options for signInput. Leave out `index` to have the child read from the
- * input's tapBip32Derivation, which prepareInput writes.
+ * Which child a key-path PSBT input belongs to. Leave out `index` to have the
+ * child read from the input's tapBip32Derivation, which prepareInput writes.
  * allowedSighashTypes holds only SIGHASH_DEFAULT unless set.
  */
-export interface PearlPsbtSignOptions extends PsbtSighashOptions {
+export interface PearlPsbtChildOptions extends PsbtSighashOptions {
   /** Address index of the child that holds the output. Read from the PSBT when left out. */
   index?: number;
   /** Whether the child is on the change chain. Only read together with `index`. */
   change?: boolean;
+}
+
+/** Options for signInput. */
+export interface PearlPsbtSignOptions extends PearlPsbtChildOptions {
   /** See PearlSignOptions.auxRand. */
   auxRand?: Uint8Array;
 }
@@ -269,6 +308,80 @@ export function accountPath(network: PearlNetwork, account = 0): string {
   return `m/${PURPOSE}'/${network.coinType}'/${account}'`;
 }
 
+/**
+ * The fingerprint and path prefix a derivation record of this account starts
+ * with. Without an origin the account key stands in as the root, as
+ * descriptors do for a bare xpub; an account with one recognizes both.
+ */
+function accountRoots(account: PearlAccount): { fingerprint: Uint8Array; prefix: string }[] {
+  const roots: { fingerprint: Uint8Array; prefix: string }[] = [{ fingerprint: Uint8Array.from(account.node.fingerprint), prefix: 'm/' }];
+  if (account.masterFingerprint !== null && account.path !== null) {
+    roots.unshift({ fingerprint: fromHex(account.masterFingerprint), prefix: `${account.path}/` });
+  }
+  return roots;
+}
+
+function findChild(account: PearlAccount, derivations: readonly DerivationRecord[]): AccountChild | null {
+  const roots = accountRoots(account);
+  for (const record of derivations) {
+    const root = roots.find((item) => equalBytes(record.masterFingerprint, item.fingerprint) && record.path.startsWith(item.prefix));
+    if (root === undefined) continue;
+    const child = /^([01])\/(0|[1-9]\d{0,9})$/.exec(record.path.slice(root.prefix.length));
+    if (child === null || Number(child[2]) > MAX_NON_HARDENED_INDEX) continue;
+    const found = { index: Number(child[2]), change: child[1] === '1' };
+    const key = record.pubkey.length === 33 ? record.pubkey.subarray(1) : record.pubkey;
+    if (equalBytes(account.derivePublicKey(found.index, found.change), key)) return found;
+  }
+  return null;
+}
+
+/**
+ * The checks every key-path signer of an account makes before a key is
+ * touched: all inputs are prepared, the input is a key-path input of one of
+ * the account's children, and its sighash type is allowed. The derivation
+ * record is only a hint: the witness UTXO is checked against the key.
+ */
+function checkKeyPathInput(
+  account: PearlAccount,
+  psbt: Psbt,
+  inputIndex: number,
+  options: PearlPsbtChildOptions,
+): AccountChild & { internalPubkey: Uint8Array; script: Uint8Array; sighashType: number } {
+  assertInputIndex(psbt, inputIndex);
+  const input = psbt.data.inputs[inputIndex]!;
+  // The signature covers every spent output, so all of them have to be there.
+  psbt.data.inputs.forEach((other, i) => {
+    if (other.witnessUtxo === undefined && other.nonWitnessUtxo === undefined) {
+      throw new SigningError(
+        'INPUT_UNPREPARED',
+        `PSBT input ${i} is not prepared: it has no witness UTXO. Prepare every input before signing any`,
+      );
+    }
+  });
+  let child: AccountChild | null;
+  if (options.index !== undefined) child = { index: options.index, change: options.change ?? false };
+  else child = findChild(account, input.tapBip32Derivation ?? []);
+  if (child === null) {
+    throw new SigningError(
+      'DERIVATION_NOT_FOUND',
+      `PSBT input ${inputIndex} names no child of this account in its tapBip32Derivation; pass index and change`,
+    );
+  }
+  const internalPubkey = account.derivePublicKey(child.index, child.change);
+  if (input.tapLeafScript !== undefined || input.tapMerkleRoot !== undefined) {
+    throw new SigningError('INPUT_MISMATCH', 'BIP86 accounts sign Taproot key-path inputs only');
+  }
+  if (input.tapInternalKey !== undefined && !equalBytes(input.tapInternalKey, internalPubkey)) {
+    throw new SigningError('INPUT_MISMATCH', 'PSBT Taproot internal key does not match the account child');
+  }
+  const script = p2tr({ internalPubkey }).output;
+  if (input.witnessUtxo === undefined || !equalBytes(input.witnessUtxo.script, script)) {
+    throw new SigningError('INPUT_MISMATCH', 'PSBT witness UTXO does not match the account child');
+  }
+  const sighashType = psbtSighashType(input.sighashType, inputIndex, options);
+  return { ...child, internalPubkey, script, sighashType };
+}
+
 function toWatchOnlyAccount(
   node: BIP32Interface,
   origin: { masterFingerprint: Uint8Array; path: string } | null,
@@ -289,7 +402,7 @@ function toWatchOnlyAccount(
   const internalPublicKey = (child: BIP32Interface): Uint8Array =>
     child.publicKey.slice(1, 33);
 
-  return {
+  const account: PearlAccount = {
     node: accountNode,
     path: origin?.path ?? null,
     masterFingerprint: origin === null ? null : toHex(origin.masterFingerprint),
@@ -334,7 +447,27 @@ function toWatchOnlyAccount(
         psbt.updateInput(inputIndex, { sighashType });
       }
     },
+    findChild(derivations: readonly DerivationRecord[]): AccountChild | null {
+      return findChild(account, derivations);
+    },
+    async signInputAsync(
+      psbt: Psbt,
+      inputIndex: number,
+      signer: KeyPathSignerAsync,
+      options: PearlPsbtChildOptions = {},
+    ): Promise<void> {
+      const { index, change, internalPubkey } = checkKeyPathInput(account, psbt, inputIndex, options);
+      await signTaprootKeyPathInputAsync(psbt, inputIndex, signer, {
+        internalPubkey,
+        derivation: {
+          masterFingerprint: Uint8Array.from(origin?.masterFingerprint ?? accountNode.fingerprint),
+          path: `${origin?.path ?? 'm'}/${change ? 1 : 0}/${index}`,
+        },
+        ...(options.allowedSighashTypes === undefined ? {} : { allowedSighashTypes: options.allowedSighashTypes }),
+      });
+    },
   };
+  return account;
 }
 
 /**
@@ -419,7 +552,6 @@ export function deriveSigningAccountFromSeed(
   const master = bip32.fromSeed(seed, toBip32Params(network));
   const accountNode = master.derivePath(path);
   const masterFingerprint = Uint8Array.from(master.fingerprint);
-  const accountFingerprint = Uint8Array.from(accountNode.fingerprint);
   const watchOnly = toWatchOnlyAccount(accountNode, { masterFingerprint, path }, network);
 
   let destroyed = false;
@@ -438,32 +570,6 @@ export function deriveSigningAccountFromSeed(
     }
   };
 
-  /**
-   * The child a prepared input names. The record is only a hint from whoever
-   * wrote the PSBT: signInput still checks the witness UTXO against the key.
-   */
-  const childFromDerivation = (
-    input: Psbt['data']['inputs'][number],
-    inputIndex: number,
-  ): { index: number; change: boolean } => {
-    for (const record of input.tapBip32Derivation ?? []) {
-      const prefix = equalBytes(record.masterFingerprint, masterFingerprint)
-        ? `${path}/`
-        : equalBytes(record.masterFingerprint, accountFingerprint)
-          ? 'm/'
-          : null;
-      if (prefix === null || !record.path.startsWith(prefix)) continue;
-      const child = /^([01])\/(0|[1-9]\d{0,9})$/.exec(record.path.slice(prefix.length));
-      if (child === null || Number(child[2]) > MAX_NON_HARDENED_INDEX) continue;
-      const found = { index: Number(child[2]), change: child[1] === '1' };
-      if (equalBytes(watchOnly.derivePublicKey(found.index, found.change), record.pubkey)) return found;
-    }
-    throw new SigningError(
-      'DERIVATION_NOT_FOUND',
-      `PSBT input ${inputIndex} names no child of this account in its tapBip32Derivation; pass index and change`,
-    );
-  };
-
   return {
     path,
     watchOnlyAccount(): PearlAccount {
@@ -479,35 +585,9 @@ export function deriveSigningAccountFromSeed(
       watchOnly.prepareInput(psbt, inputIndex, options);
     },
     signInput(psbt: Psbt, inputIndex: number, options: PearlPsbtSignOptions = {}): void {
-      assertInputIndex(psbt, inputIndex);
-      const input = psbt.data.inputs[inputIndex]!;
-      // The signature covers every spent output, so all of them have to be there.
-      psbt.data.inputs.forEach((other, i) => {
-        if (other.witnessUtxo === undefined && other.nonWitnessUtxo === undefined) {
-          throw new SigningError(
-            'INPUT_UNPREPARED',
-            `PSBT input ${i} is not prepared: it has no witness UTXO. Prepare every input before signing any`,
-          );
-        }
-      });
-      const { index, change } =
-        options.index === undefined ? childFromDerivation(input, inputIndex) : { index: options.index, change: options.change ?? false };
-      const internalPubkey = watchOnly.derivePublicKey(index, change);
-      if (input.tapLeafScript !== undefined || input.tapMerkleRoot !== undefined) {
-        throw new SigningError('INPUT_MISMATCH', 'BIP86 accounts sign Taproot key-path inputs only');
-      }
-      if (input.tapInternalKey !== undefined && !equalBytes(input.tapInternalKey, internalPubkey)) {
-        throw new SigningError('INPUT_MISMATCH', 'PSBT Taproot internal key does not match the account child');
-      }
-      const expectedScript = p2tr({ internalPubkey }).output;
-      if (
-        input.witnessUtxo === undefined ||
-        !equalBytes(input.witnessUtxo.script, expectedScript)
-      ) {
-        throw new SigningError('INPUT_MISMATCH', 'PSBT witness UTXO does not match the account child');
-      }
-      const sighashType = psbtSighashType(input.sighashType, inputIndex, options);
-      if (input.tapInternalKey === undefined) {
+      const input = psbt.data.inputs[inputIndex];
+      const { index, change, internalPubkey, script: expectedScript, sighashType } = checkKeyPathInput(watchOnly, psbt, inputIndex, options);
+      if (input!.tapInternalKey === undefined) {
         psbt.updateInput(inputIndex, { tapInternalKey: internalPubkey });
       }
       withChild(index, change, (child) => {

@@ -24,7 +24,7 @@ import type { Psbt } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { MAX_GRAIN } from './amount.js';
 import { PearlError } from './errors.js';
-import { concat, equalBytes, fromHex, toHex, uint32le, varInt, varIntSize } from './internal/bytes.js';
+import { concat, equalBytes, fromHex, toHex, varIntSize } from './internal/bytes.js';
 import { OP_CODES, OPCODE_NAMES } from './opcodes.js';
 import {
   BASE_LEAF_VERSION,
@@ -39,7 +39,7 @@ import {
   tapBranchHash,
   tapLeafHash,
 } from './script.js';
-import { tapscriptSighash } from './scriptpath.js';
+import { keyPathSighash, tapscriptSighash } from './scriptpath.js';
 import type { TxOutput } from './transaction.js';
 import { XMSS_PUBLIC_KEY_LENGTH, XMSS_SIGNATURE_LENGTH, xmssVerify } from './xmss.js';
 
@@ -245,8 +245,6 @@ const NODE_SIZE = 32;
 const MAX_PROOF_SIZE = 128 * NODE_SIZE;
 const NO_CODESEPARATOR = 0xffffffff;
 const FINAL_SEQUENCE = 0xffffffff;
-const SIGHASH_ANYONECANPAY = 0x80;
-const SIGHASH_NONE = 2;
 const SIGHASH_SINGLE = 3;
 const SIGHASH_TYPES = new Set([0x00, 0x01, 0x02, 0x03, 0x81, 0x82, 0x83]);
 const EMPTY = new Uint8Array(0);
@@ -264,20 +262,6 @@ function notBelow(a: Uint8Array, b: Uint8Array): boolean {
     if (a[i] !== b[i]) return a[i]! > b[i]!;
   }
   return true;
-}
-
-function int64le(value: bigint): Uint8Array {
-  const out = new Uint8Array(8);
-  new DataView(out.buffer).setBigUint64(0, BigInt.asUintN(64, value), true);
-  return out;
-}
-
-function varBytes(bytes: Uint8Array): Uint8Array {
-  return concat([varInt(bytes.length), bytes]);
-}
-
-function serializeOutput(output: { value: bigint; script: Uint8Array }): Uint8Array {
-  return concat([int64le(output.value), varBytes(output.script)]);
 }
 
 /** wire.TxWitness.SerializeSize: the item count, then each item with its length. */
@@ -489,10 +473,6 @@ function witnessProgram(script: Uint8Array): { version: number; program: Uint8Ar
   return { version: first === OP.OP_0 ? 0 : first - OP.OP_1 + 1, program: script.subarray(2) };
 }
 
-function isP2tr(script: Uint8Array): boolean {
-  return script.length === 34 && script[0] === OP.OP_1 && script[1] === 32;
-}
-
 function isNullOutpoint(input: { hash: Uint8Array; index: number }): boolean {
   return input.index === 0xffffffff && input.hash.every((byte) => byte === 0);
 }
@@ -527,41 +507,16 @@ class TxContext {
   /**
    * The message a key path signature signs: the same function without the
    * tapscript extension, over the midstate of NewTxSigHashes
-   * (hashcache.go:210).
+   * (hashcache.go:210), which keyPathSighash computes.
    */
   keyPathHash(inputIndex: number, sighashType: number, annex: Uint8Array | null): Uint8Array | null {
-    const { tx, prevouts } = this;
     if (!SIGHASH_TYPES.has(sighashType)) return null;
-    const anyoneCanPay = (sighashType & SIGHASH_ANYONECANPAY) !== 0;
-    const outputMode = sighashType & 0x03;
-    const parts: Uint8Array[] = [Uint8Array.of(0x00, sighashType), uint32le(tx.version), uint32le(tx.locktime)];
-    if (!anyoneCanPay) {
-      const covered =
-        prevouts.some((prevout, index) => !isNullOutpoint(tx.ins[index]!) && isP2tr(prevout.script));
-      parts.push(
-        sha256(concat(tx.ins.map((input) => concat([input.hash, uint32le(input.index)])))),
-        covered ? sha256(concat(prevouts.map((prevout) => int64le(prevout.value)))) : ZERO_HASH,
-        covered ? sha256(concat(prevouts.map((prevout) => varBytes(prevout.script)))) : ZERO_HASH,
-        sha256(concat(tx.ins.map((input) => uint32le(input.sequence)))),
-      );
-    }
-    if (outputMode !== SIGHASH_SINGLE && outputMode !== SIGHASH_NONE) {
-      parts.push(sha256(concat(tx.outs.map(serializeOutput))));
-    }
-    parts.push(Uint8Array.of(annex === null ? 0 : 1));
-    const input = tx.ins[inputIndex]!;
-    if (anyoneCanPay) {
-      parts.push(input.hash, uint32le(input.index), serializeOutput(prevouts[inputIndex]!), uint32le(input.sequence));
-    } else {
-      parts.push(uint32le(inputIndex));
-    }
-    if (annex !== null) parts.push(sha256(varBytes(annex)));
-    if (outputMode === SIGHASH_SINGLE) {
-      const output = tx.outs[inputIndex];
-      if (output === undefined) return null;
-      parts.push(sha256(serializeOutput(output)));
-    }
-    return taggedHash('TapSighash', concat(parts));
+    if ((sighashType & 0x03) === SIGHASH_SINGLE && inputIndex >= this.tx.outs.length) return null;
+    return keyPathSighash(this.tx, inputIndex, {
+      prevouts: this.prevouts,
+      sighashType,
+      ...(annex === null ? {} : { annex }),
+    });
   }
 }
 
