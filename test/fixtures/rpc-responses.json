@@ -95,6 +95,24 @@
   "chainsynced": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":true,\"error\":null,\"id\":67}\n"
   },
+  "createrawtransaction": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":\"010000000122222222222222222222222222222222222222222222222222222222222222220100000000feffffff0181d1f008000000002251202a64b1ee3375f3bb4b367b8cb8384a47f73cf231717f827c6c6fbbf5aecf0c36f4010000\",\"error\":null,\"id\":25}\n",
+    "expect": {
+      "address": "rprl1p9fjtrm3nwhemkjek0wxtswz2glmneu33w9lcylrvd7alttk0psmqna7ew5",
+      "amount": "150000001",
+      "locktime": 500,
+      "txid": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  },
+  "createrawtransaction-wrong-network": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-5,\"message\":\"Invalid address or key: address is for the wrong network: expected regtest\"},\"id\":26}\n"
+  },
+  "debuglevel-invalid": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-32602,\"message\":\"The specified subsystem [nosuchsubsystem] is invalid -- supported subsystems [ADXR AMGR BCDB CHAN CMGR DISC INBD INDX MINR PEER PRLD RPCS SCRP SRVR SYNC TXMP V2TR]\"},\"id\":20}\n"
+  },
+  "debuglevel-show": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":\"Supported subsystems [ADXR AMGR BCDB CHAN CMGR DISC INBD INDX MINR PEER PRLD RPCS SCRP SRVR SYNC TXMP V2TR]\",\"error\":null,\"id\":19}\n"
+  },
   "decoderawtransaction": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":{\"txid\":\"97a6a6bc61f0f42df4132aa9fa72b11180d29abd1f20412a9473ba3a343b2281\",\"version\":2,\"locktime\":0,\"vin\":[{\"txid\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"vout\":1,\"scriptSig\":{\"asm\":\"\",\"hex\":\"\"},\"txinwitness\":[\"33333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333\"],\"sequence\":4294967295}],\"vout\":[{\"n\":0,\"scriptPubKey\":{\"asm\":\"1 2a64b1ee3375f3bb4b367b8cb8384a47f73cf231717f827c6c6fbbf5aecf0c36\",\"hex\":\"51202a64b1ee3375f3bb4b367b8cb8384a47f73cf231717f827c6c6fbbf5aecf0c36\",\"reqSigs\":1,\"type\":\"witness_v1_taproot\",\"address\":\"rprl1p9fjtrm3nwhemkjek0wxtswz2glmneu33w9lcylrvd7alttk0psmqna7ew5\",\"addresses\":[\"rprl1p9fjtrm3nwhemkjek0wxtswz2glmneu33w9lcylrvd7alttk0psmqna7ew5\"]},\"value\":20999999999.99999999},{\"n\":1,\"scriptPubKey\":{\"asm\":\"1 2a64b1ee3375f3bb4b367b8cb8384a47f73cf231717f827c6c6fbbf5aecf0c36\",\"hex\":\"51202a64b1ee3375f3bb4b367b8cb8384a47f73cf231717f827c6c6fbbf5aecf0c36\",\"reqSigs\":1,\"type\":\"witness_v1_taproot\",\"address\":\"rprl1p9fjtrm3nwhemkjek0wxtswz2glmneu33w9lcylrvd7alttk0psmqna7ew5\",\"addresses\":[\"rprl1p9fjtrm3nwhemkjek0wxtswz2glmneu33w9lcylrvd7alttk0psmqna7ew5\"]},\"value\":0.00000001}]},\"error\":null,\"id\":119}\n",
     "expect": {
@@ -134,6 +152,15 @@
   },
   "getaccount": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":\"default\",\"error\":null,\"id\":60}\n"
+  },
+  "getaccountaddress": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":\"rprl1p9fjtrm3nwhemkjek0wxtswz2glmneu33w9lcylrvd7alttk0psmqna7ew5\",\"error\":null,\"id\":90}\n"
+  },
+  "getaddednodeinfo-dns": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":[{\"addednode\":\"node.example:44108\",\"connected\":true,\"addresses\":[{\"address\":\"203.0.113.7:44108\",\"connected\":\"outbound\"}]}],\"error\":null,\"id\":99}\n"
+  },
+  "getaddednodeinfo-none": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":[],\"error\":null,\"id\":18}\n"
   },
   "getaddressesbyaccount": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":[\"rprl1p9fjtrm3nwhemkjek0wxtswz2glmneu33w9lcylrvd7alttk0psmqna7ew5\"],\"error\":null,\"id\":61}\n"
@@ -219,8 +246,17 @@
   "getconnectioncount": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":3,\"error\":null,\"id\":111}\n"
   },
+  "getcurrentnet": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":1347570770,\"error\":null,\"id\":13}\n",
+    "expect": {
+      "net": 1347570770
+    }
+  },
   "getdifficulty": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":1,\"error\":null,\"id\":106}\n"
+  },
+  "getgenerate": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":false,\"error\":null,\"id\":14}\n"
   },
   "getheaders": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":[\"0100000032587e2447b0432f2cce83b08c81b3bebb1ecaffefbddbe9a8516adf27abd078000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004000000deadbeef010000000000000000000000000000000000000000000000000000000000000000000000c1751637382fbd52f5e4e26dc9f38d8ccc2ab216dfed38bd489623f1c6592f3010ebe5690000011e0000000000000000000000000000000000000000000000000000000000000000\"],\"error\":null,\"id\":113}\n",
@@ -249,6 +285,13 @@
   "getmininginfo": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":{\"blocks\":0,\"currentblocksize\":612,\"currentblockvsize\":404,\"currentblocktx\":1,\"difficulty\":1,\"errors\":\"\",\"generate\":false,\"genproclimit\":12,\"networkhashps\":0,\"pooledtx\":2,\"testnet\":false},\"error\":null,\"id\":108}\n"
   },
+  "getnettotals": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":{\"totalbytesrecv\":5678,\"totalbytessent\":9007199254740993,\"timemillis\":1767225600123},\"error\":null,\"id\":96}\n",
+    "expect": {
+      "received": "5678",
+      "sent": "9007199254740993"
+    }
+  },
   "getnetworkhashps": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":0,\"error\":null,\"id\":107}\n"
   },
@@ -260,6 +303,12 @@
   },
   "getnewaddress": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":\"rprl1p9fjtrm3nwhemkjek0wxtswz2glmneu33w9lcylrvd7alttk0psmqna7ew5\",\"error\":null,\"id\":29}\n"
+  },
+  "getnodeaddresses": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":[{\"time\":1767225600,\"services\":9,\"address\":\"203.0.113.7\",\"port\":44108}],\"error\":null,\"id\":98}\n",
+    "expect": {
+      "services": "9"
+    }
   },
   "getpeerinfo": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":[{\"id\":7,\"addr\":\"127.0.0.1:18444\",\"addrlocal\":\"127.0.0.1:50211\",\"services\":\"00000001\",\"relaytxes\":true,\"lastsend\":1767225600,\"lastrecv\":1767225601,\"bytessent\":1234,\"bytesrecv\":5678,\"conntime\":1767225000,\"timeoffset\":0,\"pingtime\":1500,\"version\":70016,\"subver\":\"/pearld:0.1.0/\",\"inbound\":false,\"startingheight\":300,\"currentheight\":321,\"banscore\":0,\"feefilter\":1000,\"syncnode\":true,\"v2_connection\":true}],\"error\":null,\"id\":41}\n",
@@ -315,6 +364,12 @@
       ]
     }
   },
+  "getreceivedbyaccount": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":0.7,\"error\":null,\"id\":91}\n",
+    "expect": {
+      "amount": "70000000"
+    }
+  },
   "getreceivedbyaddress": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":0.7,\"error\":null,\"id\":53}\n",
     "expect": {
@@ -353,8 +408,190 @@
   "gettxspendingprevout-empty": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":[],\"error\":null,\"id\":7}\n"
   },
+  "handler-tables": {
+    "body": "",
+    "expect": {
+      "limited": [
+        "createrawtransaction",
+        "decoderawtransaction",
+        "decodescript",
+        "estimatefee",
+        "getbestblock",
+        "getbestblockhash",
+        "getblock",
+        "getblockcount",
+        "getblockhash",
+        "getblockheader",
+        "getcfilter",
+        "getcfilterheader",
+        "getchaintips",
+        "getcurrentnet",
+        "getdifficulty",
+        "getheaders",
+        "getinfo",
+        "getnettotals",
+        "getnetworkhashps",
+        "getrawmempool",
+        "getrawtransaction",
+        "gettxout",
+        "help",
+        "loadtxfilter",
+        "notifyblocks",
+        "notifynewtransactions",
+        "notifyreceived",
+        "notifyspent",
+        "rescan",
+        "rescanblocks",
+        "searchrawtransactions",
+        "session",
+        "uptime",
+        "validateaddress",
+        "verifymessage",
+        "version"
+      ],
+      "oyster": [
+        "chainsynced",
+        "createnewaccount",
+        "dumpprivkey",
+        "getaccount",
+        "getaccountaddress",
+        "getaddressesbyaccount",
+        "getbalance",
+        "getbestblock",
+        "getbestblockhash",
+        "getblockcount",
+        "getinfo",
+        "getnewaddress",
+        "getrawchangeaddress",
+        "getreceivedbyaccount",
+        "getreceivedbyaddress",
+        "getsyncprogress",
+        "gettransaction",
+        "getunconfirmedbalance",
+        "help",
+        "importprivkey",
+        "keypoolrefill",
+        "listaccounts",
+        "listaddresstransactions",
+        "listalltransactions",
+        "listlockunspent",
+        "listreceivedbyaccount",
+        "listreceivedbyaddress",
+        "listsinceblock",
+        "listtransactions",
+        "listunspent",
+        "lockunspent",
+        "rebroadcasttransaction",
+        "removetransaction",
+        "renameaccount",
+        "sendfrom",
+        "sendmany",
+        "sendtoaddress",
+        "settxfee",
+        "signmessage",
+        "signrawtransaction",
+        "validateaddress",
+        "verifymessage",
+        "walletislocked",
+        "walletlock",
+        "walletpassphrase",
+        "walletpassphrasechange"
+      ],
+      "oysterRefused": [
+        "backupwallet",
+        "dumpwallet",
+        "encryptwallet",
+        "getwalletinfo",
+        "importwallet",
+        "listaddressgroupings",
+        "move",
+        "setaccount"
+      ],
+      "pearld": [
+        "addnode",
+        "createrawtransaction",
+        "debuglevel",
+        "decoderawtransaction",
+        "decodescript",
+        "estimatefee",
+        "generate",
+        "getaddednodeinfo",
+        "getbestblock",
+        "getbestblockhash",
+        "getblock",
+        "getblockchaininfo",
+        "getblockcount",
+        "getblockhash",
+        "getblockheader",
+        "getblocktemplate",
+        "getcfilter",
+        "getcfilterheader",
+        "getchaintips",
+        "getconnectioncount",
+        "getcurrentnet",
+        "getdifficulty",
+        "getgenerate",
+        "getheaders",
+        "getinfo",
+        "getmempoolinfo",
+        "getmininginfo",
+        "getnettotals",
+        "getnetworkhashps",
+        "getnetworkinfo",
+        "getnodeaddresses",
+        "getpeerinfo",
+        "getrawmempool",
+        "getrawtransaction",
+        "gettxout",
+        "gettxspendingprevout",
+        "help",
+        "invalidateblock",
+        "node",
+        "ping",
+        "reconsiderblock",
+        "searchrawtransactions",
+        "sendrawtransaction",
+        "setgenerate",
+        "signmessagewithprivkey",
+        "stop",
+        "submitblock",
+        "testmempoolaccept",
+        "uptime",
+        "validateaddress",
+        "verifychain",
+        "version"
+      ],
+      "unimplemented": [
+        "estimatepriority",
+        "getmempoolentry",
+        "getwork",
+        "preciousblock"
+      ],
+      "websocket": [
+        "help",
+        "loadtxfilter",
+        "notifyblocks",
+        "notifynewtransactions",
+        "notifyreceived",
+        "notifyspent",
+        "rescan",
+        "rescanblocks",
+        "session",
+        "stopnotifyblocks",
+        "stopnotifynewtransactions",
+        "stopnotifyreceived",
+        "stopnotifyspent"
+      ]
+    }
+  },
   "importprivkey": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":null,\"id\":34}\n"
+  },
+  "invalidateblock-unknown": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-32600,\"message\":\"Invalid request: malformed\"},\"id\":21}\n"
+  },
+  "keypoolrefill": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":null,\"id\":95}\n"
   },
   "limited-getbestblock": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":{\"hash\":\"78d0ab27df6a51a8e9dbbdefffca1ebbbeb3818cb083ce2c2f43b047247e5832\",\"height\":0},\"error\":null,\"id\":11}\n"
@@ -400,6 +637,12 @@
   "listlockunspent": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":[{\"txid\":\"abababababababababababababababababababababababababababababababab\",\"vout\":1}],\"error\":null,\"id\":57}\n"
   },
+  "listreceivedbyaccount": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":[{\"account\":\"default\",\"amount\":0.7,\"confirmations\":6},{\"account\":\"imported\",\"amount\":0,\"confirmations\":0}],\"error\":null,\"id\":92}\n",
+    "expect": {
+      "amount": "70000000"
+    }
+  },
   "listreceivedbyaddress": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":[{\"account\":\"\",\"address\":\"rprl1p9fjtrm3nwhemkjek0wxtswz2glmneu33w9lcylrvd7alttk0psmqna7ew5\",\"amount\":0.7,\"confirmations\":6,\"txids\":[\"abababababababababababababababababababababababababababababababab\"]}],\"error\":null,\"id\":54}\n",
     "expect": {
@@ -442,8 +685,14 @@
   "null": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":null,\"id\":58}\n"
   },
+  "ping": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":null,\"id\":100}\n"
+  },
   "rebroadcasttransaction": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":{\"announced\":[\"abababababababababababababababababababababababababababababababab\"]},\"error\":null,\"id\":69}\n"
+  },
+  "reconsiderblock-unknown": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-32600,\"message\":\"Invalid request: malformed\"},\"id\":22}\n"
   },
   "removetransaction": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":{\"removed\":[\"abababababababababababababababababababababababababababababababab\"]},\"error\":null,\"id\":68}\n"
@@ -463,6 +712,9 @@
   "searchrawtransactions-none": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-5,\"message\":\"No information available about address\"},\"id\":12}\n"
   },
+  "sendfrom": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":\"abababababababababababababababababababababababababababababababab\",\"error\":null,\"id\":93}\n"
+  },
   "sendmany": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":\"abababababababababababababababababababababababababababababababab\",\"error\":null,\"id\":52}\n"
   },
@@ -478,12 +730,31 @@
   "sendtoaddress": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":\"17374efc4cd0c7601f5785b7e09a8dbcff6741225109960bf026e95c20e11505\",\"error\":null,\"id\":37}\n"
   },
+  "setgenerate-no-address": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-32603,\"message\":\"No payment addresses specified via --miningaddr\"},\"id\":16}\n"
+  },
+  "setgenerate-off": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":null,\"id\":15}\n"
+  },
+  "settxfee": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":true,\"error\":null,\"id\":94}\n"
+  },
   "signmessage": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":\"AUA5OHTNQHj2KAKAsnEyGpVhJP3TJxyiDKL2gCdFcWfLFOrDWKkeR36M+c7Snycq6apMQbs814DnK0JeT5rN+y/y\",\"error\":null,\"id\":31}\n",
     "expect": {
       "address": "rprl1p9fjtrm3nwhemkjek0wxtswz2glmneu33w9lcylrvd7alttk0psmqna7ew5",
       "message": "pearljs"
     }
+  },
+  "signmessagewithprivkey": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":\"ICREXpllSrdIb9K85dmUiVd+wNByVE4ZEOh62lP2MacXfDx2QHwX11o6w6Ihv1EtnLFlp383rrTuHsHIdlH8jrg=\",\"error\":null,\"id\":23}\n",
+    "expect": {
+      "message": "pearljs",
+      "wif": "cN9spWsvaxA8taS7DFMxnk1yJD2gaF2PX1npuTpy3vuZFJdwavaw"
+    }
+  },
+  "signmessagewithprivkey-bad-key": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-5,\"message\":\"Malformed private key\"},\"id\":24}\n"
   },
   "signrawtransaction": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":{\"hex\":\"00\",\"complete\":false,\"errors\":[{\"txid\":\"abababababababababababababababababababababababababababababababab\",\"vout\":1,\"scriptSig\":\"\",\"sequence\":4294967295,\"error\":\"no key for input\"}]},\"error\":null,\"id\":62}\n"
@@ -512,6 +783,9 @@
   "testmempoolaccept-rejected": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":[{\"txid\":\"17374efc4cd0c7601f5785b7e09a8dbcff6741225109960bf026e95c20e11505\",\"wtxid\":\"5f4ff9b04d5a955896d0456af68c01a2ab2fc4be8b20ea07f10042dd8135dde4\",\"package-error\":\"\",\"reject-reason\":\"transaction has insufficient priority\"}],\"error\":null,\"id\":19}\n"
   },
+  "uptime": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":86400,\"error\":null,\"id\":97}\n"
+  },
   "validateaddress": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":{\"isvalid\":true,\"address\":\"rprl1p9fjtrm3nwhemkjek0wxtswz2glmneu33w9lcylrvd7alttk0psmqna7ew5\",\"iswitness\":true,\"witness_version\":1,\"witness_program\":\"2a64b1ee3375f3bb4b367b8cb8384a47f73cf231717f827c6c6fbbf5aecf0c36\"},\"error\":null,\"id\":116}\n",
     "expect": {
@@ -528,8 +802,14 @@
   "validateaddress-wallet-invalid": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":{\"isvalid\":false},\"error\":null,\"id\":64}\n"
   },
+  "verifychain": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":true,\"error\":null,\"id\":17}\n"
+  },
   "verifymessage": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":true,\"error\":null,\"id\":32}\n"
+  },
+  "version": {
+    "body": "{\"jsonrpc\":\"1.0\",\"result\":{\"pearldjsonrpcapi\":{\"versionstring\":\"1.3.0\",\"major\":1,\"minor\":3,\"patch\":0,\"prerelease\":\"\",\"buildmetadata\":\"\"}},\"error\":null,\"id\":12}\n"
   },
   "wallet-error": {
     "body": "{\"jsonrpc\":\"1.0\",\"result\":null,\"error\":{\"code\":-4,\"message\":\"insufficient funds\"},\"id\":40}\n"

@@ -390,10 +390,12 @@ export function fallbackTransport(transports: readonly RpcTransport[], options: 
 // getrawchangeaddress (each call takes an address), and getblocktemplate.
 const IDEMPOTENT_METHODS = new Set([
   'chainsynced',
+  'createrawtransaction',
   'decoderawtransaction',
   'decodescript',
   'estimatefee',
   'getaccount',
+  'getaddednodeinfo',
   'getaddressesbyaccount',
   'getbalance',
   'getbestblock',
@@ -407,16 +409,21 @@ const IDEMPOTENT_METHODS = new Set([
   'getcfilterheader',
   'getchaintips',
   'getconnectioncount',
+  'getcurrentnet',
   'getdifficulty',
+  'getgenerate',
   'getheaders',
   'getinfo',
   'getmempoolinfo',
   'getmininginfo',
+  'getnettotals',
   'getnetworkhashps',
   'getnetworkinfo',
+  'getnodeaddresses',
   'getpeerinfo',
   'getrawmempool',
   'getrawtransaction',
+  'getreceivedbyaccount',
   'getreceivedbyaddress',
   'getsyncprogress',
   'gettransaction',
@@ -427,14 +434,18 @@ const IDEMPOTENT_METHODS = new Set([
   'listaddresstransactions',
   'listalltransactions',
   'listlockunspent',
+  'listreceivedbyaccount',
   'listreceivedbyaddress',
   'listsinceblock',
   'listtransactions',
   'listunspent',
   'searchrawtransactions',
   'testmempoolaccept',
+  'uptime',
   'validateaddress',
+  'verifychain',
   'verifymessage',
+  'version',
   'walletislocked',
 ]);
 
@@ -973,6 +984,42 @@ export interface OutPointParam {
   readonly vout: number;
 }
 
+/** getnettotals (btcjson.GetNetTotalsResult). Byte counts are bigint, as uint64s may pass 2^53. */
+export interface NetTotals {
+  readonly totalbytesrecv: bigint;
+  readonly totalbytessent: bigint;
+  /** The node's clock, Unix milliseconds. */
+  readonly timemillis: number;
+}
+
+/** One API's version in the version result (btcjson.VersionResult). pearld reports one, "pearldjsonrpcapi". */
+export interface VersionInfo {
+  readonly versionstring: string;
+  readonly major: number;
+  readonly minor: number;
+  readonly patch: number;
+  readonly prerelease: string;
+  readonly buildmetadata: string;
+}
+
+/** A peer address the node knows (btcjson.GetNodeAddressesResult). */
+export interface NodeAddress {
+  /** When the node last heard of the address, Unix seconds. */
+  readonly time: number;
+  /** Service flags, a uint64 bit field. */
+  readonly services: bigint;
+  readonly address: string;
+  readonly port: number;
+}
+
+/** getaddednodeinfo with dns true (btcjson.GetAddedNodeInfoResult). */
+export interface AddedNodeInfo {
+  readonly addednode: string;
+  readonly connected?: boolean;
+  /** The addresses the name resolved to, each "inbound", "outbound" or "false". */
+  readonly addresses?: { readonly address: string; readonly connected: string }[];
+}
+
 /** A class whose instances can `call`: what pearldMethods and oysterMethods extend. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- TypeScript requires this constructor shape of a mixin base.
 export type RpcClass = abstract new (...args: any[]) => Rpc;
@@ -1248,6 +1295,114 @@ export function pearldMethods<Base extends RpcClass>(Base: Base) {
     stop(): Promise<string> {
       return this.call('stop');
     }
+
+    /**
+     * Marks a block and every block after it invalid and moves the chain off
+     * them. pearld answers a hash it does not know with code -32600.
+     */
+    async invalidateBlock(hash: string): Promise<void> {
+      await this.call('invalidateblock', [hash]);
+    }
+
+    /** Takes back invalidateBlock: the block and its descendants may be the best chain again. */
+    async reconsiderBlock(hash: string): Promise<void> {
+      await this.call('reconsiderblock', [hash]);
+    }
+
+    /** Bytes sent and received over the peer-to-peer network since the node started. */
+    getNetTotals(): Promise<NetTotals> {
+      return this.call('getnettotals', [], { integers: ['totalbytesrecv', 'totalbytessent'] });
+    }
+
+    /** Seconds since the node started. */
+    uptime(): Promise<number> {
+      return this.call('uptime');
+    }
+
+    /** The version of each RPC API the node serves, by name; pearld reports "pearldjsonrpcapi". */
+    version(): Promise<Record<string, VersionInfo>> {
+      return this.call('version');
+    }
+
+    /** Up to `count` peer addresses from the node's address manager. pearld refuses a count under 1. */
+    getNodeAddresses(count = 1): Promise<NodeAddress[]> {
+      return this.call('getnodeaddresses', [count], { integers: ['services'] });
+    }
+
+    /**
+     * Peers added with addNode, or the one named. Without dns, their
+     * addresses as strings; with it, each with what its name resolves to and
+     * whether it is connected. Code -24 for a node that was not added.
+     */
+    getAddedNodeInfo(dns: false, node?: string): Promise<string[]>;
+    getAddedNodeInfo(dns: true, node?: string): Promise<AddedNodeInfo[]>;
+    getAddedNodeInfo(dns: boolean, node?: string): Promise<string[] | AddedNodeInfo[]> {
+      return this.call('getaddednodeinfo', node === undefined ? [dns] : [dns, node]);
+    }
+
+    /** Sends a ping to every peer; the round trips show in getPeerInfo's ping times. */
+    async ping(): Promise<void> {
+      await this.call('ping');
+    }
+
+    /** The network's magic number, as `PearlNetwork.magic` holds it. */
+    getCurrentNet(): Promise<number> {
+      return this.call('getcurrentnet');
+    }
+
+    /**
+     * Checks the last `checkDepth` blocks (0 for all) at `checkLevel`, and
+     * says whether they passed. A deep check is slow; give it a timeout, or 0
+     * for none.
+     */
+    verifyChain(checkLevel = 3, checkDepth = 288, options: Pick<CallOptions, 'signal' | 'timeout'> = {}): Promise<boolean> {
+      return this.call('verifychain', [checkLevel, checkDepth], options);
+    }
+
+    /** Whether the built-in miner is running. */
+    getGenerate(): Promise<boolean> {
+      return this.call('getgenerate');
+    }
+
+    /**
+     * Starts or stops the built-in miner, with `threads` workers (-1 for one
+     * per CPU; 0 stops it). Starting needs --miningaddr.
+     */
+    async setGenerate(generate: boolean, threads?: number): Promise<void> {
+      await this.call('setgenerate', threads === undefined ? [generate] : [generate, threads]);
+    }
+
+    /**
+     * Signs a message with a WIF key in the node, the legacy ECDSA compact
+     * signature over the double SHA-256 of the message with pearld's header,
+     * base64. This is not Oyster's signMessage, and verifyMessage in
+     * pearljs/message does not check it. The key travels to the node.
+     */
+    signMessageWithPrivKey(wif: string, message: string): Promise<string> {
+      return this.call('signmessagewithprivkey', [wif, message]);
+    }
+
+    /**
+     * Sets log levels, as --debuglevel does: a level for everything, or
+     * "SUBSYSTEM=level,..."; "show" lists the subsystems. Returns pearld's
+     * answer text.
+     */
+    debugLevel(levelSpec: string): Promise<string> {
+      return this.call('debuglevel', [levelSpec]);
+    }
+
+    /**
+     * An unsigned transaction spending `inputs` and paying `outputs`, grains
+     * by address, as hex. A lockTime other than 0 makes every input's
+     * sequence 0xfffffffe so it applies. pearld orders the outputs as its
+     * map iteration does, which is not the order given.
+     */
+    createRawTransaction(inputs: readonly OutPointParam[], outputs: Readonly<Record<string, bigint>>, lockTime?: number): Promise<string> {
+      const amounts = Object.fromEntries(Object.entries(outputs).map(([address, amount]) => [address, prlAmount(amount)]));
+      const params: unknown[] = [inputs.map(({ txid, vout }) => ({ txid, vout })), amounts];
+      if (lockTime !== undefined) params.push(lockTime);
+      return this.call('createrawtransaction', params);
+    }
   }
   return PearldMethods;
 }
@@ -1407,6 +1562,15 @@ export interface SyncProgress {
   readonly best_peer_height: number;
   readonly connections: number;
   readonly synced: boolean;
+}
+
+/** One entry of listreceivedbyaccount (btcjson.ListReceivedByAccountResult). */
+export interface ReceivedByAccount {
+  readonly account: string;
+  /** Grains. */
+  readonly amount: bigint;
+  /** Confirmations of the latest payment, 0 for none. */
+  readonly confirmations: number;
 }
 
 /** Options for sendMany. */
@@ -1640,6 +1804,54 @@ export function oysterMethods<Base extends RpcClass>(Base: Base) {
     /** Asks Oyster to shut down. */
     stop(): Promise<string> {
       return this.call('stop');
+    }
+
+    /** The height the wallet has processed up to, which can trail the node. */
+    getBlockCount(): Promise<number> {
+      return this.call('getblockcount');
+    }
+
+    /** The hash of the block the wallet has processed up to. */
+    getBestBlockHash(): Promise<string> {
+      return this.call('getbestblockhash');
+    }
+
+    /**
+     * Pays one address from an account and returns the txid. Like
+     * sendToAddress, Oyster requires a fee rate, grain per 1000 vbytes, and
+     * needs a pearld RPC connection; in SPV mode it answers "Chain RPC is
+     * inactive".
+     */
+    sendFrom(fromAccount: string, address: string, amount: bigint, feeRate: FeeRate, minConf = 1): Promise<string> {
+      return this.call('sendfrom', [fromAccount, address, prlAmount(amount), prlAmount(feeRate), minConf]);
+    }
+
+    /**
+     * Oyster's settxfee checks that the rate is not negative and returns
+     * true; it changes nothing, since every send names its own fee rate.
+     */
+    setTxFee(feeRate: FeeRate): Promise<boolean> {
+      return this.call('settxfee', [prlAmount(feeRate)]);
+    }
+
+    /** The account's current receive address: the last one handed out, or a new one once that has been paid. */
+    getAccountAddress(account: string): Promise<string> {
+      return this.call('getaccountaddress', [account]);
+    }
+
+    /** Grains received by an account's addresses in transactions with minConf confirmations. */
+    getReceivedByAccount(account: string, minConf = 1): Promise<bigint> {
+      return this.call('getreceivedbyaccount', [account, minConf], { amounts: ['result'] });
+    }
+
+    /** Totals per account, every account listed. */
+    listReceivedByAccount(minConf = 1): Promise<ReceivedByAccount[]> {
+      return this.call('listreceivedbyaccount', [minConf], { amounts: ['amount'] });
+    }
+
+    /** Accepted for compatibility; Oyster derives addresses as it needs them and does nothing here. */
+    async keypoolRefill(newSize?: number): Promise<void> {
+      await this.call('keypoolrefill', newSize === undefined ? [] : [newSize]);
     }
   }
   return OysterMethods;

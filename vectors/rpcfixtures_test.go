@@ -22,10 +22,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sort"
 	"strconv"
 	"testing"
 	"time"
@@ -295,6 +299,8 @@ func TestPearljsRPCFixtures(t *testing.T) {
 	}
 	structFixtures(t, params, reply, priv)
 	backendFixtures(t, params, s, reply)
+	laterFixtures(t, params, reply, priv)
+	fixtures["handler-tables"] = rpcFixture{Body: "", Expect: handlerTables(t)}
 
 	data, err := json.MarshalIndent(fixtures, "", "  ")
 	must(err)
@@ -516,6 +522,30 @@ func servedFixtures(t *testing.T, params *chaincfg.Params, mm *mempool.MockTxMem
 	serveLimited("limited-sendrawtransaction", "sendrawtransaction", "00")
 	serveLimited("limited-gettxspendingprevout", "gettxspendingprevout", []any{})
 	serveLimited("limited-getbestblock", "getbestblock")
+
+	// Node administration and the remaining chain methods, from the handlers
+	// that need no peers.
+	serve("version", nil, "version")
+	serve("getcurrentnet", map[string]any{"net": uint32(params.Net)}, "getcurrentnet")
+	serve("getgenerate", nil, "getgenerate")
+	serve("setgenerate-off", nil, "setgenerate", false)
+	serve("setgenerate-no-address", nil, "setgenerate", true, 1)
+	serve("verifychain", nil, "verifychain", 3, 1)
+	serve("getaddednodeinfo-none", nil, "getaddednodeinfo", false)
+	serve("debuglevel-show", nil, "debuglevel", "show")
+	serve("debuglevel-invalid", nil, "debuglevel", "nosuchsubsystem=trace")
+	serve("invalidateblock-unknown", nil, "invalidateblock", hexOf(bytesOf(0x77, 32)))
+	serve("reconsiderblock-unknown", nil, "reconsiderblock", hexOf(bytesOf(0x77, 32)))
+	wif, err := btcutil.NewWIF(priv, params, true)
+	must(err)
+	serve("signmessagewithprivkey", map[string]any{"wif": wif.String(), "message": "pearljs"}, "signmessagewithprivkey", wif.String(), "pearljs")
+	serve("signmessagewithprivkey-bad-key", nil, "signmessagewithprivkey", "notawif", "pearljs")
+	prevTxid := hexOf(bytesOf(0x22, 32))
+	serve("createrawtransaction", map[string]any{
+		"txid": prevTxid, "address": addr.EncodeAddress(), "amount": grains(150000001), "locktime": 500,
+	}, "createrawtransaction", []map[string]any{{"txid": prevTxid, "vout": 1}}, map[string]any{addr.EncodeAddress(): 1.50000001}, 500)
+	serve("createrawtransaction-wrong-network", nil, "createrawtransaction", []map[string]any{{"txid": prevTxid, "vout": 1}},
+		map[string]any{"prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74": 1})
 	return fixtures
 }
 
@@ -801,4 +831,105 @@ func backendFixtures(t *testing.T, params *chaincfg.Params, s *rpcServer, reply 
 	reply("backend-listaddresstransactions-change0", []btcjson.ListTransactionsResult{m1Send}, nil, nil)
 	reply("backend-listaddresstransactions-none", []btcjson.ListTransactionsResult{}, nil, nil)
 	reply("backend-getbestblock", &btcjson.GetBestBlockResult{Hash: params.GenesisHash.String(), Height: tip}, nil, nil)
+}
+
+// laterFixtures holds the methods typed after the first rounds, built from
+// btcjson types as structFixtures does. They come last so the reply ids of
+// the fixtures before them stay as they were.
+func laterFixtures(t *testing.T, params *chaincfg.Params, reply func(string, any, error, map[string]any), priv *btcec.PrivateKey) {
+	t.Helper()
+	addr, err := btcutil.NewAddressTaproot(txscript.ComputeTaprootKeyNoScript(priv.PubKey()).SerializeCompressed()[1:], params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txid := hexOf(bytesOf(0xab, 32))
+	const received = int64(70000000)
+
+	// Oyster.
+	reply("getaccountaddress", addr.EncodeAddress(), nil, nil)
+	reply("getreceivedbyaccount", btcutil.Amount(received).ToPRL(), nil, map[string]any{"amount": grains(received)})
+	reply("listreceivedbyaccount", []btcjson.ListReceivedByAccountResult{
+		{Account: "default", Amount: btcutil.Amount(received).ToPRL(), Confirmations: 6},
+		{Account: "imported", Amount: 0, Confirmations: 0},
+	}, nil, map[string]any{"amount": grains(received)})
+	reply("sendfrom", txid, nil, nil)
+	// settxfee in Oyster checks the sign of the amount and changes nothing.
+	reply("settxfee", true, nil, nil)
+	reply("keypoolrefill", nil, nil, nil)
+
+	// pearld methods whose handlers need the peer-to-peer side.
+	const sentBytes, recvBytes = uint64(9007199254740993), uint64(5678)
+	reply("getnettotals", &btcjson.GetNetTotalsResult{TotalBytesRecv: recvBytes, TotalBytesSent: sentBytes, TimeMillis: 1767225600123},
+		nil, map[string]any{"sent": strconv.FormatUint(sentBytes, 10), "received": strconv.FormatUint(recvBytes, 10)})
+	reply("uptime", int64(86400), nil, nil)
+	reply("getnodeaddresses", []*btcjson.GetNodeAddressesResult{
+		{Time: 1767225600, Services: uint64(wire.SFNodeNetwork | wire.SFNodeWitness), Address: "203.0.113.7", Port: 44108},
+	}, nil, map[string]any{"services": strconv.FormatUint(uint64(wire.SFNodeNetwork|wire.SFNodeWitness), 10)})
+	connected := true
+	reply("getaddednodeinfo-dns", []*btcjson.GetAddedNodeInfoResult{{
+		AddedNode: "node.example:44108", Connected: &connected,
+		Addresses: &[]btcjson.GetAddedNodeInfoResultAddr{{Address: "203.0.113.7:44108", Connected: "outbound"}},
+	}}, nil, nil)
+	reply("ping", nil, nil, nil)
+}
+
+// handlerTables lists every method pearld and Oyster dispatch, so pearljs can
+// check its typed methods against them: pearld's HTTP and websocket tables
+// and the limited user's allowlist from this package, and Oyster's table read
+// from the source of wallet/rpc/jsonrpc, whose map is unexported. Oyster
+// methods whose handler is `unimplemented` or `unsupported` are listed apart.
+func handlerTables(t *testing.T) map[string]any {
+	t.Helper()
+	keys := func(m map[string]struct{}) []string {
+		out := make([]string, 0, len(m))
+		for k := range m {
+			out = append(out, k)
+		}
+		sort.Strings(out)
+		return out
+	}
+	pearld := map[string]struct{}{}
+	for k := range rpcHandlers {
+		pearld[k] = struct{}{}
+	}
+	websocket := map[string]struct{}{}
+	for k := range wsHandlers {
+		websocket[k] = struct{}{}
+	}
+
+	file, err := parser.ParseFile(token.NewFileSet(), "../wallet/rpc/jsonrpc/methods.go", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oyster, refused := map[string]struct{}{}, map[string]struct{}{}
+	ast.Inspect(file, func(n ast.Node) bool {
+		spec, ok := n.(*ast.ValueSpec)
+		if !ok || len(spec.Names) != 1 || spec.Names[0].Name != "rpcHandlers" {
+			return true
+		}
+		for _, elt := range spec.Values[0].(*ast.CompositeLit).Elts {
+			kv := elt.(*ast.KeyValueExpr)
+			name, err := strconv.Unquote(kv.Key.(*ast.BasicLit).Value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := oyster
+			for _, field := range kv.Value.(*ast.CompositeLit).Elts {
+				if f, ok := field.(*ast.KeyValueExpr); ok {
+					if id, ok := f.Value.(*ast.Ident); ok && (id.Name == "unimplemented" || id.Name == "unsupported") {
+						target = refused
+					}
+				}
+			}
+			target[name] = struct{}{}
+		}
+		return false
+	})
+	if len(oyster) == 0 {
+		t.Fatal("found no Oyster handlers")
+	}
+	return map[string]any{
+		"pearld": keys(pearld), "websocket": keys(websocket), "limited": keys(rpcLimited),
+		"unimplemented": keys(rpcUnimplemented), "oyster": keys(oyster), "oysterRefused": keys(refused),
+	}
 }
