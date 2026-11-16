@@ -20,7 +20,7 @@ import type { PearlBlock } from '../src/index.js';
 import { describeLive, network, pearld, spentOutputs } from './chain.js';
 
 describeLive('consensus data', () => {
-  it('matches pearld on difficulty, work, certificate version and coinbase value for every block', { timeout: 600_000 }, async () => {
+  it('matches pearld on difficulty, work, certificate version and coinbase value for every block', async () => {
     const info = await pearld.getBlockchainInfo();
     let minted = 0n;
     let withFees = 0;

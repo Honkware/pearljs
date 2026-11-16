@@ -179,7 +179,7 @@ describeLive('typed pearld methods', () => {
     expect(values[5]).toEqual(await pearld.getTxOut(funding.getId(), 1));
   });
 
-  it('leaves generate without a default timeout, and gives up on a call when told to', { timeout: 300_000 }, async () => {
+  it('leaves generate without a default timeout, and gives up on a call when told to', async () => {
     // Twenty blocks take longer to prove than the default timeout allows any other call.
     const started = Date.now();
     const hashes = await pearld.generate(20);

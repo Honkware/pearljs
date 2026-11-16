@@ -2,7 +2,7 @@
 // typed clients every test talks to the servers through.
 
 import { Agent } from 'undici';
-import { OysterClient, PearldClient } from '../src/index.js';
+import { OysterClient, PearldClient, PearlRpcError } from '../src/index.js';
 import type { RpcClientOptions } from '../src/index.js';
 
 export interface Credentials {
@@ -63,7 +63,13 @@ export function oysterClient(endpoint: LiveEndpoint): OysterClient {
 export async function mineBlocks(client: PearldClient, n: number): Promise<string[]> {
   const hashes: string[] = [];
   while (hashes.length < n) {
-    hashes.push(...(await client.call<string[]>('generate', [Math.min(10, n - hashes.length)])));
+    try {
+      hashes.push(...(await client.call<string[]>('generate', [Math.min(10, n - hashes.length)])));
+    } catch (error) {
+      // A test that timed out leaves its generate running; wait for it instead of failing every test after it.
+      if (!(error instanceof PearlRpcError) || !error.message.includes('already CPU mining')) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
   }
   return hashes;
 }

@@ -33,7 +33,7 @@ const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
 const ZERO_HEADER = '00'.repeat(32);
 
 describeLive('compact filters', () => {
-  it('builds the filter pearld serves for every block, and the headers chain from genesis', { timeout: 600_000 }, async () => {
+  it('builds the filter pearld serves for every block, and the headers chain from genesis', async () => {
     const tip = await pearld.getBlockCount();
     const chain: { filter: CompactFilter; header: string }[] = [];
     let spendingBlocks = 0;

@@ -103,10 +103,11 @@ async function matureCoinbase(): Promise<{ tx: Transaction; vout: number }> {
     const tx = block.transactions[0]!;
     const txid = transactionId(tx);
     const vout = tx.outs.findIndex((out) => Buffer.from(out.script).equals(minerScript));
-    if (vout >= 0 && (await pearld.getTxOut(txid, vout)) !== null) {
-      searchFrom = height;
-      return { tx, vout };
-    }
+    if (vout < 0 || (await pearld.getTxOut(txid, vout)) === null) continue;
+    // gettxout still lists an output a mempool transaction spends, and a test that failed can leave one there.
+    if ((await pearld.getTxSpendingPrevOut([{ txid, vout }]))[0]?.spendingtxid) continue;
+    searchFrom = height;
+    return { tx, vout };
   }
   throw new Error('no mature coinbase left; mine more blocks');
 }

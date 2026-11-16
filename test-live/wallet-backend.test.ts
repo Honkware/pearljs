@@ -87,7 +87,7 @@ describeLive('pearldBackend', () => {
     expect(await backend.getSpendStatus({ txid: payment.txid, vout: 2 })).toEqual({ status: 'unknown' });
   });
 
-  it('counts coinbase outputs as immature until they are 100 blocks deep', { timeout: 300_000 }, async () => {
+  it('counts coinbase outputs as immature until they are 100 blocks deep', async () => {
     const address = miner.deriveAddress(0);
     const tip = await pearld.getBlockCount();
     const utxos = await backend.getUtxos([address]);
@@ -152,7 +152,7 @@ describeOyster('oysterBackend and discovery', () => {
     await compare();
   });
 
-  it('discovers the Oyster account from its mnemonic, pays from it and has pearld mine the payment', { timeout: 300_000 }, async () => {
+  it('discovers the Oyster account from its mnemonic, pays from it and has pearld mine the payment', async () => {
     const node = new PearldClient({ ...clientOptions(live?.pearld ?? nowhere), batch: true });
     const batched = pearldBackend(node, { network });
     const discovered = await discoverAccount(watching, batched);

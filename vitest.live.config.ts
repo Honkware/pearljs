@@ -19,14 +19,16 @@ class InOrder extends BaseSequencer {
 }
 
 // Live tests against a regtest pearld. They share one node and mine on it, so
-// files run one at a time.
+// files run one at a time. Proving a block takes seconds on an idle machine
+// and several times that on a busy one, and a test that times out leaves its
+// generate call running under the next test, so the time limits are generous.
 export default defineConfig({
   test: {
     include: ['test-live/**/*.test.ts'],
     globalSetup: ['test-live/global-setup.ts'],
     fileParallelism: false,
     sequence: { sequencer: InOrder },
-    testTimeout: 120_000,
-    hookTimeout: 120_000,
+    testTimeout: 600_000,
+    hookTimeout: 600_000,
   },
 });

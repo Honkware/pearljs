@@ -11,7 +11,7 @@ import { describeOyster, eventually, fund, mine, network, oyster, pearld } from 
 const oysterHeight = (): Promise<number> => oyster.call<number>('getblockcount');
 
 describeOyster("Oyster's block feed", () => {
-  it('stops following the chain once stopnotifyblocks is sent through it, and notifyblocks does not bring it back', { timeout: 300_000 }, async () => {
+  it('stops following the chain once stopnotifyblocks is sent through it, and notifyblocks does not bring it back', async () => {
     await oyster.walletPassphrase(OYSTER_PASSPHRASE, 600);
     const start = await pearld.getBlockCount();
     expect(await eventually(oysterHeight, (height) => height === start)).toBe(start);
