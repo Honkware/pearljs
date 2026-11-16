@@ -776,7 +776,7 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
   #runScripts(tx: Transaction, prevouts: readonly TxOutput[], code: number): void {
     const result = verifyTransaction(tx, prevouts);
     if (!result.ok) {
-      throw new SimulatedRefusal(code, `failed to validate input ${tx.getId()}:${result.inputIndex} which references output ${outpointOf(tx.ins[result.inputIndex]!)} - ${result.message}`);
+      throw new SimulatedRefusal(code, `failed to validate input ${tx.getId()}:${result.inputIndex} which references output ${outpointOf(tx.ins[result.inputIndex]!)} - ${result.code}${result.message === '' ? '' : `: ${result.message}`}`);
     }
   }
 

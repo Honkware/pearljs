@@ -42,8 +42,8 @@ export interface RegtestEndpoint {
 export interface RegtestOptions {
   /** Path of a pearld binary. */
   pearld: string;
-  /** Path of an oyster binary; Oyster is started only when given. */
-  oyster?: string;
+  /** Path of an oyster binary; Oyster is started only when given. May be undefined, so an unset environment variable can be passed as it is. */
+  oyster?: string | undefined;
   /** Where data, certificates and logs go. A new temporary directory, removed on stop, unless given. */
   dir?: string;
   /** Where generate pays. The address of pearljs/testing's faucet mnemonic unless given. */
