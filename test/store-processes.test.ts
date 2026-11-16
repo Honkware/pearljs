@@ -10,8 +10,8 @@
 
 import { spawn } from 'node:child_process';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { buildSync } from 'esbuild';
@@ -181,6 +181,46 @@ describe('two processes on one wallet store', () => {
     expect(new Set(signed).size).toBe(signed.length);
     for (const index of signed) expect(index).toBeLessThan(storedNext(path));
   }, 120_000);
+});
+
+describe('processes taking over one stale lock at the same moment', () => {
+  it('lets one of them write, whichever of them the lock ends up naming', async () => {
+    for (let round = 0; round < 3; round += 1) {
+      const path = join(dir, `stale-${round}`);
+      const store = createFileStore(path, { create: true });
+      await store.set('n', 0);
+      await store.close();
+      // A lock left by a process that is gone and stopped touching it long ago.
+      const lock = join(path, 'lock');
+      writeFileSync(lock, JSON.stringify({ id: 'ab'.repeat(16), pid: 2 ** 22 + 4321, host: hostname(), heartbeatMs: 40 }));
+      const old = new Date(Date.now() - 60_000);
+      utimesSync(lock, old, old);
+      const takers = Array.from({ length: 4 }, () => {
+        const child = spawn(process.execPath, [bundle, 'takeover', path]);
+        children.push(child);
+        const replies: Reply[] = [];
+        const waiting: ((reply: Reply) => void)[] = [];
+        createInterface({ input: child.stdout }).on('line', (line) => {
+          const reply = JSON.parse(line) as Reply;
+          const next = waiting.shift();
+          if (next === undefined) replies.push(reply);
+          else next(reply);
+        });
+        const reply = (): Promise<Reply> => new Promise((resolve) => (replies.length > 0 ? resolve(replies.shift()!) : waiting.push(resolve)));
+        return { child, reply };
+      });
+      const opened = await Promise.all(takers.map((taker) => taker.reply()));
+      // Any number of them may have got as far as believing the lock theirs.
+      expect(opened.filter((reply) => reply.ok === true).length).toBeGreaterThanOrEqual(1);
+      for (const reply of opened) if (reply.ok !== true) expect(reply.error).toBe('STORE_LOCKED');
+      for (const taker of takers) taker.child.stdin.write('go\n');
+      const written = await Promise.all(takers.map((taker) => taker.reply()));
+      expect(written.filter((reply) => reply.ok === true)).toHaveLength(1);
+      for (const reply of written) if (reply.ok !== true) expect(['STORE_LOCKED', 'STORE_CONFLICT', 'STORE_WRITE_FAILED', 'OTHER']).toContain(reply.error);
+      const newest = readdirSync(path).filter((name) => /^\d{16}\.json$/.test(name)).sort().at(-1)!;
+      expect(JSON.parse(readFileSync(join(path, newest), 'utf8'))).toMatchObject({ revision: 2, entries: { n: 0, winner: expect.any(Number) } });
+    }
+  }, 60_000);
 });
 
 describe('processes fighting over one store with breakLock', () => {

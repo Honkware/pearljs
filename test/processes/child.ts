@@ -2,7 +2,8 @@
 // run with node. As `wallet` it opens the wallet in a store directory and
 // takes commands on stdin, answering each with one line of JSON; as
 // `counter` and `xmss-file` it fights other children for one store, opening
-// it with breakLock each time, and prints what it won.
+// it with breakLock each time, and prints what it won; as `takeover` it
+// takes a stale lock over together with its siblings and then writes once.
 
 import { createInterface } from 'node:readline';
 import { PearlError, PearlWallet, parsePearl, parseTransaction } from '../../src/index.js';
@@ -91,7 +92,30 @@ function xmssFileChild(path: string, rounds: number): void {
   say({ won });
 }
 
+// Takes over a stale lock at the same moment as its siblings, then, when told to, writes once.
+async function takeoverChild(directory: string): Promise<void> {
+  let store: FileStore | null = null;
+  try {
+    store = createFileStore(directory, { breakStaleLock: true, staleLockMs: 200 });
+    say({ ok: true });
+  } catch (error) {
+    say(failure(error));
+  }
+  for await (const line of createInterface({ input: process.stdin })) {
+    void line;
+    try {
+      if (store === null) throw new Error('never opened');
+      await store.set('winner', process.pid);
+      say({ ok: true });
+    } catch (error) {
+      say(failure(error));
+    }
+    process.exit(0);
+  }
+}
+
 const [mode, target, rounds] = process.argv.slice(2);
 if (mode === 'wallet') await walletChild(target!);
+else if (mode === 'takeover') await takeoverChild(target!);
 else if (mode === 'counter') await counterChild(target!, Number(rounds));
 else if (mode === 'xmss-file') xmssFileChild(target!, Number(rounds));
