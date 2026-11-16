@@ -154,6 +154,24 @@ describe('the simulated RPC against replies pearld wrote', () => {
     expect(answered(chain, 'gettxout', [coin.txid, 7, true]).result).toBeNull();
   });
 
+  it('pages an address search by skip and count, oldest first or newest first, mempool last', async () => {
+    const chain = small();
+    const address = alice.deriveAddress(7);
+    const paid = [1, 2, 3, 4].map((n) => chain.fund(address, prl(String(n))).txid);
+    paid.push(chain.pay(address, prl('5')).getId());
+    const page = async (options: object): Promise<string[]> => (await chain.rpc.searchRawTransactions(address, options)).map((tx) => tx.txid);
+    expect(await page({})).toEqual(paid);
+    expect(await page({ skip: 1, count: 2 })).toEqual(paid.slice(1, 3));
+    expect(await page({ skip: 3, count: 10 })).toEqual(paid.slice(3));
+    expect(await page({ reverse: true, count: 2 })).toEqual([paid[4], paid[3]]);
+    await expect(page({ skip: 5 })).rejects.toMatchObject({ rpcCode: -5 });
+    await expect(page({ count: 10_001 })).rejects.toMatchObject({ rpcCode: -8 });
+    // The backend reads the same history two transactions at a time.
+    const paged = await pearldBackend(chain.rpc, { network: quick, pageSize: 2 }).getHistory(address);
+    expect(paged).toEqual(await chain.getHistory(address));
+    expect(paged.map((entry) => entry.txid)).toEqual(paid);
+  });
+
   it('serves blocks, headers and filters an explorer can check', async () => {
     const { chain, coin } = scenario();
     chain.mine();

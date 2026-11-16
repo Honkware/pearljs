@@ -550,6 +550,16 @@ describe('fetchMempool', () => {
     }
     const order = [...mempool.keys()];
     expect(order.indexOf(parent.txid)).toBeLessThan(order.indexOf(child.txid));
+    // pearld lists its mempool in no order; a child listed first still comes after its parent.
+    const shuffled: Rpc = {
+      call: async <T>(method: string, params?: readonly unknown[], options?: object) => {
+        const result = await chain.rpc.call<T>(method, params, options);
+        return method === 'getrawmempool' ? (Object.fromEntries(Object.entries(result as object).reverse()) as T) : result;
+      },
+    };
+    const listed = [...(await fetchMempool(shuffled)).keys()];
+    expect(listed.indexOf(parent.txid)).toBeLessThan(listed.indexOf(child.txid));
+    expect(listed).toHaveLength(3);
     expect(signalsReplacement(child.transaction, mempool)).toBe(true);
 
     // The same verdicts the node gives.
