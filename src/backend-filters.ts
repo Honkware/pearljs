@@ -36,8 +36,9 @@ import { createMemoryStore } from './store.js';
 import type { JsonValue, StoreOperation, WalletStore } from './store.js';
 import { parseTransaction, transactionId } from './transaction.js';
 import type { Transaction } from './transaction.js';
-import { pearldBackend, sumBalance } from './backend.js';
-import type { AddressHistoryEntry, SpendStatus, WalletBackend, WalletUtxo, Watched } from './backend.js';
+import { UnsupportedMethodError, pearldBackend, probePearld, sumBalance } from './backend.js';
+import type { PearldCapabilities } from './backend.js';
+import type { AddressHistoryEntry, SpendStatus, WalletChain, WalletUtxo, Watched } from './backend.js';
 import { fromHex, toHex } from './internal/bytes.js';
 import { fetchBlockFilters, mapLimit } from './internal/filter-scan.js';
 import type { HeightFilter } from './internal/filter-scan.js';
@@ -112,7 +113,7 @@ export interface FilterBackendStatus {
  * every transaction it found, so getRawTransaction answers for them without
  * --txindex.
  */
-export interface FilterBackend extends WalletBackend {
+export interface FilterBackend extends WalletChain {
   /** Scans from the cursor to the node's tip, undoing a reorganization first, then looks through the mempool. Resolves to the new cursor. */
   sync(options?: FilterSyncOptions): Promise<BlockRef>;
   /** Watches more addresses or scripts, scanning the blocks already passed for them. */
@@ -674,4 +675,38 @@ function isFound(item: Found | Pending): item is Found {
 
 function outpointOf(input: Transaction['ins'][number]): string {
   return `${toHex(Uint8Array.from(input.hash).reverse())}:${input.index}`;
+}
+
+/** Options for connectPearld: filterBackend's, of which `birthday` is used only when the node has no address index. */
+export interface ConnectPearldOptions extends FilterBackendOptions {
+  /** Transactions per searchrawtransactions request, for pearldBackend. */
+  pageSize?: number;
+}
+
+/** What connectPearld chose, with what the probe found. */
+export type PearldChain =
+  | (WalletChain & { readonly kind: 'pearld'; readonly capabilities: PearldCapabilities })
+  | (FilterBackend & { readonly kind: 'filters'; readonly capabilities: PearldCapabilities });
+
+/**
+ * One object for everything a wallet asks of one pearld: a WalletBackend,
+ * the wallet's transaction source and a ChainClient. It probes the node
+ * (probePearld) and returns pearldBackend when the node keeps the address
+ * index, filterBackend when it keeps only its filter index, and throws
+ * BACKEND_UNSUPPORTED when it keeps neither.
+ */
+export async function connectPearld(rpc: Rpc, options: ConnectPearldOptions): Promise<PearldChain> {
+  const capabilities = await probePearld(rpc);
+  if (capabilities.backend === 'pearld') {
+    const backend = pearldBackend(rpc, {
+      network: options.network,
+      ...(options.pageSize === undefined ? {} : { pageSize: options.pageSize }),
+      ...(options.concurrency === undefined ? {} : { concurrency: options.concurrency }),
+      ...(options.broadcast === undefined ? {} : { broadcast: options.broadcast }),
+      scanFrom: options.birthday,
+    });
+    return Object.assign(backend, { kind: 'pearld' as const, capabilities });
+  }
+  if (capabilities.backend === 'filters') return Object.assign(filterBackend(rpc, options), { kind: 'filters' as const, capabilities });
+  throw new UnsupportedMethodError('getcfilter', 'this pearld keeps neither the address index (--addrindex) nor the filter index (it runs with --nocfilters), so no wallet backend can read it');
 }

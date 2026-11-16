@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  connectPearld,
   PearlError,
   PearlWallet,
   UnsupportedMethodError,
@@ -266,4 +267,34 @@ describe('filterBackend', () => {
     await viaFilters.close();
     await viaIndex.close();
   });
+});
+
+describe('one object per node', () => {
+  it('picks pearldBackend for a node with the address index and filterBackend for one without', async () => {
+    const { chain, node } = setup();
+    chain.pay(r0!, 8000n);
+    chain.mine(1);
+    const indexed = await connectPearld(node, { network, birthday: 3 });
+    expect(indexed).toMatchObject({ kind: 'pearld', capabilities: { addrIndex: true, backend: 'pearld' } });
+    const plain = await connectPearld(new FakeNode(chain, { addrIndex: false, txIndex: false, limited: true }), { network, birthday: 3, maxAge: 0 });
+    expect(plain).toMatchObject({ kind: 'filters', capabilities: { limited: true, addrIndex: false, cfIndex: true } });
+    for (const backend of [indexed, plain]) {
+      expect((await backend.getUtxos([r0!])).map((utxo) => utxo.value)).toEqual([8000n]);
+      const [utxo] = await backend.getUtxos([r0!]);
+      expect(await backend.getRawTransaction(utxo!.txid)).toMatch(/^[0-9a-f]+$/);
+      expect(await backend.getRawTransaction('00'.repeat(32))).toBeNull();
+    }
+  });
+
+  it('serves a wallet as backend and transaction source at once', async () => {
+    const { chain } = setup();
+    chain.pay(r0!, 8000n);
+    chain.mine(1);
+    const backend = await connectPearld(new FakeNode(chain, { addrIndex: false }), { network, birthday: 0, maxAge: 0 });
+    const wallet = await PearlWallet.create({ store: createMemoryStore(), backend, transactions: backend, passphrase: PASSPHRASE, mnemonic: MNEMONIC, kdf: FAST_KDF, gapLimit: 10 });
+    await wallet.sync();
+    expect(wallet.balance()).toMatchObject({ confirmed: 8000n });
+    await wallet.close();
+  });
+
 });

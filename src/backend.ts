@@ -112,6 +112,17 @@ export interface WalletBackend extends ChainClient {
   findUsed?(addresses: readonly string[]): Promise<string[]>;
 }
 
+/**
+ * A backend that is also the source of full transactions a wallet needs:
+ * one object for PearlWallet's `backend` and `transactions`, and, being a
+ * ChainClient, for the invoice monitor. pearldBackend, oysterBackend and
+ * filterBackend each return one.
+ */
+export interface WalletChain extends WalletBackend {
+  /** The serialized transaction, or null when the backend cannot find it. */
+  getRawTransaction(txid: string): Promise<string | null>;
+}
+
 /** pearld was asked for something only an index it runs without can answer. */
 export class MissingIndexError extends PearlError {
   override name = 'MissingIndexError';
@@ -264,7 +275,7 @@ interface FilterScan {
  * index (on unless --nocfilters) and takes two requests a block the first
  * time; later queries for the same address go on from where the last ended.
  */
-export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletBackend {
+export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletChain {
   const { network, pageSize = 100, concurrency = 8, scanFrom = 0 } = options;
   if (!Number.isSafeInteger(scanFrom) || scanFrom < 0) throw new RangeError('scanFrom must be a block height');
   const node = new PearldRpc(rpc);
@@ -450,6 +461,9 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletBa
     },
 
     getSpendStatus: (outpoint) => nodeSpendStatus(node, outpoint, mempoolSpender, spenderOf, listedSpender),
+
+    // Confirmed transactions need --txindex, which --addrindex turns on.
+    getRawTransaction: (txid) => rawOrNull(node, txid),
   };
 }
 
@@ -475,7 +489,7 @@ export interface OysterBackendOptions {
  * fails (send with sendMany), the fee rate is Oyster's default and the
  * status of such outputs is "unknown".
  */
-export function oysterBackend(rpc: Rpc, options: OysterBackendOptions): WalletBackend {
+export function oysterBackend(rpc: Rpc, options: OysterBackendOptions): WalletChain {
   const { network } = options;
   const wallet = new OysterRpc(rpc);
   const node = new PearldRpc(rpc);
@@ -623,6 +637,21 @@ export function oysterBackend(rpc: Rpc, options: OysterBackendOptions): WalletBa
       }
     },
 
+    async getRawTransaction(txid) {
+      try {
+        return (await wallet.getTransaction(txid)).hex;
+      } catch (err) {
+        if (!isUnknownTransaction(err)) throw err;
+      }
+      // Not the wallet's: its pearld may have it, unless Oyster runs in SPV mode.
+      try {
+        return await rawOrNull(node, txid);
+      } catch (err) {
+        if (isChainInactive(err)) return null;
+        throw err;
+      }
+    },
+
     async findUsed(addresses) {
       // Oyster selects the transactions paying an address, then lists a
       // payment to the wallet's own change as nothing but the send, so an
@@ -690,6 +719,15 @@ async function sendRaw(node: PearldRpc, tx: string | Uint8Array): Promise<string
       "pearld refuses sendrawtransaction to its limited RPC user; broadcast through an endpoint with full credentials or a proxy that forwards the call, given as the backend's `broadcast` option",
       err,
     );
+  }
+}
+
+async function rawOrNull(node: PearldRpc, txid: string): Promise<string | null> {
+  try {
+    return await node.getRawTransactionHex(txid);
+  } catch (err) {
+    if (isUnknownTransaction(err)) return null;
+    throw err;
   }
 }
 

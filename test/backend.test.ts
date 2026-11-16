@@ -382,6 +382,19 @@ describe('Oyster backend', () => {
     expect(await backend.getSpendStatus({ txid: txids.a3, vout: 0 })).toEqual({ status: 'unspent', confirmations: 3 });
   });
 
+  it('gives full transactions from the wallet, then from its pearld, then null', async () => {
+    const wallet = scenarioOyster({ gettransaction: 'gettransaction' });
+    expect(await oysterBackend(wallet.client, { network }).getRawTransaction('ab'.repeat(32))).toBe('00');
+    const node = scenarioOyster({ gettransaction: 'gettransaction-missing', getrawtransaction: 'getrawtransaction-hex' });
+    expect(await oysterBackend(node.client, { network }).getRawTransaction('cd'.repeat(32))).toMatch(/^0[12]000000/);
+    const neither = scenarioOyster({ gettransaction: 'gettransaction-missing', getrawtransaction: 'chain-rpc-inactive' });
+    expect(await oysterBackend(neither.client, { network }).getRawTransaction('cd'.repeat(32))).toBeNull();
+    const pearld = indexedPearld({ getrawtransaction: (r) => (r.body.params[0] === 'ab'.repeat(32) ? 'getrawtransaction-hex' : 'getrawtransaction-missing') });
+    const backend = pearldBackend(pearld.client, { network });
+    expect(await backend.getRawTransaction('ab'.repeat(32))).toMatch(/^0[12]000000/);
+    expect(await backend.getRawTransaction('cd'.repeat(32))).toBeNull();
+  });
+
   it('says what an SPV Oyster cannot do instead of failing obscurely', async () => {
     const inactive = 'chain-rpc-inactive';
     const { client } = scenarioOyster({ sendrawtransaction: inactive, estimatefee: inactive, gettxout: inactive, gettxspendingprevout: inactive });

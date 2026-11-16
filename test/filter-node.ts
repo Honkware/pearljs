@@ -216,7 +216,10 @@ export class FakeNode implements Rpc {
       case 'estimatefee':
         return 0n;
       case 'sendrawtransaction':
-        return this.chain.broadcast(params[0] as string);
+        return this.chain.broadcast(params[0] as string).catch((err: unknown) => {
+          if (err instanceof PearlRpcError) throw err;
+          throw rpcError(method, -22, `TX decode failed: ${(err as Error).message}`);
+        });
       default:
         throw rpcError(method, -32601, 'Method not found');
     }
