@@ -41,6 +41,7 @@ import type { PearlNetwork } from './networks.js';
 import { p2mr } from './payments.js';
 import { replacementFee, signalsReplacement } from './rbf.js';
 import { PearldRpc, OysterRpc, isUnknownTransaction } from './rpc.js';
+import { verifyInput } from './interpreter.js';
 import type { Rpc } from './rpc.js';
 import { taggedHash, xmssLeafScript } from './script.js';
 import { DEFAULT_MAX_FEE_RATE, signXmssP2mrInput } from './scriptpath.js';
@@ -70,6 +71,8 @@ export const DEFAULT_REORG_DEPTH = 100;
 export const DEFAULT_CREATE_UNLOCK_MS = 300_000;
 
 const SCAN_BATCH = 25;
+/** Addresses one sync scans on one chain past the next index before it stops and reports the backend. */
+export const DEFAULT_SCAN_LIMIT = 10_000;
 const CONCURRENCY = 8;
 const XMSS_SEED_BYTES = 96;
 const decoder = new TextDecoder();
@@ -225,6 +228,16 @@ export interface SendResult {
   replaces?: string;
 }
 
+/** What rebroadcast did with each pending transaction it sent again. */
+export interface RebroadcastResult {
+  /** Transactions the backend took, or already had. */
+  accepted: string[];
+  /** Transactions the backend refused; they stay pending until a sync settles them or abandon gives them up. */
+  refused: { txid: string; error: Error }[];
+  /** Transactions whose broadcast failed without an answer; they may have arrived. */
+  failed: { txid: string; error: Error }[];
+}
+
 /** An account of the wallet. */
 export interface WalletAccount {
   id: string;
@@ -335,6 +348,8 @@ interface XmssRecord {
   frozen: 'restored' | 'behind' | null;
   seenOnChain: number;
   createdAt: number;
+  /** False from a restore until a sync has finished since, so the signatures the chain holds are known before the key is unfrozen. */
+  synced?: boolean;
 }
 
 interface MetaRecord {
@@ -356,6 +371,8 @@ interface TxEntry extends LedgerTransaction {
   missing: boolean;
   /** For this wallet's own sends: the change output's position, or -1. */
   changeOutput: number | null;
+  /** For this wallet's own sends: the output of the recipient that was sent the maximum, or -1 when every recipient was sent an amount. */
+  maxOutput: number | null;
 }
 
 interface ChainCache {
@@ -395,6 +412,22 @@ function checkFeeCeiling(tx: Transaction, prevouts: readonly { value: bigint }[]
   }
 }
 
+// What a failed broadcast says about where the transaction is. pearld
+// answers a transaction it already holds with an error, "already have
+// transaction in mempool" under the rejection code or -27 for one in a block
+// (node/mempool/mempool.go:1389, node/rpcserver.go:3585-3592): the node has
+// it, which is what a broadcast is for. A rule rejection (-26), bytes it
+// cannot decode (-22) and an orphan (-25) leave the transaction out of the
+// mempool. Anything else, another error code included, says nothing certain.
+function broadcastOutcome(err: unknown): 'held' | 'refused' | 'unknown' {
+  if (err instanceof PolicyError) return 'refused';
+  if (!(err instanceof PearlRpcError) || err.code !== 'RPC_ERROR') return 'unknown';
+  const text = err.message.toLowerCase();
+  if (err.rpcCode === -27 || text.includes('already have transaction') || text.includes('transaction already exists')) return 'held';
+  if (err.rpcCode === -26 || err.rpcCode === -22 || (err.rpcCode === -25 && text.includes('orphan transaction'))) return 'refused';
+  return 'unknown';
+}
+
 function asRecord<T>(value: JsonValue | undefined, what: string): T {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new StoreError('STORE_INVALID', `stored ${what} is not an object`);
   return value as unknown as T;
@@ -432,6 +465,7 @@ function txToJson(entry: TxEntry): JsonValue {
     label: entry.label ?? null,
     by: entry.by ?? null,
     changeOutput: entry.changeOutput,
+    maxOutput: entry.maxOutput,
   };
 }
 
@@ -447,6 +481,7 @@ function txFromJson(txid: string, value: JsonValue): TxEntry {
     label: string | null;
     by: string | null;
     changeOutput: number | null;
+    maxOutput?: number | null;
   }>(value, `transaction ${txid}`);
   const tx = parseTransaction(record.hex);
   if (tx.getId() !== txid) throw new StoreError('STORE_INVALID', `stored transaction ${txid} has another txid`);
@@ -462,6 +497,7 @@ function txFromJson(txid: string, value: JsonValue): TxEntry {
     broadcast: record.broadcast,
     missing: record.missing,
     changeOutput: record.changeOutput,
+    maxOutput: record.maxOutput ?? null,
     ...(record.label === null ? {} : { label: record.label }),
     ...(record.by === null ? {} : { by: record.by }),
   };
@@ -568,6 +604,10 @@ export class PearlWallet {
   #externalSpends = new Map<string, string | null>();
   #locks = new Map<string, number | null>();
   #tip: BlockRef | null = null;
+  // The highest block the wallet knows of: its synced tip, or the block of a transaction it was
+  // told of since. Confirmations count from here, so a payment announced in a new block is
+  // confirmed when its confirmation event fires, before the next refresh moves the tip.
+  #height = 0;
   #owned = new Map<string, { owner: CoinOwner; address: string }>();
   #ops: StoreOperation[] = [];
   #queue: Promise<unknown> = Promise.resolve();
@@ -744,7 +784,7 @@ export class PearlWallet {
           }
           await scratch.#seal();
         }
-        for (const record of scratch.#xmss.values()) scratch.#putXmss({ ...record, frozen: 'restored' });
+        for (const record of scratch.#xmss.values()) scratch.#putXmss({ ...record, frozen: 'restored', synced: false });
       });
     } finally {
       unlocked.lock();
@@ -1014,19 +1054,35 @@ export class PearlWallet {
 
   /**
    * Moves an XMSS key's next index forward and unfreezes it. Never moves it
-   * back. After a restore, pass an index past every one the key may have
-   * used since the backup: past the highest seen on chain, and past any
+   * back, and never to an index at or below one seen in a signature. After a
+   * restore the wallet must have synced first, so that the signatures the
+   * chain holds are known; then pass an index past every one the key may
+   * have used since the backup: past the highest seen on chain, and past any
    * signature made and not broadcast. Burning more costs signatures; burning
    * too few can lose the funds.
+   *
+   * An index equal to the stored next one burns nothing, and is refused
+   * unless nothingSigned says that the key has made no signature beyond the
+   * ones this wallet state knows of. Only you can know that.
    */
-  async burnXmssIndices(id: string, options: { nextIndex: number }): Promise<WalletXmssKey> {
+  async burnXmssIndices(id: string, options: { nextIndex: number; nothingSigned?: boolean }): Promise<WalletXmssKey> {
     return this.#exclusive(async () => {
       const record = this.#xmss.get(id);
       if (record === undefined) throw new WalletError('WALLET_UNKNOWN', `no XMSS key ${id} in the wallet`);
       const { nextIndex } = options;
       if (!Number.isSafeInteger(nextIndex) || nextIndex > XMSS_MAX_SIGNATURES) throw new RangeError(`nextIndex must be an integer of at most ${XMSS_MAX_SIGNATURES}`);
+      if (record.frozen === 'restored' && record.synced === false) {
+        throw new XmssError('XMSS_KEY_RESTORED', `XMSS key ${id.slice(0, 16)} was restored and the wallet has not synced since; sync first, so the indices its signatures on chain used are known`);
+      }
       if (nextIndex < record.next) throw new XmssError('XMSS_INDEX_REUSE', `XMSS key ${id} is at index ${record.next}; an index never moves back`);
       if (nextIndex <= record.seenOnChain) throw new XmssError('XMSS_INDEX_REUSE', `XMSS key ${id} has signed with index ${record.seenOnChain} on chain; burn past it`);
+      if (nextIndex === record.next && options.nothingSigned !== true) {
+        throw new XmssError(
+          'XMSS_INDEX_REUSE',
+          `index ${nextIndex} is where XMSS key ${id.slice(0, 16)} already stands, so this burns nothing; pass an index past every signature the key may have made, ` +
+            'or nothingSigned: true if it has made none beyond those this wallet knows of',
+        );
+      }
       record.next = nextIndex;
       record.frozen = null;
       // Durable now, like a reservation.
@@ -1053,7 +1109,7 @@ export class PearlWallet {
   /** Every recorded transaction, newest first. */
   history(): HistoryEntry[] {
     const ledger = this.#ledger();
-    return computeHistory(this.#txs, ledger.status, this.#ownership(), this.#tip?.height ?? 0);
+    return computeHistory(this.#txs, ledger.status, this.#ownership(), this.#height);
   }
 
   transaction(txid: string): (HistoryEntry & { hex: string; broadcast: boolean; missing: boolean }) | null {
@@ -1114,9 +1170,13 @@ export class PearlWallet {
    * (the whole gap limit on the first sync or with full, the lookahead
    * otherwise), fetches new transactions, finds spends the backend reports,
    * and settles pending transactions as confirmed, conflicted or missing.
+   * A scan that runs scanLimit addresses (DEFAULT_SCAN_LIMIT unless given)
+   * past the account's next index without reaching the gap is given up as a
+   * backend answering wrongly (BACKEND_RESPONSE).
    */
-  async sync(options: { full?: boolean } = {}): Promise<void> {
-    await this.#speculate((wallet, events) => wallet.#syncBody(events, options.full === true));
+  async sync(options: { full?: boolean; scanLimit?: number } = {}): Promise<void> {
+    const scanLimit = checkPositive(options.scanLimit ?? DEFAULT_SCAN_LIMIT, 'scanLimit');
+    await this.#speculate((wallet, events) => wallet.#syncBody(events, options.full === true, scanLimit));
   }
 
   /** The cheap part of sync: the tip, reorgs and pending transactions, without scanning addresses. */
@@ -1129,13 +1189,13 @@ export class PearlWallet {
     });
   }
 
-  async #syncBody(events: PendingEvent[], full: boolean): Promise<void> {
+  async #syncBody(events: PendingEvent[], full: boolean, scanLimit: number): Promise<void> {
     const tip = await this.#backend.getTip();
     await this.#reconcile(tip, events);
     const scanAll = full || !this.#meta.scanned;
     const seen = new Map<string, BlockRef | null>();
     for (const record of [...this.#accounts.values()]) {
-      for (const change of [false, true]) await this.#scanChain(record, change, scanAll ? this.#meta.gapLimit : this.#meta.lookahead, seen);
+      for (const change of [false, true]) await this.#scanChain(record, change, scanAll ? this.#meta.gapLimit : this.#meta.lookahead, seen, scanLimit);
     }
     const singles = [...this.#imported.keys(), ...[...this.#xmss.values()].map((record) => record.address)];
     await this.#collect(singles, seen);
@@ -1146,6 +1206,11 @@ export class PearlWallet {
     }
     await this.#checkSpends(events);
     await this.#checkPending(events);
+    for (const record of this.#xmss.values()) {
+      if (record.synced !== false) continue;
+      record.synced = true;
+      this.#putXmss(record);
+    }
     this.#meta.scanned = true;
     this.#put('meta', this.#meta as unknown as JsonValue);
     this.#setTip(tip);
@@ -1212,6 +1277,7 @@ export class PearlWallet {
       for (const key of [...this.#externalSpends.keys()]) this.#del(`spent:${key}`);
       this.#externalSpends.clear();
       this.#tip = null;
+      this.#height = 0;
       this.#del('sync');
       this.#meta.scanned = false;
       this.#put('meta', this.#meta as unknown as JsonValue);
@@ -1297,7 +1363,8 @@ export class PearlWallet {
         this.#putAccount(changeAccount);
         this.#extend(changeAccount.id, true);
       }
-      return this.#signAndBroadcast(payment, { label: options.label, changeAddress: payment.changeIndex >= 0 ? changeAddress : null, maxFeeRate }, events);
+      const maxOutput = options.recipients.findIndex((recipient) => recipient.amount === 'max');
+      return this.#signAndBroadcast(payment, { label: options.label, changeAddress: payment.changeIndex >= 0 ? changeAddress : null, maxFeeRate, maxOutput }, events);
     });
   }
 
@@ -1306,6 +1373,10 @@ export class PearlWallet {
    * replace-by-fee with one paying feeRate: the same recipients, every
    * original input, and more inputs only if the change cannot cover the
    * fee. The fee is raised further if pearld's replacement rules need it.
+   * No recipient that was sent an amount is ever paid less: the higher fee
+   * comes out of the change, out of the recipient that was sent the maximum,
+   * or, when the original had neither, out of another confirmed coin, with
+   * what is left of it as new change.
    */
   async bumpFee(txid: string, options: { feeRate: FeeRate; maxFeeRate?: FeeRate }): Promise<SendResult> {
     return this.#exclusive(async (events) => {
@@ -1326,7 +1397,7 @@ export class PearlWallet {
         const owned = prevout === null || prevout === undefined ? undefined : this.#ownerOf(prevout.script);
         if (prevout === null || prevout === undefined || owned === undefined) throw new WalletError('WALLET_NOT_REPLACEABLE', `transaction ${txid} spends an output that is not this wallet's`);
         const parent = this.#txs.get(prevTxid(input));
-        const confirmations = confirmationsFromHeight(parent?.block?.height, this.#tip?.height ?? 0);
+        const confirmations = confirmationsFromHeight(parent?.block?.height, this.#height);
         return {
           txid: prevTxid(input),
           vout: input.index,
@@ -1346,14 +1417,19 @@ export class PearlWallet {
         .filter(({ i }) => i !== original.changeOutput)
         .map(({ output }) => ({ script: Uint8Array.from(output.script), amount: output.value as bigint | 'max' }));
       let changeAddress: string | null = null;
+      let newChange: AccountRecord | null = null;
       if (original.changeOutput >= 0) {
         changeAddress = this.#ownerOf(original.tx.outs[original.changeOutput]!.script)?.address ?? null;
-      } else if (recipients.length === 1) {
-        recipients[0]!.amount = 'max';
+        if (changeAddress === null) throw new WalletError('WALLET_NOT_REPLACEABLE', `the change of ${txid} is not this wallet's`);
+      } else if (original.maxOutput !== null && original.maxOutput >= 0 && recipients[original.maxOutput] !== undefined) {
+        // The recipient that was sent everything is sent everything again, less the higher fee.
+        recipients[original.maxOutput]!.amount = 'max';
       } else {
-        throw new WalletError('WALLET_NOT_REPLACEABLE', `transaction ${txid} has no change output to take the higher fee from`);
+        // Every recipient was promised an amount, so the fee needs a new input and what that leaves is change.
+        const owner = originals[0]!.owner;
+        newChange = this.#changeAccount(owner.type === 'account' ? { account: owner.account } : undefined);
+        changeAddress = this.#derive(newChange.id, true, newChange.change);
       }
-      if (changeAddress === null && original.changeOutput >= 0) throw new WalletError('WALLET_NOT_REPLACEABLE', `the change of ${txid} is not this wallet's`);
       // pearld refuses a replacement that adds unconfirmed inputs, and the original's own outputs vanish with it.
       const others = this.#spendable(this.#sourceOf(originals[0]!.owner)).filter((coin) => coin.txid !== txid && coin.confirmations >= 1);
       const originalFee = original.prevouts.reduce((sum, p) => sum + p!.value, 0n) - original.tx.outs.reduce((sum, o) => sum + o.value, 0n);
@@ -1374,8 +1450,13 @@ export class PearlWallet {
           payment = buildPayment<WalletCoin>({ ...base, utxos: originals, strategy: 'all' });
         } catch (err) {
           if (!(err instanceof InsufficientFundsError)) throw err;
-          // Every original input first, so all of them are taken before any new one.
-          payment = buildPayment<WalletCoin>({ ...base, utxos: [...originals, ...others], strategy: (coins) => [...coins] });
+          try {
+            // Every original input first, so all of them are taken before any new one.
+            payment = buildPayment<WalletCoin>({ ...base, utxos: [...originals, ...others], strategy: (coins) => [...coins] });
+          } catch (again) {
+            if (!(again instanceof InsufficientFundsError) || newChange === null) throw again;
+            throw new WalletError('WALLET_NOT_REPLACEABLE', `transaction ${txid} has no change to take a higher fee from, and the wallet has no other confirmed coin to pay it with; its recipients are not paid less`, { cause: again });
+          }
         }
         const needed = replacementFee([{ fee: originalFee, vsize: originalVsize }], payment.vsize);
         if (payment.fee >= needed) break;
@@ -1383,7 +1464,13 @@ export class PearlWallet {
         payment = undefined;
       }
       if (payment === undefined) throw new WalletError('WALLET_NOT_REPLACEABLE', `could not reach the fee pearld needs to replace ${txid}`);
-      const result = await this.#signAndBroadcast(payment, { label: original.label, changeAddress, replaces: original, maxFeeRate }, events);
+      if (payment.changeIndex < 0) changeAddress = null;
+      else if (newChange !== null) {
+        newChange.change += 1;
+        this.#putAccount(newChange);
+        this.#extend(newChange.id, true);
+      }
+      const result = await this.#signAndBroadcast(payment, { label: original.label, changeAddress, replaces: original, maxFeeRate, maxOutput: original.maxOutput ?? -1 }, events);
       return { ...result, replaces: txid };
     });
   }
@@ -1439,23 +1526,34 @@ export class PearlWallet {
     });
   }
 
-  /** Sends again every pending transaction the backend has lost or never acknowledged. Returns the txids it accepted. */
-  async rebroadcast(): Promise<string[]> {
+  /**
+   * Sends again every pending transaction the backend has lost or never
+   * acknowledged, and says what became of each. One the backend already has
+   * counts as accepted and is not sent again.
+   */
+  async rebroadcast(): Promise<RebroadcastResult> {
     return this.#exclusive(async () => {
-      const sent: string[] = [];
+      const result: RebroadcastResult = { accepted: [], refused: [], failed: [] };
       for (const entry of this.#txs.values()) {
         if (entry.status !== 'active' || entry.block !== null || (!entry.missing && entry.broadcast)) continue;
+        let outcome: 'held' | 'refused' | 'unknown' = 'held';
+        let error = new Error('broadcast failed');
         try {
           await this.#backend.broadcast(entry.tx.toHex());
+        } catch (err) {
+          outcome = broadcastOutcome(err);
+          error = err instanceof Error ? err : new Error(String(err));
+        }
+        if (outcome === 'held') {
           entry.broadcast = true;
           entry.missing = false;
           this.#putTx(entry);
-          sent.push(entry.txid);
-        } catch {
-          // Reported by the next sync, as conflicted or still missing.
+          result.accepted.push(entry.txid);
+        } else {
+          (outcome === 'refused' ? result.refused : result.failed).push({ txid: entry.txid, error });
         }
       }
-      return sent;
+      return result;
     });
   }
 
@@ -1535,6 +1633,8 @@ export class PearlWallet {
     }
     for (const [address] of this.#imported) this.#own(toOutputScript(address, this.network), { type: 'imported', id: address }, address);
     for (const record of this.#xmss.values()) this.#own(toOutputScript(record.address, this.network), { type: 'xmss', id: record.publicKey }, record.address);
+    this.#height = this.#tip?.height ?? 0;
+    for (const entry of this.#txs.values()) if (entry.status === 'active' && entry.block !== null) this.#height = Math.max(this.#height, entry.block.height);
     // Once checked in this process, the accounts and keys are held to what was checked, locked or not.
     if (this.#verified !== null && this.#identity() !== this.#verified) throw new KeystoreError('KEYSTORE_TAMPERED', TAMPERED_IDENTITY);
   }
@@ -1612,6 +1712,7 @@ export class PearlWallet {
 
   #setTip(tip: BlockRef): void {
     this.#tip = { height: tip.height, hash: tip.hash };
+    this.#height = tip.height;
     this.#put('sync', { height: tip.height, hash: tip.hash, at: this.#now() });
   }
 
@@ -1833,7 +1934,7 @@ export class PearlWallet {
 
   #ledger(): Ledger {
     return computeLedger(this.#txs, this.#ownership(), {
-      tipHeight: this.#tip?.height ?? 0,
+      tipHeight: this.#height,
       coinbaseMaturity: this.network.coinbaseMaturity,
       externalSpends: new Set(this.#externalSpends.keys()),
       locks: this.#locks,
@@ -1960,7 +2061,7 @@ export class PearlWallet {
   #record(
     tx: Transaction,
     prevouts: LedgerTransaction['prevouts'],
-    extra: { broadcast: boolean; changeOutput: number | null; label?: string | undefined; block?: BlockRef | null },
+    extra: { broadcast: boolean; changeOutput: number | null; maxOutput?: number; label?: string | undefined; block?: BlockRef | null },
   ): TxEntry {
     const entry: TxEntry = {
       txid: tx.getId(),
@@ -1972,6 +2073,7 @@ export class PearlWallet {
       broadcast: extra.broadcast,
       missing: false,
       changeOutput: extra.changeOutput,
+      maxOutput: extra.maxOutput ?? null,
       ...(extra.label === undefined ? {} : { label: extra.label }),
     };
     this.#txs.set(entry.txid, entry);
@@ -2025,6 +2127,7 @@ export class PearlWallet {
       }
     }
     const entry = this.#record(tx, prevouts, { broadcast: true, changeOutput: null, block });
+    if (block !== null) this.#height = Math.max(this.#height, block.height);
     this.#checkXmssWitnesses(entry, events);
     this.#settleConflicts(entry, events);
     events.push(['transaction', txid]);
@@ -2032,13 +2135,22 @@ export class PearlWallet {
     return entry;
   }
 
+  // The index of each XMSS signature in a transaction that spends the
+  // wallet's XMSS outputs. A backend's word is not enough to freeze a key or
+  // to say an index is used: the input is run through the script engine
+  // with the wallet's own record of what it spends, and only a signature
+  // that verifies under the key counts. One that does is proof the index
+  // was used, in a block or not, and is never forgotten.
   #checkXmssWitnesses(entry: TxEntry, events: PendingEvent[]): void {
-    entry.prevouts.forEach((prevout, i) => {
-      const owner = prevout === null ? undefined : this.#ownerOf(prevout.script)?.owner;
+    if (entry.prevouts.length !== entry.tx.ins.length || entry.prevouts.some((prevout) => prevout === null)) return;
+    const prevouts = entry.prevouts as { script: Uint8Array; value: bigint }[];
+    prevouts.forEach((prevout, i) => {
+      const owner = this.#ownerOf(prevout.script)?.owner;
       if (owner?.type !== 'xmss') return;
       const index = xmssWitnessIndex(entry.tx.ins[i]!.witness);
       const record = this.#xmss.get(owner.id);
-      if (index === null || record === undefined || index <= record.seenOnChain) return;
+      if (index === null || index > XMSS_LAST_INDEX || record === undefined || index <= record.seenOnChain) return;
+      if (!verifyInput(entry.tx, i, prevouts).ok) return;
       record.seenOnChain = index;
       if (index >= record.next && record.frozen === null) {
         record.frozen = 'behind';
@@ -2080,8 +2192,11 @@ export class PearlWallet {
       }
       if (was === null || was.hash !== block.hash || was.height !== block.height) {
         entry.block = { height: block.height, hash: block.hash };
+        this.#height = Math.max(this.#height, block.height);
         events.push(['confirmation', { txid: entry.txid, block: entry.block }]);
         changed = true;
+        // A send of this wallet's own was never taken in from the backend, so its signatures are counted when it confirms.
+        this.#checkXmssWitnesses(entry, events);
       }
       this.#settleConflicts(entry, events);
     } else {
@@ -2118,9 +2233,18 @@ export class PearlWallet {
 
   // Scans one chain of an account from index 0 until `window` unused
   // addresses past the last used one, as discoverAccount does.
-  async #scanChain(record: AccountRecord, change: boolean, window: number, seen: Map<string, BlockRef | null>): Promise<void> {
-    let lastUsed = (change ? record.change : record.receive) - 1;
+  async #scanChain(record: AccountRecord, change: boolean, window: number, seen: Map<string, BlockRef | null>, scanLimit: number): Promise<void> {
+    const known = change ? record.change : record.receive;
+    let lastUsed = known - 1;
     for (let start = 0; start < lastUsed + 1 + window; ) {
+      // A backend that calls every address used would keep this going for ever.
+      if (start >= known + scanLimit) {
+        throw new PearlError(
+          'BACKEND_RESPONSE',
+          `the backend reports addresses in use ${scanLimit} past index ${known} of account ${record.id} with no gap of ${window}; ` +
+            'if the account really has that many, sync with a higher scanLimit',
+        );
+      }
       const count = Math.min(SCAN_BATCH, lastUsed + 1 + window - start);
       const batch = Array.from({ length: count }, (_, i) => this.#derive(record.id, change, start + i));
       const candidates = this.#backend.findUsed === undefined ? batch : await this.#backend.findUsed(batch);
@@ -2190,13 +2314,14 @@ export class PearlWallet {
         continue;
       }
       let conflict: string | null | undefined;
+      // The wallet's own outputs among its inputs that something else has spent, and what the backend says spent them.
+      const taken: [string, string | null][] = [];
       for (const input of entry.tx.ins) {
         if (entry.tx.isCoinbase()) break;
         const status = await this.#backend.getSpendStatus({ txid: prevTxid(input), vout: input.index });
-        if (status.status === 'spent' && status.spender !== entry.txid) {
-          conflict = status.spender ?? null;
-          break;
-        }
+        if (status.status !== 'spent' || status.spender === entry.txid) continue;
+        conflict ??= status.spender ?? null;
+        if (this.#isOurOutput(prevTxid(input), input.index)) taken.push([outpointKey(prevTxid(input), input.index), status.spender ?? null]);
       }
       if (conflict === undefined) {
         if (!entry.missing) {
@@ -2211,11 +2336,19 @@ export class PearlWallet {
       else entry.by = conflict;
       this.#putTx(entry);
       events.push(['conflict', { txid: entry.txid, status: 'conflicted', by: conflict }]);
-      if (conflict === null) continue;
-      const where = await this.#backend.getTransaction(conflict);
-      const known = this.#txs.get(conflict);
-      if (known === undefined) await this.#fetchAndIngest(conflict, where?.block ?? null, events);
-      else if (where !== null) this.#observe(known, where.block, events);
+      if (conflict !== null) {
+        const where = await this.#backend.getTransaction(conflict);
+        const known = this.#txs.get(conflict);
+        if (known === undefined) await this.#fetchAndIngest(conflict, where?.block ?? null, events);
+        else if (where !== null) this.#observe(known, where.block, events);
+      }
+      // A coin whose spender the wallet could not record is spent all the same: without this it would
+      // go back to the balance when its own spend was conflicted, until a full sync asked about it.
+      for (const [key, spender] of taken) {
+        if ((spender !== null && this.#txs.get(spender)?.status === 'active') || this.#externalSpends.has(key)) continue;
+        this.#externalSpends.set(key, spender);
+        this.#put(`spent:${key}`, { by: spender });
+      }
     }
   }
 
@@ -2287,7 +2420,7 @@ export class PearlWallet {
 
   async #signAndBroadcast(
     payment: Payment<WalletCoin>,
-    meta: { label?: string | undefined; changeAddress: string | null; replaces?: TxEntry; maxFeeRate: FeeRate },
+    meta: { label?: string | undefined; changeAddress: string | null; replaces?: TxEntry; maxFeeRate: FeeRate; maxOutput: number },
     events: PendingEvent[],
   ): Promise<SendResult> {
     // Before any key is used: an XMSS signature spent on a refused payment is an index gone.
@@ -2301,6 +2434,7 @@ export class PearlWallet {
     const entry = this.#record(final.transaction, final.prevouts.map((p) => ({ script: Uint8Array.from(p.script), value: p.value })), {
       broadcast: false,
       changeOutput: final.changeIndex,
+      maxOutput: meta.maxOutput,
       label: meta.label,
     });
     const replaced = meta.replaces;
@@ -2330,15 +2464,16 @@ export class PearlWallet {
     };
   }
 
-  // A refusal from the node takes the transaction back out; any other
-  // failure leaves it recorded as not yet broadcast, since it may have
-  // reached the node, and rebroadcast or abandon settles it.
+  // A refusal from the node takes the transaction back out. A node that
+  // says it already has the transaction has it. Any other failure leaves it
+  // recorded as not yet broadcast, since it may have reached the node, and
+  // rebroadcast or abandon settles it.
   async #broadcast(entry: TxEntry, replaced: TxEntry | null): Promise<void> {
     try {
       await this.#backend.broadcast(entry.tx.toHex());
     } catch (err) {
-      // An error reply from the node, or a policy check a backend ran itself, is a refusal: the transaction is not in its mempool.
-      if ((err instanceof PearlRpcError && err.code === 'RPC_ERROR') || err instanceof PolicyError) {
+      const outcome = broadcastOutcome(err);
+      if (outcome === 'refused') {
         this.#txs.delete(entry.txid);
         this.#del(`tx:${entry.txid}`);
         if (replaced !== null) {
@@ -2349,7 +2484,9 @@ export class PearlWallet {
         await this.#flush();
         throw new WalletError('WALLET_BROADCAST_REFUSED', `the node refused transaction ${entry.txid}: ${(err as Error).message}`, { cause: err });
       }
-      throw new WalletError('WALLET_BROADCAST_UNCERTAIN', `broadcasting ${entry.txid} failed; it stays recorded as not broadcast, so call rebroadcast or abandon: ${(err as Error).message}`, { cause: err });
+      if (outcome === 'unknown') {
+        throw new WalletError('WALLET_BROADCAST_UNCERTAIN', `broadcasting ${entry.txid} failed; it stays recorded as not broadcast, so call rebroadcast or abandon: ${(err as Error).message}`, { cause: err });
+      }
     }
     entry.broadcast = true;
     this.#putTx(entry);

@@ -304,7 +304,13 @@ export class FakeChain implements WalletBackend, TransactionSource {
 
   #accept(tx: Transaction, external: boolean): void {
     const txid = tx.getId();
-    if (this.#find(txid) !== null) return;
+    const known = this.#find(txid);
+    if (known !== null) {
+      if (external) return;
+      // pearld's answers for a transaction it already holds (node/mempool/mempool.go:1389, node/rpcserver.go:3585).
+      if (known.block === null) throw new PearlRpcError('rpc', 'sendrawtransaction', `TX rejected: already have transaction in mempool ${txid}`, { rpcCode: -26 });
+      throw new PearlRpcError('rpc', 'sendrawtransaction', 'TX rejected: transaction already exists in blockchain', { rpcCode: -27 });
+    }
     const spent = this.#spentBy();
     const evict = new Set<string>();
     for (const input of tx.ins) {
@@ -312,9 +318,9 @@ export class FakeChain implements WalletBackend, TransactionSource {
       const parent = this.#find(parentId);
       if (parent === null) {
         if (external) continue;
-        throw new PearlRpcError('rpc', 'sendrawtransaction', `missing inputs: ${parentId}:${input.index}`, { rpcCode: -25 });
+        throw new PearlRpcError('rpc', 'sendrawtransaction', `TX rejected: orphan transaction ${txid} references outputs of unknown or fully-spent transaction ${parentId}`, { rpcCode: -25 });
       }
-      if (parent.tx.outs[input.index] === undefined) throw new PearlRpcError('rpc', 'sendrawtransaction', 'output does not exist', { rpcCode: -25 });
+      if (parent.tx.outs[input.index] === undefined) throw new PearlRpcError('rpc', 'sendrawtransaction', `TX rejected: orphan transaction ${txid} references an output that does not exist`, { rpcCode: -25 });
       const spender = spent.get(key(parentId, input.index));
       if (spender === undefined) continue;
       const other = this.mempool.get(spender);

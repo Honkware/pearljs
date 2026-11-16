@@ -165,7 +165,7 @@ describe('wallet: sending', () => {
     await expect(wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n })).rejects.toThrow('stays recorded as not broadcast');
     const pending = wallet.history()[0]!;
     expect(wallet.transaction(pending.txid)).toMatchObject({ broadcast: false, status: 'pending' });
-    expect(await wallet.rebroadcast()).toEqual([pending.txid]);
+    expect(await wallet.rebroadcast()).toEqual({ accepted: [pending.txid], refused: [], failed: [] });
     expect(chain.mempool.has(pending.txid)).toBe(true);
   });
 
@@ -327,6 +327,55 @@ describe('wallet: replacement', () => {
     const { wallet } = await funded(['10']);
     const first = await wallet.send({ recipients: [{ address: STRANGER, amount: prl('3') }], feeRate: 2000n });
     await expect(wallet.bumpFee(first.txid, { feeRate: 10_000n })).rejects.toThrow('did not signal replace-by-fee');
+  });
+
+  it('never pays a recipient less: a send without change is bumped with another coin, and what it leaves is change', async () => {
+    const { chain, wallet } = await funded(['1', '5']);
+    // What is left of the 1 PRL coin after the fee is dust, so it joins the fee and there is no change output.
+    const amount = prl('1') - 400n;
+    const first = await wallet.send({ recipients: [{ address: STRANGER, amount }], feeRate: 2000n, rbf: true, strategy: (coins) => [...coins].sort((a, b) => (a.value < b.value ? -1 : 1)) });
+    expect(first).toMatchObject({ change: 0n, changeAddress: null });
+    expect(first.inputs).toHaveLength(1);
+    const bumped = await wallet.bumpFee(first.txid, { feeRate: 20_000n });
+    const outputs = parseTransaction(bumped.hex).outs;
+    expect(outputs[0]!.value).toBe(amount);
+    expect(bumped.inputs.map((input) => input.txid)).toContain(first.inputs[0]!.txid);
+    expect(bumped.inputs).toHaveLength(2);
+    expect(bumped.change).toBe(prl('6') - amount - bumped.fee);
+    expect(bumped.changeAddress).toBe(wallet.addresses().find((address) => address.change)!.address);
+    expect(bumped.fee).toBeGreaterThan(first.fee);
+    expect(chain.mempool.has(bumped.txid)).toBe(true);
+    expect(wallet.balance().total).toBe(prl('6') - amount - bumped.fee);
+    // The replacement has change now, and is bumped again out of it.
+    const again = await wallet.bumpFee(bumped.txid, { feeRate: 40_000n });
+    expect(parseTransaction(again.hex).outs[0]!.value).toBe(amount);
+    expect(again.changeAddress).toBe(bumped.changeAddress);
+  });
+
+  it('refuses to bump a send without change when there is no other coin, and leaves it as it was', async () => {
+    const { chain, wallet } = await funded(['1']);
+    const amount = prl('1') - 400n;
+    const first = await wallet.send({ recipients: [{ address: STRANGER, amount }], feeRate: 2000n, rbf: true });
+    await expect(wallet.bumpFee(first.txid, { feeRate: 20_000n })).rejects.toMatchObject({ code: 'WALLET_NOT_REPLACEABLE', message: expect.stringContaining('its recipients are not paid less') });
+    expect(chain.mempool.has(first.txid)).toBe(true);
+    expect(wallet.transaction(first.txid)!.status).toBe('pending');
+    expect(wallet.accounts()[0]!.nextChangeIndex).toBe(0);
+  });
+
+  it('takes the higher fee from the recipient that was sent the maximum, and from no other', async () => {
+    const { wallet } = await funded(['10']);
+    const other = 'rprl1p6uav7en8k7zsumsqugdmg5j6930zmzy4dg7jcddshsr0fvxlqx7qqv0pfk';
+    const first = await wallet.send({ recipients: [{ address: other, amount: prl('2') }, { address: STRANGER, amount: 'max' }], feeRate: 2000n, rbf: true });
+    const before = parseTransaction(first.hex).outs;
+    const bumped = await wallet.bumpFee(first.txid, { feeRate: 20_000n });
+    const after = parseTransaction(bumped.hex).outs;
+    expect(after).toHaveLength(2);
+    expect(after[0]!.value).toBe(prl('2'));
+    expect(after[1]!.value).toBe(before[1]!.value - (bumped.fee - first.fee));
+    expect(bumped.inputs).toHaveLength(1);
+    // And across a restart, where the wallet only has what it stored.
+    const again = await wallet.bumpFee(bumped.txid, { feeRate: 40_000n });
+    expect(parseTransaction(again.hex).outs[0]!.value).toBe(prl('2'));
   });
 
   it('adds a confirmed input when the change cannot pay the higher fee', async () => {

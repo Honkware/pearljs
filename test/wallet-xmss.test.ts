@@ -5,8 +5,8 @@
 // index is burned forward past everything it may have used.
 
 import { describe, expect, it } from 'vitest';
-import { PearlWallet, XMSS_MAX_SIGNATURES, createMemoryStore, parsePearl, parseTransaction } from '../src/index.js';
-import type { JsonValue, WalletEvents, WalletStore } from '../src/index.js';
+import { PearlWallet, XMSS_MAX_SIGNATURES, addInputByTxid, createMemoryStore, createTransaction, networks, parsePearl, parseTransaction, toOutputScript } from '../src/index.js';
+import type { JsonValue, Transaction, WalletEvents, WalletStore } from '../src/index.js';
 import { FakeChain, PASSPHRASE, STRANGER, newWallet } from './wallet-chain.js';
 
 const prl = (text: string): bigint => parsePearl(text);
@@ -77,9 +77,12 @@ describe('wallet XMSS keys', () => {
     await expect(send(twin)).rejects.toMatchObject({ code: 'XMSS_INDEX_REUSE', message: expect.stringContaining('another writer is using the store') });
     expect(((await store.get(`xmss:${key.id}`)) as { next: number }).next).toBe(1);
     expect(chain.mempool.size).toBe(1);
-    // Nor can the twin move the stored record back by writing its own copy of it.
-    await expect(twin.burnXmssIndices(key.id, { nextIndex: 0 })).rejects.toMatchObject({ code: 'XMSS_INDEX_REUSE' });
+    // The refusal made the twin read the store again, so it cannot move the index back, and signs with the next one.
+    await expect(twin.burnXmssIndices(key.id, { nextIndex: 0, nothingSigned: true })).rejects.toMatchObject({ code: 'XMSS_INDEX_REUSE', message: expect.stringContaining('never moves back') });
     expect(((await store.get(`xmss:${key.id}`)) as { next: number }).next).toBe(1);
+    expect(xmssIndexOf((await send(twin)).hex)).toBe(1);
+    // And now the first wallet is the one behind.
+    await expect(send(wallet)).rejects.toMatchObject({ code: 'XMSS_INDEX_REUSE', message: expect.stringContaining('another writer is using the store') });
   });
 
   it('does not sign when the store declines the reservation', async () => {
@@ -138,6 +141,99 @@ describe('wallet XMSS keys', () => {
     await expect(stale.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n, from: { xmss: key.id } })).rejects.toThrow(
       'has signed on chain with index 0',
     );
+  });
+
+  it('shows the index of its own XMSS spends as the highest on chain once they are mined', async () => {
+    const { chain, wallet, key } = await xmssWallet();
+    const send = () => wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n, from: { xmss: key.id } });
+    await send();
+    expect(wallet.xmssKeys()[0]).toMatchObject({ nextIndex: 1, highestOnChain: -1 });
+    chain.mine();
+    await wallet.sync();
+    expect(wallet.xmssKeys()[0]).toMatchObject({ nextIndex: 1, highestOnChain: 0, frozen: null });
+    await send();
+    chain.mine();
+    await wallet.refresh();
+    expect(wallet.xmssKeys()[0]).toMatchObject({ nextIndex: 2, highestOnChain: 1, frozen: null });
+  });
+
+  it('believes an index only from a signature that verifies under the key', async () => {
+    const { chain, wallet, key } = await xmssWallet();
+    const funding = wallet.coins().find((coin) => coin.owner.type === 'xmss')!;
+    // A spend no node would accept, shown by the backend as in the mempool: the right shape, an index, and no signature.
+    const forged = (index: number): Transaction => {
+      const tx = createTransaction(2);
+      addInputByTxid(tx, funding.txid, funding.vout);
+      tx.addOutput(toOutputScript(STRANGER, networks.regtest), prl('4'));
+      const chunk = new Uint8Array(468);
+      new DataView(chunk.buffer).setUint32(0, index);
+      tx.setWitness(0, [chunk, new Uint8Array(468), new Uint8Array(468), new Uint8Array(468), new Uint8Array(468), new Uint8Array(66), new Uint8Array(1)]);
+      return tx;
+    };
+    const alerts: WalletEvents['xmss'][] = [];
+    wallet.on('xmss', (event) => alerts.push(event));
+    for (const index of [0xffffffff, 31, 30, 5, 0]) {
+      const bogus = forged(index);
+      chain.mempool.set(bogus.getId(), bogus);
+      await wallet.sync();
+      expect(wallet.xmssKeys()[0]).toMatchObject({ frozen: null, highestOnChain: -1, nextIndex: 0 });
+      chain.mempool.delete(bogus.getId());
+      await wallet.sync();
+    }
+    expect(alerts).toEqual([]);
+    // The key still signs, with the index it was at.
+    const sent = await wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n, from: { xmss: key.id } });
+    expect(xmssIndexOf(sent.hex)).toBe(0);
+    // A real signature with its index bytes changed does not verify either.
+    const altered = parseTransaction(sent.hex);
+    const witness = altered.ins[0]!.witness.map((item) => Uint8Array.from(item));
+    new DataView(witness[0]!.buffer).setUint32(0, 9);
+    altered.setWitness(0, witness);
+    chain.mempool.delete(sent.txid);
+    chain.mempool.set(altered.getId(), altered);
+    // A wallet that knows the key and none of its history reads the altered spend from the backend.
+    const fresh = await PearlWallet.open({ store: createMemoryStore(Object.entries((await wallet.exportState()).entries)), backend: chain, transactions: chain });
+    await fresh.rescan();
+    expect(fresh.transaction(altered.getId())).not.toBeNull();
+    expect(fresh.xmssKeys()[0]).toMatchObject({ highestOnChain: -1, frozen: null });
+  });
+
+  it('keeps a restored key frozen until the wallet has synced, and refuses a burn that burns nothing', async () => {
+    const { chain, wallet, key } = await xmssWallet();
+    await wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n, from: { xmss: key.id } });
+    chain.mine();
+    // From the keys alone: the wallet knows nothing of index 0 until it has looked at the chain.
+    const restored = await PearlWallet.restore({ store: createMemoryStore(), backend: chain, transactions: chain, keystore: wallet.exportKeystore(), passphrase: PASSPHRASE });
+    expect(restored.xmssKeys()[0]).toMatchObject({ frozen: 'restored', nextIndex: 0, highestOnChain: -1 });
+    for (const nextIndex of [0, 1, 5]) {
+      await expect(restored.burnXmssIndices(key.id, { nextIndex, nothingSigned: true })).rejects.toMatchObject({ code: 'XMSS_KEY_RESTORED', message: expect.stringContaining('sync first') });
+    }
+    // refresh is not a sync: it does not look at the key's address.
+    await restored.refresh();
+    await expect(restored.burnXmssIndices(key.id, { nextIndex: 5 })).rejects.toMatchObject({ code: 'XMSS_KEY_RESTORED' });
+    await restored.sync();
+    expect(restored.xmssKeys()[0]).toMatchObject({ frozen: 'restored', highestOnChain: 0 });
+    await expect(restored.burnXmssIndices(key.id, { nextIndex: 0, nothingSigned: true })).rejects.toMatchObject({ code: 'XMSS_INDEX_REUSE', message: expect.stringContaining('on chain') });
+    expect(await restored.burnXmssIndices(key.id, { nextIndex: 2 })).toMatchObject({ frozen: null, nextIndex: 2 });
+    // Standing still is a burn of nothing, whatever the key's state.
+    await expect(restored.burnXmssIndices(key.id, { nextIndex: 2 })).rejects.toMatchObject({ code: 'XMSS_INDEX_REUSE', message: expect.stringContaining('burns nothing') });
+    expect(await restored.burnXmssIndices(key.id, { nextIndex: 2, nothingSigned: true })).toMatchObject({ frozen: null, nextIndex: 2 });
+  });
+
+  it('unfreezes a restored key that has signed nothing since its backup only on the say-so of its owner', async () => {
+    const { chain, wallet, key } = await xmssWallet();
+    await wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n, from: { xmss: key.id } });
+    chain.mine();
+    await wallet.sync();
+    const backup = await wallet.exportState();
+    const restored = await PearlWallet.restore({ store: createMemoryStore(), backend: chain, transactions: chain, keystore: wallet.exportKeystore(), passphrase: PASSPHRASE, backup });
+    await expect(restored.burnXmssIndices(key.id, { nextIndex: 1, nothingSigned: true })).rejects.toMatchObject({ code: 'XMSS_KEY_RESTORED' });
+    await restored.sync();
+    await expect(restored.burnXmssIndices(key.id, { nextIndex: 1 })).rejects.toMatchObject({ code: 'XMSS_INDEX_REUSE' });
+    expect(restored.xmssKeys()[0]!.frozen).toBe('restored');
+    expect(await restored.burnXmssIndices(key.id, { nextIndex: 1, nothingSigned: true })).toMatchObject({ frozen: null, nextIndex: 1 });
+    const sent = await restored.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n, from: { xmss: key.id } });
+    expect(xmssIndexOf(sent.hex)).toBe(1);
   });
 
   it('needs the next index of an XMSS key that comes with its seeds', async () => {
