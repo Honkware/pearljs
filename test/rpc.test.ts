@@ -1258,6 +1258,23 @@ describe('hardening', () => {
     expect(await client.call('echo')).toBe('sécret ✓');
   });
 
+  it('picks a tag no string in the reply starts with, even one that guessed the random bytes', () => {
+    let call = 0;
+    const spy = vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation(<T extends ArrayBufferView | null>(array: T): T => {
+      (array as unknown as Uint8Array).fill(call++ === 0 ? 0 : 0x11);
+      return array;
+    });
+    try {
+      const guessed = `\\u0000${'00'.repeat(12)}:0`;
+      const parsed = parseJson(`{"result":{"label":"${guessed}","amount":2},"error":null,"id":1}`, new Set(['amount'])) as { result: { label: unknown; amount: unknown } };
+      expect(parsed.result.label).toBe(`\u0000${'00'.repeat(12)}:0`);
+      expect(parsed.result.amount).toBe(200000000n);
+      expect(call).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('never turns a string the server sent into a bigint, whatever it holds', async () => {
     const sneaky = ['\\u0000a5', '\\u0000i12345678901234567890', '\\u0000a0:0', '\\u00000'];
     for (const value of sneaky) {

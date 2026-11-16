@@ -140,15 +140,10 @@ const NO_KEYS: ReadonlySet<string> = new Set();
 export function parseJson(text: string, amountKeys: ReadonlySet<string> = NO_KEYS, integerKeys: ReadonlySet<string> = NO_KEYS): unknown {
   if (amountKeys.size === 0 && integerKeys.size === 0) return JSON.parse(text);
   const everyAmount = amountKeys.has('*');
-  // Each converted number becomes a string naming its slot under a random
-  // tag, so no string the server sends can pass for one.
-  const nonce = randomTag();
-  // The tag as JSON text, and the string JSON.parse makes of it.
-  const tag = `\\u0000${nonce}:`;
-  const marker = `\u0000${nonce}:`;
   const converted: bigint[] = [];
-  let out = '';
-  let copied = 0;
+  const spans: [number, number][] = [];
+  // Server strings that start with NUL, the only ones a tag could match.
+  const nul: string[] = [];
   let lastString = '';
   let underKey: string | null = null;
   let depth = 0;
@@ -159,6 +154,13 @@ export function parseJson(text: string, amountKeys: ReadonlySet<string> = NO_KEY
       let j = i + 1;
       while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
       lastString = text.slice(i + 1, j);
+      if (lastString.includes('\\u0000')) {
+        try {
+          nul.push(JSON.parse(`"${lastString}"`) as string);
+        } catch {
+          // The final parse reports the bad string.
+        }
+      }
       underKey = null;
       i = j;
     } else if (c === ':') {
@@ -175,9 +177,8 @@ export function parseJson(text: string, amountKeys: ReadonlySet<string> = NO_KEY
             ? 'a'
             : null;
       if (kind !== null) {
-        out += `${text.slice(copied, i)}"${tag}${converted.length}"`;
+        spans.push([i, i + match[0].length]);
         converted.push(kind === 'a' ? decimalToGrain(match[0]) : BigInt(match[0]));
-        copied = i + match[0].length;
       }
       underKey = null;
       i += match[0].length - 1;
@@ -187,8 +188,20 @@ export function parseJson(text: string, amountKeys: ReadonlySet<string> = NO_KEY
       underKey = null;
     }
   }
-  out += text.slice(copied);
   if (converted.length === 0) return JSON.parse(text);
+  // Each converted number becomes a string naming its slot under a random
+  // tag that no string from the server starts with, so none can pass for one.
+  let nonce: string;
+  do nonce = randomTag();
+  while (nul.some((value) => value.startsWith(`\u0000${nonce}:`)));
+  const marker = `\u0000${nonce}:`;
+  let out = '';
+  let copied = 0;
+  spans.forEach(([start, end], slot) => {
+    out += `${text.slice(copied, start)}"\\u0000${nonce}:${slot}"`;
+    copied = end;
+  });
+  out += text.slice(copied);
   return JSON.parse(out, (_key, value: unknown) => {
     if (typeof value !== 'string' || !value.startsWith(marker)) return value;
     const slot = value.slice(marker.length);

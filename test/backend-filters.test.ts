@@ -78,6 +78,29 @@ describe('filterBackend', () => {
     expect((await filters.getBalance([r0!])).confirmed).toBe(0n);
   });
 
+  it('follows a watched output into the block that spends it to someone else', async () => {
+    const { chain, node } = setup();
+    const payment = chain.pay(r0!, 9000n);
+    chain.mine(2);
+    const backend = backendFor(node, { watch: [r0!] });
+    expect(await backend.getUtxos([r0!])).toHaveLength(1);
+    const spend = createTransaction(2);
+    addInputByTxid(spend, payment.getId(), 0);
+    spend.addOutput(toOutputScript(STRANGER, network), 8000n);
+    spend.setWitness(0, [new Uint8Array(64)]);
+    await chain.broadcast(spend.toHex());
+    chain.mine(1);
+    const restarted = backendFor(new FakeNode(chain), { watch: [r0!] });
+    for (const view of [backend, restarted]) {
+      expect(await view.getUtxos([r0!])).toEqual([]);
+      expect(await view.getSpendStatus({ txid: payment.getId(), vout: 0 })).toEqual({ status: 'spent', spender: spend.getId(), confirmed: true });
+      expect((await view.getHistory(r0!)).map(({ txid, received, spent }) => ({ txid, received, spent }))).toEqual([
+        { txid: payment.getId(), received: 9000n, spent: 0n },
+        { txid: spend.getId(), received: 0n, spent: 9000n },
+      ]);
+    }
+  });
+
   it('downloads only the blocks whose filters match, and nothing from a match the block does not back', async () => {
     const { chain, node } = setup();
     chain.mine(6);
