@@ -258,10 +258,8 @@ function applyView(invoice: Invoice, view: ChainView, now: number): Invoice {
       return { ...previous!, status, block: null, confirmations: 0, firstSeenAt, counted: false };
     }
     const firstBlockTime = minTime(previous?.firstBlockTime ?? null, listed.block?.time);
-    const onTime =
-      previous?.onTime === true ||
-      firstSeenAt < invoice.expiresAt ||
-      (firstBlockTime !== null && firstBlockTime < invoice.expiresAt);
+    // Both times only ever move earlier, so a payment once on time stays on time.
+    const onTime = firstSeenAt < invoice.expiresAt || (firstBlockTime !== null && firstBlockTime < invoice.expiresAt);
     return {
       txid,
       amount: listed.amount,
