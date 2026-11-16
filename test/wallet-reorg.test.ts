@@ -153,6 +153,24 @@ describe('wallet: reorgs while offline', () => {
     expect(wallet.transaction(old)!.status).toBe('confirmed');
   });
 
+  it('checks everything within the depth of the tip it last synced to, even under a newer block that stands', async () => {
+    const { chain, wallet, old } = await settled();
+    const lost = chain.pay(await wallet.receiveAddress(), prl('2')).getId();
+    chain.mine();
+    const newer = chain.pay(await wallet.receiveAddress(), prl('3')).getId();
+    chain.mine();
+    await wallet.sync();
+    // A backend whose answers do not hang together: the newer block stands, a transaction just under it is gone.
+    const getTransaction = chain.getTransaction.bind(chain);
+    chain.getTransaction = async (txid) => (txid === lost ? null : getTransaction(txid));
+    chain.mine(50 * REORG_DEPTH);
+    await wallet.refresh();
+    expect(wallet.transaction(lost)).toMatchObject({ status: 'pending', block: null });
+    expect(wallet.transaction(newer)!.status).toBe('confirmed');
+    expect(wallet.transaction(old)!.status).toBe('confirmed');
+    expect(wallet.balance()).toMatchObject({ confirmed: prl('4'), unconfirmed: prl('2') });
+  });
+
   it('checks one anchoring block, not its whole history, when the tip moves and nothing changed', async () => {
     const chain = new FakeChain();
     const wallet = await walletWith(chain);

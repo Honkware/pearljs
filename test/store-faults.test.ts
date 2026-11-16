@@ -236,6 +236,22 @@ describe('XMSS index file under write faults', () => {
     store.close();
   });
 
+  it('gives an index to whoever creates its marker first, at the moment of creating it', () => {
+    const store = createFileXmssIndexStore(state(), { create: true });
+    hooks.open = (fs, file, flags) => {
+      // Another writer, past every check this store made a moment ago, marks the index first.
+      if (marker(file) && flags === 'wx' && !fs.existsSync(file)) fs.writeFileSync(file, 'someone else');
+    };
+    expect(() => store.reserve(key)).toThrow(expect.objectContaining({ code: 'XMSS_INDEX_REUSE', message: expect.stringContaining('reserved by another signer') }));
+    clear();
+    expect(readFileSync(`${state()}.index-00`, 'utf8')).toBe('someone else');
+    expect(() => store.reserve(key)).toThrow(expect.objectContaining({ code: 'XMSS_INDEX_REUSE' }));
+    store.close();
+    const reopened = createFileXmssIndexStore(state());
+    expect(reopened.reserve(key)).toBe(1);
+    reopened.close();
+  });
+
   it('spends the index and stops when its marker cannot be written whole', () => {
     const store = createFileXmssIndexStore(state(), { create: true });
     expect(store.reserve(key)).toBe(0);
