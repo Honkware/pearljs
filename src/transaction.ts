@@ -15,6 +15,7 @@ import { fromOutputScript, toOutputScript } from './address.js';
 import { ScriptRejectedError, verifyInput } from './interpreter.js';
 import { multiAStack, parseMultiA } from './multia.js';
 import { OP_CODES } from './opcodes.js';
+import { hash256 } from './crypto.js';
 import { classifyOutputScript, tapLeafHash } from './script.js';
 import { tapscriptSighash } from './scriptpath.js';
 import { decompileScript } from './scripttools.js';
@@ -97,9 +98,14 @@ export function transactionId(tx: Transaction): string {
   return tx.getId();
 }
 
-/** The wtxid in display hex: the hash of the transaction with its witnesses. */
+/**
+ * The wtxid in display hex: the hash of the transaction with its witnesses.
+ * For a coinbase this is its own hash, as pearld shows it, not the zeros that
+ * stand for it in the witness merkle tree.
+ */
 export function witnessTransactionId(tx: Transaction): string {
-  return toHex(Uint8Array.from(tx.getHash(true)).reverse());
+  // Not getHash(true), which answers zeros for a coinbase.
+  return toHex(hash256(tx.toBuffer()).reverse());
 }
 
 /**

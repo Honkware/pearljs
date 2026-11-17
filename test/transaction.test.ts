@@ -5,6 +5,9 @@ import {
   MAX_GRAIN,
   Psbt,
   addPearlOutput,
+  calculateMerkleRoot,
+  hash256,
+  parseBlock,
   createPsbt,
   createTransaction,
   networks,
@@ -30,6 +33,16 @@ function unsignedTransaction(): Transaction {
 }
 
 describe('transaction helpers', () => {
+  it('gives a coinbase its own witness hash while the witness merkle root still counts it as zeros', () => {
+    for (const vector of vectors.blocks) {
+      const block = parseBlock(Uint8Array.from(Buffer.from(vector.hex, 'hex')));
+      const coinbase = block.transactions[0]!;
+      expect(witnessTransactionId(coinbase)).toBe(Buffer.from(hash256(coinbase.toBuffer())).reverse().toString('hex'));
+      if (coinbase.ins[0]!.witness.length > 0) expect(witnessTransactionId(coinbase)).not.toBe('00'.repeat(32));
+      expect(Buffer.from(calculateMerkleRoot(block.transactions, true)).reverse().toString('hex')).toBe(vector.witnessMerkleRoot);
+    }
+  });
+
   it('creates Pearl version 1 transactions by default', () => {
     expect(createTransaction().version).toBe(1);
   });
