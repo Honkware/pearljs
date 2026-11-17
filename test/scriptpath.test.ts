@@ -27,6 +27,7 @@ import {
   transactionId,
   verifyP2mrLeafCommitment,
   verifyTaprootLeafCommitment,
+  verifyTransaction,
   witnessTransactionId,
 } from '../src/index.js';
 import type { Psbt, ScriptTree } from '../src/index.js';
@@ -360,3 +361,30 @@ describe('generic signers', () => {
     expect(transactionId(finalizePsbt(psbt))).toBe(expected.txid);
   });
 });
+
+describe('inputs that list several leaves', () => {
+  it('signs the second of two leaves with the same key and spends it, the interpreter agreeing', () => {
+    const expected = spendVector('p2tr-3-leaves-last-default');
+    const key = account.derivePublicKey(2);
+    // Both leaves push the same key, so a signature can only be checked against the leaf it names.
+    const tree = assembleScriptTree([checksigScript(key), concatBytes(checksigScript(key).slice(0, -1), Uint8Array.of(0xad, 0x51))]);
+    const psbt = createPsbt(parseTransaction(expected.unsignedTxHex));
+    prepareTaprootScriptPathInput(psbt, 0, { internalPubkey, tree, leafIndex: 0, value: BigInt(expected.value) });
+    psbt.updateInput(0, {
+      tapLeafScript: [{ leafVersion: tree.leaves[1]!.leafVersion, script: tree.leaves[1]!.script, controlBlock: taprootControlBlock(internalPubkey, tree, 1) }],
+    });
+    expect(psbt.data.inputs[0]!.tapLeafScript).toHaveLength(2);
+    account.signScriptPathInput(psbt, 0, { index: 2, leafHash: tree.leaves[1]!.leafHash });
+    const tx = finalizePsbt(psbt);
+    expect(bytesToHex(tx.ins[0]!.witness[1]!)).toBe(bytesToHex(tree.leaves[1]!.script));
+    const prevouts = [{ script: psbt.data.inputs[0]!.witnessUtxo!.script, value: BigInt(expected.value) }];
+    expect(verifyTransaction(tx, prevouts)).toEqual({ ok: true });
+  });
+});
+
+function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a);
+  out.set(b, a.length);
+  return out;
+}

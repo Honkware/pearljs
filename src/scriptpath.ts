@@ -981,7 +981,7 @@ export function signTaprootScriptPathInput(
   const { leafHash } = options;
   const sighashType = checkTaprootScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash, options);
   psbt.signTaprootInput(inputIndex, schnorrOnlySigner(signer), leafHash, [sighashType]);
-  checkSignedInput(psbt, inputIndex);
+  checkSignedInput(psbt, inputIndex, signer.publicKey, leafHash);
 }
 
 /** signTaprootScriptPathInput for a signer that answers asynchronously. */
@@ -994,7 +994,7 @@ export async function signTaprootScriptPathInputAsync(
   const { leafHash } = options;
   const sighashType = checkTaprootScriptPathInput(psbt, inputIndex, signer.publicKey, leafHash, options);
   await psbt.signTaprootInputAsync(inputIndex, schnorrOnlySigner(signer), leafHash, [sighashType]);
-  checkSignedInput(psbt, inputIndex);
+  checkSignedInput(psbt, inputIndex, signer.publicKey, leafHash);
 }
 
 // bitcoinjs signers must offer ECDSA too; tapscript never asks for it.
@@ -1045,11 +1045,26 @@ function checkTaprootScriptPathInput(
   return psbtSighashType(input.sighashType, inputIndex, options);
 }
 
-function checkSignedInput(psbt: Psbt, inputIndex: number): void {
-  const valid = psbt.validateSignaturesOfInput(inputIndex, (pubkey, hash, signature) =>
-    ecc.verifySchnorr(hash, pubkey, signature),
+// Checks the signature just made against the leaf it names. bitcoinjs's
+// validateSignaturesOfInput matches a signature to a hash by key alone, so it
+// checks against the wrong leaf when the input lists two that push one key.
+function checkSignedInput(psbt: Psbt, inputIndex: number, publicKey: Uint8Array, leafHash: Uint8Array): void {
+  const input = psbt.data.inputs[inputIndex]!;
+  const key = xOnly(publicKey);
+  const entry = (input.tapScriptSig ?? []).find((item) => equalBytes(item.pubkey, key) && equalBytes(item.leafHash, leafHash));
+  const tx = Transaction.fromBuffer(psbt.data.globalMap.unsignedTx.toBuffer());
+  const prevouts = tx.ins.map((txInput, index) => {
+    const item = psbt.data.inputs[index]!;
+    return item.witnessUtxo ?? Transaction.fromBuffer(item.nonWitnessUtxo!).outs[txInput.index]!;
+  });
+  const hash = tx.hashForWitnessV1(
+    inputIndex,
+    prevouts.map((out) => out.script),
+    prevouts.map((out) => out.value),
+    input.sighashType ?? Transaction.SIGHASH_DEFAULT,
+    leafHash,
   );
-  if (!valid) {
+  if (entry === undefined || !ecc.verifySchnorr(hash, key, entry.signature.subarray(0, 64))) {
     throw new SigningError('SIGNATURE_INVALID', `invalid tapscript signature for PSBT input ${inputIndex}`);
   }
 }
