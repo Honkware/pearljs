@@ -23,7 +23,7 @@ import { Transaction } from 'bitcoinjs-lib';
 import type { Psbt } from 'bitcoinjs-lib';
 import * as ecc from 'tiny-secp256k1';
 import { MAX_GRAIN } from './amount.js';
-import { PearlError } from './errors.js';
+import { PearlError, SigningError } from './errors.js';
 import { concat, equalBytes, fromHex, toHex, varIntSize } from './internal/bytes.js';
 import { OP_CODES, OPCODE_NAMES } from './opcodes.js';
 import {
@@ -1544,16 +1544,22 @@ export function executeScript(
  * spent output from the PSBT. A self-check after signing: it catches a
  * transaction pearld's script validation would refuse before it is broadcast.
  *
- * Throws when an input is not finalized or carries no UTXO.
+ * Throws SigningError INPUT_NOT_FINALIZED when an input is not finalized,
+ * and INPUT_UNPREPARED when one carries no UTXO.
  */
 export function verifyFinalizedPsbt(psbt: Psbt): TransactionResult {
+  psbt.data.inputs.forEach((input, index) => {
+    if (input.finalScriptWitness === undefined && input.finalScriptSig === undefined) {
+      throw new SigningError('INPUT_NOT_FINALIZED', `PSBT input ${index} is not finalized: run finalizePsbt first`);
+    }
+  });
   const tx = psbt.extractTransaction(true);
   const prevouts = tx.ins.map((input, index): TxOutput => {
     const data = psbt.data.inputs[index]!;
     const utxo =
       data.witnessUtxo ??
       (data.nonWitnessUtxo === undefined ? undefined : Transaction.fromBuffer(data.nonWitnessUtxo).outs[input.index]);
-    if (utxo === undefined) throw new Error(`PSBT input ${index} has no UTXO to verify against`);
+    if (utxo === undefined) throw new SigningError('INPUT_UNPREPARED', `PSBT input ${index} has no UTXO to verify against`);
     return { script: utxo.script, value: utxo.value };
   });
   return verifyTransaction(tx, prevouts);

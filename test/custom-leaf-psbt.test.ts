@@ -143,6 +143,9 @@ describe("custom leaves against Pearl's engine", () => {
       expect(refused.code).toBe('WITNESS_ITEMS_NEEDED');
       expect(refused.message).toContain('finalizeScriptPathInput(psbt, 0, { stack })');
       expect(refused.cause).toBeInstanceOf(ScriptRejectedError);
+      const unfinished = error(() => verifyFinalizedPsbt(psbt));
+      expect(unfinished).toBeInstanceOf(SigningError);
+      expect(unfinished.code).toBe('INPUT_NOT_FINALIZED');
       expect(psbt.data.inputs[0]!.finalScriptWitness).toBeUndefined();
 
       finalizeScriptPathInput(psbt, 0, {
