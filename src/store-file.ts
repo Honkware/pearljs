@@ -218,6 +218,8 @@ export function createFileStore(path: string, options: FileStoreOptions = {}): F
         if (['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EMLINK'].includes(errnoOf(error) ?? '')) {
           throw new StoreError('STORE_UNAVAILABLE', `the file system of ${path} cannot make hard links, which the file store commits with`, { cause: error });
         }
+        // A store opened over this one's lock clears unfinished writes, this one's included.
+        if (!lock.owned()) throw fail(new StoreError('STORE_LOCKED', `wallet store ${path} is no longer locked by this store: its lock was taken over. Nothing was written; reopen the store`));
         throw new StoreError('STORE_WRITE_FAILED', `wallet store ${path} could not commit its next revision; the stored state is unchanged: ${(error as Error).message}`, { cause: error });
       }
     } finally {

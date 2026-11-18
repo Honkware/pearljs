@@ -304,4 +304,19 @@ describe('file store lock under a takeover', () => {
     clear();
     expect(readFileSync(lockPath, 'utf8')).toBe(theirs);
   });
+
+  it('says the lock was taken when a store opened over it removed the write in progress', async () => {
+    const store = await seeded();
+    let other: Awaited<ReturnType<typeof createFileStore>> | undefined;
+    // Another process opens the store with breakLock just before this one links its next revision, and clears the unfinished write.
+    hooks.link = (fs, from, to) => {
+      if (from.endsWith('.tmp') && other === undefined) other = createFileStore(path, { breakLock: true });
+      fs.linkSync(from, to);
+    };
+    await expect(store.set('xmss:key', { next: 7 })).rejects.toMatchObject({ code: 'STORE_LOCKED' });
+    clear();
+    expect(await other!.get('keystore')).toEqual({ pretend: 'the encrypted seed' });
+    expect(await other!.get('xmss:key')).toBeUndefined();
+    await other!.close();
+  });
 });
