@@ -58,7 +58,7 @@ import { createXmssSigner, xmssKeygen, XMSS_LAST_INDEX, XMSS_MAX_SIGNATURES, XMS
 import type { XmssIndexStore } from './xmss.js';
 import { createMemoryStore } from './store.js';
 import type { JsonValue, StoreOperation, WalletStore } from './store.js';
-import { computeHistory, computeLedger, outpointKey, prevTxid } from './wallet-ledger.js';
+import { computeHistory, computeLedger, outpointKey, prevTxid, spentFrom } from './wallet-ledger.js';
 import type { CoinOwner, HistoryEntry, Ledger, LedgerOwnership, LedgerTransaction, TransactionStatus, WalletCoin, WalletStateBalance } from './wallet-ledger.js';
 import { OYSTER_RECOVERY_WINDOW } from './discovery.js';
 
@@ -743,6 +743,13 @@ async function mapLimit<T, R>(items: readonly T[], limit: number, run: (item: T)
   return results;
 }
 
+// The outpoints a transaction spends; none for a coinbase.
+function inputKeys(tx: Transaction): string[] {
+  if (tx.isCoinbase()) return [];
+  const from = spentFrom(tx);
+  return tx.ins.map((input, i) => outpointKey(from[i]!, input.index));
+}
+
 function xmssTree(publicKeyHex: string): ScriptTree {
   return assembleScriptTree([xmssLeafScript(decodeHex(publicKeyHex, 'XMSS public key'))]);
 }
@@ -832,6 +839,9 @@ export class PearlWallet {
   // Each XMSS record as the store last held it, which every write of one is conditional on.
   #xmssStored = new Map<string, JsonValue>();
   #txs = new Map<string, TxEntry>();
+  // The recorded transactions spending each outpoint, in the order they were recorded: built when
+  // first needed, extended as transactions are recorded, dropped when one is forgotten.
+  #spendIndex: Map<string, string[]> | null = null;
   #externalSpends = new Map<string, string | null>();
   #locks = new Map<string, number | null>();
   #prepared = new Map<string, PreparedRecord>();
@@ -1712,6 +1722,7 @@ export class PearlWallet {
         this.#txs.delete(txid);
         this.#del(`tx:${txid}`);
       }
+      this.#spendIndex = null;
       for (const key of [...this.#externalSpends.keys()]) this.#del(`spent:${key}`);
       this.#externalSpends.clear();
       this.#tip = null;
@@ -2229,6 +2240,7 @@ export class PearlWallet {
     this.#xmss.clear();
     this.#xmssStored.clear();
     this.#txs.clear();
+    this.#spendIndex = null;
     this.#externalSpends.clear();
     this.#locks.clear();
     this.#prepared.clear();
@@ -2821,10 +2833,21 @@ export class PearlWallet {
       maxOutput: extra.maxOutput ?? null,
       ...(extra.label === undefined ? {} : { label: extra.label }),
     };
+    const fresh = !this.#txs.has(entry.txid);
     this.#txs.set(entry.txid, entry);
+    if (fresh && this.#spendIndex !== null) for (const key of inputKeys(tx)) this.#spendIndex.set(key, [...(this.#spendIndex.get(key) ?? []), entry.txid]);
     this.#markUsed(tx);
     this.#putTx(entry);
     return entry;
+  }
+
+  #spenders(): Map<string, string[]> {
+    if (this.#spendIndex === null) {
+      const index = new Map<string, string[]>();
+      for (const [txid, entry] of this.#txs) for (const key of inputKeys(entry.tx)) index.set(key, [...(index.get(key) ?? []), txid]);
+      this.#spendIndex = index;
+    }
+    return this.#spendIndex;
   }
 
   // An output of a recorded transaction that is the wallet's.
@@ -2912,12 +2935,13 @@ export class PearlWallet {
   // transaction spending the same outputs is recorded in one too, the record
   // is the stale one: a chain holds only one of them.
   #settleConflicts(entry: TxEntry, events: PendingEvent[]): void {
-    // Every coinbase has the same null input, which spends nothing.
-    if (entry.tx.isCoinbase()) return;
-    const spends = new Set(entry.tx.ins.map((input) => outpointKey(prevTxid(input), input.index)));
-    for (const other of this.#txs.values()) {
-      if (other === entry || other.status !== 'active') continue;
-      if (!other.tx.ins.some((input) => spends.has(outpointKey(prevTxid(input), input.index)))) continue;
+    // inputKeys gives a coinbase none: every coinbase has the same null input, which spends nothing.
+    const index = this.#spenders();
+    const rivals = new Set<string>();
+    for (const key of inputKeys(entry.tx)) for (const txid of index.get(key) ?? []) if (txid !== entry.txid) rivals.add(txid);
+    for (const txid of rivals) {
+      const other = this.#txs.get(txid);
+      if (other === undefined || other === entry || other.status !== 'active') continue;
       const [loser, winner] = other.block === null || entry.block !== null ? [other, entry] : [entry, other];
       loser.status = 'conflicted';
       loser.by = winner.txid;
@@ -3241,6 +3265,7 @@ export class PearlWallet {
       const outcome = broadcastOutcome(err);
       if (outcome === 'refused') {
         this.#txs.delete(entry.txid);
+        this.#spendIndex = null;
         this.#del(`tx:${entry.txid}`);
         if (replaced !== null) {
           replaced.status = 'active';

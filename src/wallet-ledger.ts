@@ -122,6 +122,18 @@ export function prevTxid(input: Transaction['ins'][number]): string {
   return toHex(Uint8Array.from(input.hash).reverse());
 }
 
+// The txid each input of a recorded transaction spends from. A recorded
+// transaction is never changed in place, so they are worked out once each.
+const spentTxids = new WeakMap<Transaction, readonly string[]>();
+export function spentFrom(tx: Transaction): readonly string[] {
+  let txids = spentTxids.get(tx);
+  if (txids === undefined) {
+    txids = tx.ins.map(prevTxid);
+    spentTxids.set(tx, txids);
+  }
+  return txids;
+}
+
 const active = (status: TransactionStatus | undefined): boolean => status === 'pending' || status === 'confirmed';
 
 /** Statuses with inactive spend chains followed to a fixed point. */
@@ -134,8 +146,8 @@ export function effectiveStatus(txs: ReadonlyMap<string, LedgerTransaction>): Ma
     changed = false;
     for (const [txid, entry] of txs) {
       if (!active(status.get(txid))) continue;
-      const dead = entry.tx.ins.some((input) => {
-        const parent = status.get(prevTxid(input));
+      const dead = spentFrom(entry.tx).some((parentId) => {
+        const parent = status.get(parentId);
         return parent !== undefined && parent !== 'pending' && parent !== 'confirmed';
       });
       if (dead) {
@@ -167,7 +179,8 @@ export function computeLedger(
   const spentBy = new Map<string, string>();
   for (const [txid, entry] of txs) {
     if (!active(status.get(txid))) continue;
-    for (const input of entry.tx.ins) spentBy.set(outpointKey(prevTxid(input), input.index), txid);
+    const from = spentFrom(entry.tx);
+    entry.tx.ins.forEach((input, i) => spentBy.set(outpointKey(from[i]!, input.index), txid));
   }
   const coins: WalletCoin[] = [];
   const balance: WalletStateBalance = { confirmed: 0n, unconfirmed: 0n, immature: 0n, locked: 0n, total: 0n };
