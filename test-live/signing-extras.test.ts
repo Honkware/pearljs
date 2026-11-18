@@ -229,6 +229,10 @@ describeLive('cold signing with proven change', () => {
     expect(summary).toMatchObject({ sent: 10_000_000n, change: payment.change, fee: payment.fee });
     expect(psbtOutputs(psbt, network, watching).find((output) => output.mine === true)).toMatchObject({ child: { index: 7, change: true }, value: payment.change });
     expect(() => checkPsbtPayment(psbt, watching, { network, recipients: [{ address: recipient, amount: 9_000_000n }] })).toThrow(SigningError);
+    // Change at index 7 is out of reach of a restore that scans five past index 2, and within it from index 3.
+    const expected = { network, recipients: [{ address: recipient, amount: 10_000_000n }], gapLimit: 5 };
+    expect(() => checkPsbtPayment(psbt, watching, { ...expected, nextChangeIndex: 2 })).toThrow(expect.objectContaining({ code: 'PSBT_OUTPUT_UNEXPECTED', message: expect.stringContaining('where a restore would not find it') as string }) as Error);
+    expect(checkPsbtPayment(psbt, watching, { ...expected, nextChangeIndex: 3 }).change).toBe(payment.change);
     expect(() => checkPsbtPayment(psbt, alice.watchOnlyAccount(), { network, recipients: [{ address: recipient, amount: 10_000_000n }] })).toThrow(expect.objectContaining({ code: 'PSBT_OUTPUT_UNEXPECTED' }) as Error);
     for (let i = 0; i < psbt.inputCount; i += 1) bob.signInput(psbt, i);
     const signed = finalizePsbt(sent(psbt));

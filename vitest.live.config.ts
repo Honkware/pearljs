@@ -8,7 +8,7 @@ import { BaseSequencer, type TestSpecification } from 'vitest/node';
 // after it that invalidate blocks, the interpreter test reads what every file
 // before it sent to the node, the Oyster feed test leaves Oyster without block
 // notifications, and the coinbase test reads every block the others mined.
-const ORDER = ['fresh-chain', 'timelocks', '', 'consensus', 'filters', 'reorg', 'wallet-reorg', 'invoice-extras', 'node-access', 'kit-and-follower', 'interpreter', 'oyster-feed', 'coinbases'];
+const ORDER = ['fresh-chain', 'timelocks', '', 'consensus', 'filters', 'reorg', 'wallet-reorg', 'filter-checks', 'invoice-extras', 'node-access', 'kit-and-follower', 'interpreter', 'oyster-feed', 'coinbases'];
 const rank = (spec: TestSpecification): number => {
   const name = spec.moduleId.slice(spec.moduleId.lastIndexOf('/') + 1).replace('.test.ts', '');
   return ORDER.includes(name) ? ORDER.indexOf(name) : ORDER.indexOf('');
