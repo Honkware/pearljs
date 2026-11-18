@@ -107,14 +107,44 @@ describe('InvoiceIndexAllocator', () => {
     await first.allocate(1_000);
     first.track(40, await refreshInvoice(invoiceAt(40), chain, 2_000));
     const state = JSON.parse(JSON.stringify(first.toJson())) as ReturnType<InvoiceIndexAllocator['toJson']>;
-    expect(state).toEqual({ format: 'pearljs-invoice-indices', version: 1, next: 42, lastUsed: 39, free: [{ index: 40, reusableAt: 2_010 }] });
+    expect(state).toEqual({
+      format: 'pearljs-invoice-indices',
+      version: 1,
+      next: 42,
+      lastUsed: 39,
+      free: [{ index: 40, reusableAt: 2_010 }],
+      issued: [
+        { index: 40, at: 1_000 },
+        { index: 41, at: 1_000 },
+      ],
+    });
     const second = allocator(chain, { state });
     expect(second.toJson()).toEqual(state);
     await expect(second.allocate(2_010)).resolves.toMatchObject({ index: 40, reused: true });
-    for (const broken of [{ ...state, version: 2 }, { ...state, next: -1 }, { ...state, lastUsed: 42 }, { ...state, free: [{ index: 50, reusableAt: 0 }] }, { ...state, format: 'x' }]) {
+    for (const broken of [{ ...state, version: 2 }, { ...state, next: -1 }, { ...state, lastUsed: 42 }, { ...state, free: [{ index: 50, reusableAt: 0 }] }, { ...state, issued: [{ index: 50, at: 0 }] }, { ...state, format: 'x' }]) {
       expect(() => allocator(chain, { state: broken as typeof state })).toThrow(expect.objectContaining({ code: 'INVOICE_JSON_INVALID' }));
     }
     expect(() => first.track(99, invoiceAt(99))).toThrow(RangeError);
+  });
+
+  it('ignores a record of the invoice an index had before it was handed out again', async () => {
+    const chain = new ScriptedChain();
+    const indices = allocator(chain, { gapLimit: 5, reuseAfter: 0 });
+    await indices.allocate(1_000);
+    const earlier = await refreshInvoice(invoiceAt(0), chain, 2_000);
+    indices.track(0, earlier);
+    await expect(indices.allocate(2_100)).resolves.toMatchObject({ index: 0, reused: true });
+    // The earlier invoice's expired record comes in again, while the new invoice at index 0 is open.
+    indices.track(0, earlier);
+    await expect(indices.allocate(2_200)).resolves.toMatchObject({ index: 1, reused: false });
+    // The new invoice's own record still frees the index once it expires.
+    const later = createInvoice({ id: 'order-0b', address: deriveAddress(0), amount: 1_000n, createdAt: 2_100, expiresAt: 3_000, requiredConfirmations: 1 }, NETWORK);
+    indices.track(0, await refreshInvoice(later, chain, 3_000));
+    await expect(indices.allocate(3_000)).resolves.toMatchObject({ index: 0, reused: true });
+    // Restored from state written without issue times, it behaves as before.
+    const old = indices.toJson();
+    delete old.issued;
+    expect(() => allocator(chain, { state: old })).not.toThrow();
   });
 
   it("keeps every paid invoice of a busy shop within reach of a restore with Oyster's window", async () => {

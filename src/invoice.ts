@@ -621,6 +621,8 @@ export interface InvoiceIndexState {
   lastUsed: number;
   /** Indices whose invoice expired with nothing paid, with when each may be handed out again. */
   free: { index: number; reusableAt: number }[];
+  /** When each index still waiting on its invoice was last handed out, epoch seconds. Absent in state written before it was kept. */
+  issued?: { index: number; at: number }[];
 }
 
 /** Options for InvoiceIndexAllocator. */
@@ -697,6 +699,8 @@ export class InvoiceIndexAllocator {
   #next: number;
   #lastUsed: number;
   readonly #free = new Map<number, number>();
+  // When each index was last handed out, until it is paid: a record of an invoice made before then is of an earlier one.
+  readonly #issued = new Map<number, number>();
   #queue: Promise<unknown> = Promise.resolve();
 
   constructor(options: InvoiceIndexAllocatorOptions) {
@@ -724,6 +728,14 @@ export class InvoiceIndexAllocator {
       if (index >= this.#next) throw bad(`free index ${index} was never handed out`);
       this.#free.set(index, indexOf((entry as { reusableAt?: unknown }).reusableAt, `reusableAt of ${index}`));
     }
+    if (state.issued !== undefined) {
+      if (!Array.isArray(state.issued)) throw bad('issued is not an array');
+      for (const entry of state.issued) {
+        const index = indexOf((entry as { index?: unknown } | null)?.index, 'an issued index');
+        if (index >= this.#next) throw bad(`issued index ${index} was never handed out`);
+        this.#issued.set(index, indexOf((entry as { at?: unknown }).at, `the issue time of ${index}`));
+      }
+    }
   }
 
   /** The next index for an invoice. Throws InvoiceGapError rather than hand out one a restore would miss, unless allowBeyondGap. */
@@ -745,12 +757,14 @@ export class InvoiceIndexAllocator {
         this.#lastUsed = Math.max(this.#lastUsed, index);
         continue;
       }
+      this.#issued.set(index, now);
       return { index, address, reused: true, gap: index - this.#lastUsed, beyondGap: index - this.#lastUsed > this.#gapLimit };
     }
     const index = this.#next;
     const gap = index - this.#lastUsed;
     if (gap > this.#gapLimit && this.#options.allowBeyondGap !== true) throw new InvoiceGapError(index, this.#lastUsed, this.#gapLimit);
     this.#next++;
+    this.#issued.set(index, now);
     return { index, address: this.#options.deriveAddress(index), reused: false, gap, beyondGap: gap > this.#gapLimit };
   }
 
@@ -758,14 +772,18 @@ export class InvoiceIndexAllocator {
    * Tells the allocator what became of the invoice at an index: paid
    * (anything at all, late payments included) marks the index used for good,
    * expired with nothing paid makes it reusable reuseAfter seconds after
-   * expiry. Call it with every refreshed record.
+   * expiry. Call it with every refreshed record. An unpaid record of an
+   * invoice created before the index was last handed out is of an earlier
+   * invoice and changes nothing, so create each invoice no earlier than the
+   * `now` its index was allocated at.
    */
   track(index: number, invoice: Invoice): void {
     if (!Number.isSafeInteger(index) || index < 0 || index >= this.#next) throw new RangeError(`index ${index} was not handed out by this allocator`);
     if (invoice.payments.length > 0) {
       this.#free.delete(index);
+      this.#issued.delete(index);
       this.#lastUsed = Math.max(this.#lastUsed, index);
-    } else if (invoice.state === 'expired' && !this.#free.has(index)) {
+    } else if (invoice.state === 'expired' && !this.#free.has(index) && invoice.createdAt >= (this.#issued.get(index) ?? -Infinity)) {
       this.#free.set(index, invoice.expiresAt + this.#reuseAfter);
     }
   }
@@ -778,7 +796,8 @@ export class InvoiceIndexAllocator {
   /** The state to store, for the `state` option. */
   toJson(): InvoiceIndexState {
     const free = [...this.#free].sort(([a], [b]) => a - b).map(([index, reusableAt]) => ({ index, reusableAt }));
-    return { format: 'pearljs-invoice-indices', version: 1, next: this.#next, lastUsed: this.#lastUsed, free };
+    const issued = [...this.#issued].sort(([a], [b]) => a - b).map(([index, at]) => ({ index, at }));
+    return { format: 'pearljs-invoice-indices', version: 1, next: this.#next, lastUsed: this.#lastUsed, free, issued };
   }
 }
 
