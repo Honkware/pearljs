@@ -547,6 +547,10 @@ interface TxEntry extends LedgerTransaction {
   maxOutput: number | null;
 }
 
+// Whose keys sign a payment being built: the keystore's, a signer's elsewhere (send with a signer,
+// prepareSend), or nobody's yet (estimateSend).
+type SpendMode = 'keystore' | 'elsewhere' | 'estimate';
+
 // A payment prepareSend built and is holding coins for.
 interface PreparedRecord {
   id: string;
@@ -1777,7 +1781,7 @@ export class PearlWallet {
       const external = options.signer !== undefined;
       if (!external) await this.#unlocked();
       const { feeRate, maxFeeRate } = await this.#feeRates(options);
-      const { payment, changeAccount, changeIndex, changeAddress } = this.#build(options, feeRate, external);
+      const { payment, changeAccount, changeIndex, changeAddress } = this.#build(options, feeRate, external ? 'elsewhere' : 'keystore');
       if (payment.changeIndex >= 0) {
         changeAccount.change = changeIndex + 1;
         this.#putAccount(changeAccount);
@@ -1799,7 +1803,7 @@ export class PearlWallet {
     return feeRates.map((feeRate) => {
       try {
         if (checkRate(feeRate, 'feeRate') > maxFeeRate) throw new SigningError('FEE_TOO_HIGH', `feeRate ${feeRate} is above maxFeeRate ${maxFeeRate} (grain per 1000 vbytes); raise maxFeeRate to pay it`);
-        const { payment } = this.#build(options, feeRate, true);
+        const { payment } = this.#build(options, feeRate, options.signer === undefined ? 'estimate' : 'elsewhere');
         checkFeeCeiling(payment.transaction, payment.prevouts, payment.vsize, maxFeeRate);
         return { feeRate, fee: payment.fee, vsize: payment.vsize, inputs: payment.inputs.length, change: payment.change, error: null };
       } catch (err) {
@@ -1817,7 +1821,8 @@ export class PearlWallet {
   /**
    * Builds a payment for a signer that is not this wallet: a hardware
    * device, a cold machine, the holder of a watch-only account's keys. It
-   * selects coins as send does, from a watch-only account too, and returns
+   * selects coins as send does, from a watch-only account too, and account
+   * coins only (WALLET_WATCH_ONLY for an XMSS or imported key), and returns
    * the unsigned transaction as a PSBT with its fee, size, inputs and
    * change. Nothing is signed, recorded as sent or broadcast, and the
    * wallet need not be unlocked.
@@ -1833,7 +1838,7 @@ export class PearlWallet {
       if (!Number.isSafeInteger(hold) || hold < 0) throw new RangeError('hold must be a non-negative integer of milliseconds');
       const { feeRate, maxFeeRate } = await this.#feeRates(options);
       this.#prunePrepared();
-      const { payment, changeAccount, changeIndex, changeAddress } = this.#build(options, feeRate, true);
+      const { payment, changeAccount, changeIndex, changeAddress } = this.#build(options, feeRate, 'elsewhere');
       checkFeeCeiling(payment.transaction, payment.prevouts, payment.vsize, maxFeeRate);
       const { psbt, inputs } = payment;
       for (const [i, coin] of inputs.entries()) {
@@ -1892,7 +1897,10 @@ export class PearlWallet {
    * prepared one (the same inputs, outputs, sequences and lock time), every
    * input must carry a witness that the script engine accepts for the
    * output it spends, and it must pass pearld's relay policy and the fee
-   * ceiling it was prepared under. WALLET_NOT_PREPARED when it is not a
+   * ceiling it was prepared under. An XMSS signature of the wallet's must be
+   * at an index the wallet has not handed out (XMSS_INDEX_REUSE), and the
+   * key's next index is stored past it before the transaction is recorded.
+   * WALLET_NOT_PREPARED when it is not a
    * held prepared send, or its coins are no longer the wallet's to spend.
    */
   async submitSigned(signed: Transaction | string | Uint8Array, options: { label?: string } = {}): Promise<SendResult> {
@@ -1923,6 +1931,7 @@ export class PearlWallet {
       if (!verdict.ok) throw new SigningError('SIGNATURE_INVALID', `input ${verdict.inputIndex} of transaction ${txid} does not verify: ${verdict.message}`);
       checkStandard(tx, { prevouts: prepared.prevouts });
       checkFeeCeiling(tx, prepared.prevouts, tx.virtualSize(), prepared.maxFeeRate);
+      await this.#claimXmssIndices(tx, prepared.prevouts);
       const entry = this.#record(tx, prepared.prevouts, { broadcast: false, changeOutput: prepared.changeOutput, maxOutput: prepared.maxOutput, label: options.label ?? prepared.label ?? undefined });
       this.#prepared.delete(prepared.id);
       this.#del(`prepared:${prepared.id}`);
@@ -2035,7 +2044,7 @@ export class PearlWallet {
         changeAddress = this.#derive(newChange.id, true, newChange.change);
       }
       // pearld refuses a replacement that adds unconfirmed inputs, and the original's own outputs vanish with it.
-      const others = this.#spendable(this.#sourceOf(originals[0]!.owner), external).filter((coin) => coin.txid !== txid && coin.confirmations >= 1);
+      const others = this.#spendable(this.#sourceOf(originals[0]!.owner), external ? 'elsewhere' : 'keystore').filter((coin) => coin.txid !== txid && coin.confirmations >= 1);
       const originalFee = original.prevouts.reduce((sum, p) => sum + p!.value, 0n) - original.tx.outs.reduce((sum, o) => sum + o.value, 0n);
       const originalVsize = original.tx.virtualSize();
       let feeRate = options.feeRate;
@@ -2604,18 +2613,23 @@ export class PearlWallet {
     return owner.type === 'xmss' && owner.id === from.xmss;
   }
 
-  // Unlocked coins a source may spend, with what coin selection needs to price them. A payment that
-  // is only being prepared for a signer elsewhere may spend a watch-only account's coins too.
-  #spendable(from: CoinSource, external = false): WalletCoin[] {
+  // Unlocked coins a source may spend, with what coin selection needs to price them. A payment
+  // signed elsewhere (a signer, or prepareSend) may spend a watch-only account's coins too, and
+  // account coins only: an XMSS index has to be reserved here before anything signs over it, and
+  // imported keys sign from the keystore. An estimate looks at every coin.
+  #spendable(from: CoinSource, mode: SpendMode): WalletCoin[] {
+    const anyAccount = mode !== 'keystore';
     const accepts = (owner: CoinOwner): boolean => {
-      if (owner.type === 'account' && !external && this.#accounts.get(owner.account)?.kind !== 'seed') return false;
+      if (owner.type === 'account' && !anyAccount && this.#accounts.get(owner.account)?.kind !== 'seed') return false;
+      if (owner.type !== 'account' && mode === 'elsewhere') return false;
       if (owner.type === 'xmss' && this.#xmss.get(owner.id)?.frozen !== null) return false;
       return this.#from(from, owner);
     };
     if (from !== 'all') {
+      if (mode === 'elsewhere' && !('account' in from)) throw new WalletError('WALLET_WATCH_ONLY', 'a send signed elsewhere spends account coins only; imported and XMSS keys sign from the keystore');
       if ('account' in from) {
         const record = this.#account(from.account);
-        if (record.kind !== 'seed' && !external) throw new WalletError('WALLET_WATCH_ONLY', `account ${record.id} is watch-only and cannot sign`);
+        if (record.kind !== 'seed' && !anyAccount) throw new WalletError('WALLET_WATCH_ONLY', `account ${record.id} is watch-only and cannot sign`);
       } else if ('imported' in from && !this.#imported.has(from.imported)) {
         throw new WalletError('WALLET_UNKNOWN', `no imported key ${from.imported} in the wallet`);
       } else if ('xmss' in from) {
@@ -2642,10 +2656,11 @@ export class PearlWallet {
   // Chooses coins and builds the unsigned payment, for this wallet's keys or, with external, for a
   // signer elsewhere. Nothing is recorded. A shortfall is reported with what the source holds and
   // could not spend.
-  #build(options: SendOptions, feeRate: FeeRate, external: boolean): { payment: Payment<WalletCoin>; changeAccount: AccountRecord; changeIndex: number; changeAddress: string } {
+  #build(options: SendOptions, feeRate: FeeRate, mode: SpendMode): { payment: Payment<WalletCoin>; changeAccount: AccountRecord; changeIndex: number; changeAddress: string } {
+    const external = mode !== 'keystore';
     const minConfirmations = options.minConfirmations ?? 1;
     const from = options.from ?? { account: (external ? this.#account(undefined) : this.#firstSigningAccount()).id };
-    const coins = this.#spendable(from, external);
+    const coins = this.#spendable(from, mode);
     const changeAccount = this.#changeAccount(from, external);
     const changeIndex = this.#freeChangeIndex(changeAccount);
     const changeAddress = this.#derive(changeAccount.id, true, changeIndex);
@@ -2669,6 +2684,7 @@ export class PearlWallet {
       for (const coin of this.#ledger().coins) {
         if (!this.#from(from, coin.owner)) continue;
         if (coin.owner.type === 'account' && !external && this.#accounts.get(coin.owner.account)?.kind !== 'seed') continue;
+        if (coin.owner.type !== 'account' && mode === 'elsewhere') continue;
         if (coin.owner.type === 'xmss' && this.#xmss.get(coin.owner.id)?.frozen !== null) held.frozen += coin.value;
         else if (coin.locked) held.locked += coin.value;
         else if (coin.coinbase && coin.confirmations < this.network.coinbaseMaturity) held.immature += coin.value;
@@ -2729,17 +2745,44 @@ export class PearlWallet {
         // Index 30 is the last; past it nothing is recorded.
         if (index > XMSS_LAST_INDEX) throw new XmssError('XMSS_INDEX_EXHAUSTED', `this XMSS key has used all ${XMSS_MAX_SIGNATURES} of its signatures`);
         if (index <= record.seenOnChain || index <= (this.#reserved.get(id) ?? -1)) throw new XmssError('XMSS_INDEX_REUSE', `refusing to reuse XMSS index ${index}`);
-        const advanced = { ...record, next: index + 1 } as unknown as JsonValue;
-        const key = `xmss:${id}`;
-        if (!(await this.#store.compareAndSet([{ key, value: this.#xmssStored.get(id) }], [{ type: 'set', key, value: advanced }]))) {
-          throw new XmssError('XMSS_INDEX_REUSE', 'the stored XMSS index is not the one this wallet last wrote: another writer is using the store. Nothing was signed');
-        }
-        record.next = index + 1;
-        this.#xmssStored.set(id, advanced);
-        this.#reserved.set(id, index);
+        await this.#advanceXmss(record, index, 'Nothing was signed');
         return index;
       },
     };
+  }
+
+  // Stores the key's next index as one past `index`, with compareAndSet over
+  // the record this wallet last stored, before anything uses the index.
+  async #advanceXmss(record: XmssRecord, index: number, outcome: string): Promise<void> {
+    const id = record.publicKey;
+    const advanced = { ...record, next: index + 1 } as unknown as JsonValue;
+    const key = `xmss:${id}`;
+    if (!(await this.#store.compareAndSet([{ key, value: this.#xmssStored.get(id) }], [{ type: 'set', key, value: advanced }]))) {
+      throw new XmssError('XMSS_INDEX_REUSE', `the stored XMSS index is not the one this wallet last wrote: another writer is using the store. ${outcome}`);
+    }
+    record.next = index + 1;
+    this.#xmssStored.set(id, advanced);
+    this.#reserved.set(id, index);
+  }
+
+  // A transaction signed elsewhere may carry XMSS signatures of the wallet's
+  // keys only at indices the wallet has not handed out; each key's next
+  // index is moved past them, durably, before the transaction is recorded.
+  async #claimXmssIndices(tx: Transaction, prevouts: readonly { script: Uint8Array; value: bigint }[]): Promise<void> {
+    const highest = new Map<string, number>();
+    for (const [i, prevout] of prevouts.entries()) {
+      const owner = this.#ownerOf(prevout.script)?.owner;
+      if (owner?.type !== 'xmss') continue;
+      const record = this.#xmss.get(owner.id)!;
+      this.#checkXmssUsable(record);
+      const index = xmssWitnessIndex(tx.ins[i]!.witness);
+      if (index === null || index > XMSS_LAST_INDEX) throw new SigningError('SIGNATURE_INVALID', `input ${i} of transaction ${tx.getId()} carries no XMSS signature index`);
+      if (index < record.next || index <= record.seenOnChain || index <= (this.#reserved.get(owner.id) ?? -1) || index <= (highest.get(owner.id) ?? -1)) {
+        throw new XmssError('XMSS_INDEX_REUSE', `input ${i} of transaction ${tx.getId()} is signed with XMSS index ${index}, which this wallet has already handed out; refusing to record or broadcast it`);
+      }
+      highest.set(owner.id, index);
+    }
+    for (const [id, index] of highest) await this.#advanceXmss(this.#xmss.get(id)!, index, 'The transaction was not recorded');
   }
 
   // ---- internals: transactions

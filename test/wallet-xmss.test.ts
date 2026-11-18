@@ -1,11 +1,27 @@
 // XMSS keys as wallet members: the index is reserved in the wallet store
 // before the signature exists, the wallet supplies the previous
-// transactions an all-P2MR spend needs, and a state older than the key's
-// real index (a restored backup, a copied file) refuses to sign until the
-// index is burned forward past everything it may have used.
+// transactions an all-P2MR spend needs, a state older than the key's real
+// index (a restored backup, a copied file) refuses to sign until the index
+// is burned forward past everything it may have used, and a payment signed
+// elsewhere never spends an XMSS coin at an index the wallet has handed out.
 
 import { describe, expect, it } from 'vitest';
-import { PearlWallet, XMSS_MAX_SIGNATURES, addInputByTxid, createMemoryStore, createTransaction, networks, parsePearl, parseTransaction, toOutputScript } from '../src/index.js';
+import {
+  PearlWallet,
+  XMSS_MAX_SIGNATURES,
+  addInputByTxid,
+  assembleScriptTree,
+  createMemoryStore,
+  createTransaction,
+  createXmssSigner,
+  generateXmssSeeds,
+  networks,
+  parsePearl,
+  parseTransaction,
+  signXmssP2mrInput,
+  toOutputScript,
+  xmssLeafScript,
+} from '../src/index.js';
 import type { JsonValue, Transaction, WalletEvents, WalletStore } from '../src/index.js';
 import { FakeChain, PASSPHRASE, STRANGER, newWallet } from './wallet-chain.js';
 
@@ -257,5 +273,75 @@ describe('wallet XMSS keys', () => {
       'has 1 signatures left, and this payment needs 2',
     );
     expect(wallet.xmssKeys()[0]!.nextIndex).toBe(XMSS_MAX_SIGNATURES - 1);
+  });
+
+  it('prepares no payment for a signer elsewhere from XMSS or imported coins', async () => {
+    const { wallet, key } = await xmssWallet();
+    const recipients = [{ address: STRANGER, amount: prl('1') }];
+    await expect(wallet.prepareSend({ recipients, feeRate: 2000n, from: { xmss: key.id } })).rejects.toMatchObject({ code: 'WALLET_WATCH_ONLY' });
+    await expect(wallet.prepareSend({ recipients, feeRate: 2000n, from: 'all' })).rejects.toMatchObject({ code: 'INSUFFICIENT_FUNDS' });
+    const signer = { signKeyPath: async (): Promise<Uint8Array> => new Uint8Array(64) };
+    await expect(wallet.send({ recipients, feeRate: 2000n, from: 'all', signer })).rejects.toMatchObject({ code: 'INSUFFICIENT_FUNDS' });
+    expect(wallet.estimateSend({ recipients, from: { xmss: key.id } }, [2000n])[0]!.error).toBeNull();
+    expect(wallet.xmssKeys()[0]!.nextIndex).toBe(0);
+  });
+
+  it('takes back a held XMSS payment signed elsewhere only at an index it has not handed out, and moves past it first', async () => {
+    const store = createMemoryStore();
+    const chain = new FakeChain();
+    const wallet = await newWallet(chain, { store });
+    const { privateSeed, publicSeed } = generateXmssSeeds();
+    const key = await wallet.addXmssKey({ privateSeed, publicSeed, nextIndex: 0 });
+    chain.pay(key.address, prl('5'));
+    chain.mine();
+    await wallet.sync();
+    const coin = wallet.coins().find((item) => item.owner.type === 'xmss')!;
+    const funding = chain.transaction(coin.txid)!.tx;
+    const script = funding.outs[coin.vout]!.script;
+    // A hold written before prepareSend refused XMSS coins.
+    const unsigned = createTransaction(2);
+    addInputByTxid(unsigned, coin.txid, coin.vout);
+    unsigned.addOutput(toOutputScript(STRANGER, networks.regtest), coin.value - 10000n);
+    await store.set('prepared:00112233445566778899aabbccddeeff', {
+      hex: unsigned.toHex(),
+      prevouts: [[Buffer.from(script).toString('hex'), coin.value.toString()]],
+      changeAccount: null,
+      changeIndex: null,
+      changeOutput: -1,
+      maxOutput: -1,
+      label: null,
+      maxFeeRate: '5000000',
+      expiresAt: Date.now() + 600000,
+    });
+    const reopened = await PearlWallet.open({ store, backend: chain, transactions: chain });
+    // The wallet hands index 0 to a send of its own, then the payment signed elsewhere at 0 comes back.
+    await reopened.unlock(PASSPHRASE);
+    await reopened.burnXmssIndices(key.id, { nextIndex: 1 });
+    const signedAt = async (index: number) => {
+      const tx = unsigned.clone();
+      const signer = createXmssSigner(privateSeed, publicSeed, { peek: () => index, reserve: async () => index });
+      const tree = assembleScriptTree([xmssLeafScript(signer.publicKey)]);
+      await signXmssP2mrInput(tx, 0, signer, { prevouts: [{ script, value: coin.value }], tree, leafIndex: 0, previousTransactions: [funding] });
+      signer.destroy();
+      return tx;
+    };
+    await expect(reopened.submitSigned(await signedAt(0))).rejects.toMatchObject({ code: 'XMSS_INDEX_REUSE' });
+    expect(chain.mempool.size).toBe(0);
+    const order: string[] = [];
+    const set = store.compareAndSet.bind(store);
+    store.compareAndSet = async (expected, operations) => {
+      if (operations.some((op) => op.type === 'set' && op.key.startsWith('xmss:'))) order.push('index stored');
+      return set(expected, operations);
+    };
+    const broadcast = chain.broadcast.bind(chain);
+    chain.broadcast = async (hex) => {
+      order.push('broadcast');
+      return broadcast(hex);
+    };
+    const sent = await reopened.submitSigned(await signedAt(4));
+    expect(order).toEqual(['index stored', 'broadcast']);
+    expect(chain.mempool.has(sent.txid)).toBe(true);
+    expect(reopened.xmssKeys()[0]!.nextIndex).toBe(5);
+    expect((await PearlWallet.open({ store, backend: chain, transactions: chain })).xmssKeys()[0]!.nextIndex).toBe(5);
   });
 });
