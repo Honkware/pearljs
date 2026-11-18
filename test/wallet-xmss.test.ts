@@ -23,7 +23,7 @@ import {
   xmssLeafScript,
 } from '../src/index.js';
 import type { JsonValue, Transaction, WalletEvents, WalletStore } from '../src/index.js';
-import { FakeChain, PASSPHRASE, STRANGER, newWallet } from './wallet-chain.js';
+import { FakeChain, PASSPHRASE, STRANGER, newWallet, withActivityScanner } from './wallet-chain.js';
 
 const prl = (text: string): bigint => parsePearl(text);
 
@@ -212,6 +212,27 @@ describe('wallet XMSS keys', () => {
     await fresh.rescan();
     expect(fresh.transaction(altered.getId())).not.toBeNull();
     expect(fresh.xmssKeys()[0]).toMatchObject({ highestOnChain: -1, frozen: null });
+  });
+
+  it('learns every signature made since the backup from a backend that answers since the backup\'s tip', async () => {
+    const chain = withActivityScanner(new FakeChain());
+    const wallet = await newWallet(chain);
+    const key = await wallet.addXmssKey({ label: 'cold' });
+    chain.pay(key.address, prl('5'));
+    chain.pay(key.address, prl('5'));
+    chain.mine();
+    await wallet.sync();
+    const backup = await wallet.exportState();
+    for (let i = 0; i < 2; i += 1) {
+      await wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n, from: { xmss: key.id }, minConfirmations: 0 });
+      chain.mine();
+    }
+    const restored = await PearlWallet.restore({ store: createMemoryStore(), backend: chain, transactions: chain, keystore: wallet.exportKeystore(), passphrase: PASSPHRASE, backup });
+    const asked = chain.calls.get('getActivitySince') ?? 0;
+    await restored.sync();
+    expect(chain.calls.get('getActivitySince')).toBe(asked + 1);
+    expect(restored.xmssKeys()[0]).toMatchObject({ frozen: 'restored', highestOnChain: 1 });
+    await expect(restored.burnXmssIndices(key.id, { nextIndex: 1, nothingSigned: true })).rejects.toMatchObject({ code: 'XMSS_INDEX_REUSE' });
   });
 
   it('keeps a restored key frozen until the wallet has synced, and refuses a burn that burns nothing', async () => {

@@ -1,11 +1,13 @@
 // Sync against backends that answer oddly or only in part: one that calls
 // every address used, one that knows an output is spent but not by what,
-// and notifications that arrive before the block that explains them.
+// notifications that arrive before the block that explains them, and one
+// that answers for everything since a block at once, which knows nothing of
+// the history of a key or account added since the last sync.
 
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SCAN_LIMIT, parsePearl } from '../src/index.js';
+import { DEFAULT_SCAN_LIMIT, PearlWallet, createMemoryStore, deriveAccountFromSeed, encodeWif, generateXmssSeeds, keyPathAddress, mnemonicToSeed, networks, parsePearl } from '../src/index.js';
 import type { BlockEvent, PearlWsEvents, WalletNotifier } from '../src/index.js';
-import { FakeChain, STRANGER, newWallet } from './wallet-chain.js';
+import { FAST_KDF, FakeChain, PASSPHRASE, STRANGER, newWallet, withActivityScanner } from './wallet-chain.js';
 
 const prl = (text: string): bigint => parsePearl(text);
 
@@ -120,5 +122,53 @@ describe('wallet: sync against a backend that answers oddly', () => {
     expect(wallet.tip).toEqual(mined);
     expect(wallet.balance().confirmed).toBe(prl('7'));
     stop();
+  });
+
+  it('asks for the whole history of a key or account added since the last sync, from a backend that answers since a block', async () => {
+    const chain = withActivityScanner(new FakeChain());
+    const wallet = await newWallet(chain);
+    await wallet.unlock(PASSPHRASE);
+    chain.pay(await wallet.receiveAddress(), prl('1'));
+    chain.mine();
+    await wallet.sync();
+    // Paid before the wallet knows them: an imported key and another account of the seed.
+    const key = new Uint8Array(32).fill(5);
+    chain.pay(keyPathAddress(key, networks.regtest), prl('2'));
+    chain.pay(deriveAccountFromSeed(mnemonicToSeed(`${'abandon '.repeat(11)}about`), networks.regtest, 1).deriveAddress(0), prl('4'));
+    chain.mine();
+    await wallet.sync();
+    expect(chain.calls.get('getActivitySince')).toBeGreaterThan(0);
+
+    await wallet.importKey(encodeWif(key, networks.regtest));
+    await wallet.addAccount(1);
+    await wallet.sync();
+    expect(wallet.coins().filter((coin) => coin.owner.type === 'imported').map((coin) => coin.value)).toEqual([prl('2')]);
+    expect(wallet.coins().filter((coin) => coin.owner.type === 'account' && coin.owner.account === '1').map((coin) => coin.value)).toEqual([prl('4')]);
+  });
+
+  it('sees the signatures of an XMSS key added later, whether the spend was recorded already or not', async () => {
+    for (const shared of [true, false]) {
+      const chain = withActivityScanner(new FakeChain());
+      const wallet = await newWallet(chain);
+      await wallet.unlock(PASSPHRASE);
+      await wallet.sync();
+      // The key's other holder: with the same seed its change pays this wallet, so the spend is recorded before the key is added.
+      const holder = shared
+        ? await newWallet(chain, { store: createMemoryStore() })
+        : await PearlWallet.create({ store: createMemoryStore(), backend: chain, passphrase: PASSPHRASE, mnemonic: `${'zoo '.repeat(11)}wrong`, kdf: FAST_KDF });
+      await holder.unlock(PASSPHRASE);
+      const seeds = generateXmssSeeds();
+      const xmss = await holder.addXmssKey({ ...seeds, nextIndex: 0 });
+      chain.pay(xmss.address, prl('5'));
+      chain.mine();
+      await holder.sync();
+      await holder.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n, from: { xmss: xmss.id } });
+      chain.mine();
+      await wallet.sync();
+      await wallet.addXmssKey({ ...seeds, nextIndex: 0 });
+      await wallet.sync();
+      // The signature at index 0 is seen, so the key is held back instead of signing at 0 again.
+      expect(wallet.xmssKeys()[0]).toMatchObject({ highestOnChain: 0, frozen: 'behind' });
+    }
   });
 });

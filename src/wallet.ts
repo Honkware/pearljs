@@ -534,6 +534,8 @@ interface MetaRecord {
   createdAt: number;
   /** Whether the first full scan has finished. */
   scanned: boolean;
+  /** Accounts ("account:" and the id) and keys' addresses added since the last sync, whose history before it no sync has asked for. */
+  unscanned?: string[];
 }
 
 interface TxEntry extends LedgerTransaction {
@@ -1137,6 +1139,7 @@ export class PearlWallet {
       if (this.#accounts.has(id)) throw new WalletError('WALLET_DUPLICATE', `account ${id} already exists`);
       const account = await (await this.#unlocked()).useSecret('seed', (seed) => deriveAccountFromSeed(seed, this.network, number));
       this.#addAccount({ id, kind: 'seed', number, xpub: account.extendedPublicKey(), origin: originOf(account), label: options.label ?? null, receive: 0, change: 0 });
+      this.#markUnscanned(`account:${id}`);
       await this.#seal();
       await this.#flush();
       return this.accounts().find((account) => account.id === id)!;
@@ -1158,6 +1161,7 @@ export class PearlWallet {
       while (this.#accounts.has(`watch-${n}`)) n += 1;
       const id = `watch-${n}`;
       this.#addAccount({ id, kind: 'xpub', number: null, xpub: account.extendedPublicKey(), origin: originOf(account), label: options.label ?? null, receive: 0, change: 0 });
+      this.#markUnscanned(`account:${id}`);
       await this.#seal();
       await this.#flush();
       return this.accounts().find((item) => item.id === id)!;
@@ -1248,6 +1252,7 @@ export class PearlWallet {
       this.#imported.set(address, { address, label: options.label ?? null });
       this.#own(toOutputScript(address, this.network), { type: 'imported', id: address }, address);
       this.#put(`imported:${address}`, { address, label: options.label ?? null });
+      this.#markUnscanned(address);
       this.#put('keystore', keystore.toJSON() as unknown as JsonValue);
       await this.#seal();
       await this.#flush();
@@ -1264,7 +1269,7 @@ export class PearlWallet {
    * it used. Needs the wallet unlocked. Key generation takes about a second.
    */
   async addXmssKey(options: { label?: string; privateSeed?: Uint8Array; publicSeed?: Uint8Array; nextIndex?: number } = {}): Promise<WalletXmssKey> {
-    return this.#exclusive(async () => {
+    return this.#exclusive(async (events) => {
       const keystore = await this.#unlocked();
       const given = options.privateSeed !== undefined || options.publicSeed !== undefined;
       if (given && (options.privateSeed === undefined || options.publicSeed === undefined)) throw new XmssError('XMSS_KEY_INVALID', 'give both XMSS seeds or neither');
@@ -1296,6 +1301,9 @@ export class PearlWallet {
           createdAt: this.#now(),
         };
         this.#putXmss(record);
+        this.#markUnscanned(record.address);
+        // A transaction already recorded, paying the wallet, may carry a signature of this key.
+        for (const entry of this.#txs.values()) this.#checkXmssWitnesses(entry, events);
         this.#put('keystore', keystore.toJSON() as unknown as JsonValue);
         await this.#seal();
         await this.#flush();
@@ -1575,6 +1583,10 @@ export class PearlWallet {
       record.synced = true;
       this.#putXmss(record);
     }
+    if (this.#meta.unscanned !== undefined) {
+      delete this.#meta.unscanned;
+      this.#put('meta', this.#meta as unknown as JsonValue);
+    }
     this.#rounds += 1;
     if (!this.#meta.scanned) {
       this.#meta.scanned = true;
@@ -1591,8 +1603,10 @@ export class PearlWallet {
     if (typeof scanner.getActivitySince !== 'function') return false;
     const asked = new Set<string>();
     const limit = this.#watchedAddresses().length + 2 * this.#accounts.size * scanLimit;
+    // Accounts and keys added since the last sync have no history the backend was asked for: their whole history comes from the second round on.
+    const unscanned = this.#unscannedAddresses();
     for (let round = 0; ; round += 1) {
-      const fresh = this.#watchedAddresses().filter((address) => !asked.has(address));
+      const fresh = this.#watchedAddresses().filter((address) => !asked.has(address) && (round > 0 || !unscanned.has(address)));
       if (fresh.length === 0) return true;
       if (asked.size + fresh.length > limit) throw new PearlError('BACKEND_RESPONSE', `the backend reports addresses in use ${scanLimit} past the next index with no gap; if the wallet really has that many, sync with a higher scanLimit`);
       for (const address of fresh) asked.add(address);
@@ -2556,6 +2570,28 @@ export class PearlWallet {
       this.#putAccount(record);
       this.#extend(record.id, owner.change);
     }
+  }
+
+  #markUnscanned(item: string): void {
+    this.#meta.unscanned = [...(this.#meta.unscanned ?? []), item];
+    this.#put('meta', this.#meta as unknown as JsonValue);
+  }
+
+  #unscannedAddresses(): Set<string> {
+    const addresses = new Set<string>();
+    for (const item of this.#meta.unscanned ?? []) {
+      if (!item.startsWith('account:')) {
+        addresses.add(item);
+        continue;
+      }
+      const record = this.#accounts.get(item.slice('account:'.length));
+      if (record === undefined) continue;
+      for (const change of [false, true]) {
+        const next = change ? record.change : record.receive;
+        for (let i = 0; i < next + this.#meta.lookahead; i += 1) addresses.add(this.#derive(record.id, change, i));
+      }
+    }
+    return addresses;
   }
 
   #watchedAddresses(): string[] {
