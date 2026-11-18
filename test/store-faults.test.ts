@@ -20,6 +20,7 @@ const hooks: {
   link?: (fs: Fs, from: string, to: string) => void;
   rename?: (fs: Fs, from: string, to: string) => void;
   open?: (fs: Fs, path: string, flags: string) => void;
+  unlink?: (fs: Fs, path: string) => void;
 } = {};
 
 vi.mock('node:fs', async (original) => {
@@ -30,6 +31,7 @@ vi.mock('node:fs', async (original) => {
     fsyncSync: (fd: number) => (hooks.fsync === undefined ? fs.fsyncSync(fd) : hooks.fsync(fs, fd)),
     linkSync: (from: string, to: string) => (hooks.link === undefined ? fs.linkSync(from, to) : hooks.link(fs, from, to)),
     renameSync: (from: string, to: string) => (hooks.rename === undefined ? fs.renameSync(from, to) : hooks.rename(fs, from, to)),
+    unlinkSync: (path: string) => (hooks.unlink === undefined ? fs.unlinkSync(path) : hooks.unlink(fs, path)),
     openSync: (path: string, flags: string, mode?: number) => {
       hooks.open?.(fs, path, flags);
       return fs.openSync(path, flags, mode);
@@ -275,5 +277,31 @@ describe('XMSS index file under write faults', () => {
     clear();
     expect(JSON.parse(readFileSync(state(), 'utf8'))).toEqual({ version: 1, publicKey: 'a1'.repeat(64), next: 1 });
     store.close();
+  });
+});
+
+describe('file store lock under a takeover', () => {
+  it('leaves the lock of a writer that took it over between its look and its removal', async () => {
+    const store = await seeded();
+    const lockPath = join(path, 'lock');
+    const theirs = `${JSON.stringify({ id: 'f'.repeat(32), pid: process.pid + 1, host: 'elsewhere', heartbeatMs: 1000 })}\n`;
+    // Another process breaks the lock and takes it the moment before this one's release touches the file.
+    const takeOver = (fs: Fs, target: string): void => {
+      if (target !== lockPath) return;
+      delete hooks.unlink;
+      delete hooks.rename;
+      fs.writeFileSync(lockPath, theirs);
+    };
+    hooks.unlink = (fs, target) => {
+      takeOver(fs, target);
+      fs.unlinkSync(target);
+    };
+    hooks.rename = (fs, from, to) => {
+      takeOver(fs, from);
+      fs.renameSync(from, to);
+    };
+    await store.close();
+    clear();
+    expect(readFileSync(lockPath, 'utf8')).toBe(theirs);
   });
 });

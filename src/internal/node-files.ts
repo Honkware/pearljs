@@ -229,12 +229,32 @@ export function acquireLock(lockPath: string, options: FileLockOptions = {}): He
   timer.unref();
   const release = (): void => {
     if (!held) return;
-    const mineStill = owned();
     held = false;
     clearInterval(timer);
     process.removeListener('exit', release);
-    // Only its own: a lock someone took over is theirs now.
-    if (mineStill) removeQuietly(lockPath);
+    // Moved aside in one step and only then read, so a look and a removal cannot straddle a takeover;
+    // a lock someone took over is theirs now and goes back, unless a newer one is already in its place.
+    const aside = `${lockPath}.${randomId()}.tmp`;
+    try {
+      renameSync(lockPath, aside);
+    } catch {
+      return;
+    }
+    if (readOwner(aside)?.id !== id) {
+      try {
+        linkSync(aside, lockPath);
+      } catch (error) {
+        // EEXIST: taken again meanwhile. Otherwise no hard links here, and an exclusive create puts it back.
+        if (errnoOf(error) !== 'EEXIST') {
+          try {
+            writeDurably(lockPath, readFileSync(aside, 'utf8'), 'wx');
+          } catch {
+            // Taken again meanwhile.
+          }
+        }
+      }
+    }
+    removeQuietly(aside);
   };
   process.once('exit', release);
   return { owned, release };
