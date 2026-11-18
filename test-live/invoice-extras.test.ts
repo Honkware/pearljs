@@ -35,7 +35,8 @@ import { nodeView, outsider } from './wallets.js';
 import { freePort, startOyster, startPearld } from './processes.js';
 import type { RunningPearld } from './processes.js';
 
-const shop = deriveSigningAccountFromSeed(mnemonicToSeed('uphold above welcome love like stick check swift pretty eye broom increase'), network);
+// A new phrase each run: every file shares one chain.
+const shop = deriveSigningAccountFromSeed(mnemonicToSeed(generateMnemonic()), network);
 const { payPending, lastPayer } = outsider(14);
 const chain = pearldChainClient(pearld);
 let invoiceCount = 0;
@@ -173,9 +174,10 @@ describeLive('invoice index allocation', () => {
     const allocator = new InvoiceIndexAllocator({ deriveAddress: (index) => account.deriveAddress(index), client: chain, gapLimit: 6, reuseAfter: 0 });
     const now = Math.floor(Date.now() / 1000);
     const handed = [];
-    for (let i = 0; i < 6; i += 1) handed.push(await allocator.allocate(now));
+    // Handed out before the invoices made with them, as an allocator records it.
+    for (let i = 0; i < 6; i += 1) handed.push(await allocator.allocate(now - 200));
     expect(handed.map((item) => item.index)).toEqual([0, 1, 2, 3, 4, 5]);
-    await expect(allocator.allocate(now)).rejects.toBeInstanceOf(InvoiceGapError);
+    await expect(allocator.allocate(now - 200)).rejects.toBeInstanceOf(InvoiceGapError);
 
     // Index 4 is paid, index 1 expires unpaid and is handed out again.
     const paid = await payPending(handed[4]!.address, 2_500_000n);

@@ -84,6 +84,13 @@ describeLive('node access', () => {
     const viaFilters = await connectPearld(bareLimited, { network, birthday, broadcast: bareAdmin });
     expect(viaFilters).toMatchObject({ kind: 'filters', capabilities: { limited: true, addrIndex: false } });
     expect(await viaFilters.getTip()).toEqual({ height: birthday, hash: await pearld.getBestBlockHash() });
+    // With the address index, connectPearld returns pearldBackend, which has no crossCheck: an endpoint that is down
+    // is not asked, where filterBackend fails CROSS_CHECK_FAILED. Recorded as found, not as settled behavior.
+    const down = new PearldClient({ url: 'https://127.0.0.1:1', username: 'x', password: 'x' });
+    const unchecked = await connectPearld(pearld, { network, birthday, crossCheck: [down] });
+    expect(unchecked.kind).toBe('pearld');
+    expect(await unchecked.getTip()).toEqual({ height: birthday, hash: await pearld.getBestBlockHash() });
+    await expect(connectPearld(bareLimited, { network, birthday, crossCheck: [down] }).then((chain) => chain.getTip())).rejects.toMatchObject({ code: 'CROSS_CHECK_FAILED' });
   });
 
   it('follows a payment and its spend on the index-free node as the limited user, through the mempool, a reorg and a restart from its store', async () => {

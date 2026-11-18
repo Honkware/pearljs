@@ -147,6 +147,9 @@ export async function startPearld(options: PearldOptions): Promise<RunningPearld
       ...(options.withoutIndexes === true ? [] : ['--txindex', '--addrindex']),
       // Regtest relays non-standard transactions by default; mainnet does not.
       '--rejectnonstd',
+      // pearld answers HTTP 503 past 10 requests in flight (--rpcmaxclients), and
+      // a wallet sync alone sends 8 at once; tests run several clients together.
+      '--rpcmaxclients=64',
       ...(options.extraArgs ?? []),
     ],
     logFile,

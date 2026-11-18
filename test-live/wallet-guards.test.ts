@@ -15,6 +15,7 @@ import {
   deriveSigningAccountFromSeed,
   feeForVsize,
   finalizePsbt,
+  generateMnemonic,
   KeystoreError,
   mnemonicToSeed,
   oysterBackend,
@@ -33,18 +34,6 @@ import { describeLive, FEE_RATE, fund, live, mine, network, oyster, pearld } fro
 import { connection, expectSendMatchesNode, nodeBackend, nodeSocket, nodeView, outpoint, outsider, PASSPHRASE, QUICK_KDF, recordEvents } from './wallets.js';
 
 const { payPending, elsewhere } = outsider(11);
-const PHRASES = [
-  'clap short lion nose economy thing claw lounge caught saddle goat crush',
-  'super hour legend wrap flat victory boss doll audit bronze drill vicious',
-  'century pottery scatter what exhibit differ cake length luxury crash suspect amused',
-  'piece famous february mystery pink ice depth siren patch discover someone shove',
-  'stumble gain jar spatial repeat symbol hire acoustic ghost clip file loyal',
-  'warrior weasel feed fresh rare donkey endless light canoe flash allow column',
-  'knife repeat expire skate screen early noodle spray van business tuna magic',
-  'short proof topple senior exclude puppy pumpkin rally torch cute fatigue wagon',
-  'uphold above welcome love like stick check swift pretty eye broom increase',
-];
-let phraseIndex = 0;
 
 /** A backend whose fee estimate and broadcast a test can replace; everything else is pearldBackend's. */
 function adjustable(base: WalletBackend = nodeBackend) {
@@ -63,14 +52,15 @@ function adjustable(base: WalletBackend = nodeBackend) {
 }
 
 /** A new wallet with its own phrase, funded with one coin of each value and synced. */
-async function funded(values: readonly bigint[], backend: WalletBackend = nodeBackend): Promise<{ wallet: PearlWallet; signer: PearlSigningAccount }> {
-  const mnemonic = PHRASES[phraseIndex++]!;
+async function funded(values: readonly bigint[], backend: WalletBackend = nodeBackend): Promise<{ wallet: PearlWallet; signer: PearlSigningAccount; mnemonic: string }> {
+  // A new phrase each time: every file of the run shares one chain, and a fixed phrase another file uses would bring its coins in.
+  const mnemonic = generateMnemonic();
   const wallet = await PearlWallet.create({ ...connection(createMemoryStore(), backend), mnemonic, passphrase: PASSPHRASE, unlockTimeout: null, kdf: QUICK_KDF });
   const outputs = [];
   for (const value of values) outputs.push({ script: toOutputScript(await wallet.receiveAddress(), network), value });
   if (outputs.length > 0) await fund(outputs);
   await wallet.sync();
-  return { wallet, signer: deriveSigningAccountFromSeed(mnemonicToSeed(mnemonic), network) };
+  return { wallet, signer: deriveSigningAccountFromSeed(mnemonicToSeed(mnemonic), network), mnemonic };
 }
 
 const failure = (promise: Promise<unknown>): Promise<unknown> => promise.then(() => null, (err: unknown) => err);
@@ -314,7 +304,7 @@ describeLive('wallet fee bumps without change', () => {
 
 describeLive('wallet syncs that find old addresses', () => {
   it('finds a payment to an emptied old address within quietSyncInterval incremental syncs, and at once with a notifier', async () => {
-    const mnemonic = PHRASES[phraseIndex++]!;
+    const mnemonic = generateMnemonic();
     const store = createMemoryStore();
     const wallet = await PearlWallet.create({ ...connection(store), quietSyncInterval: 3, mnemonic, passphrase: PASSPHRASE, unlockTimeout: null, kdf: QUICK_KDF });
     const old = await wallet.receiveAddress();
@@ -392,14 +382,14 @@ describeLive('wallet history against the node', () => {
   });
 
   it('refuses to restore a backup whose account record was changed, and writes nothing', async () => {
-    const { wallet } = await funded([2_000_000n]);
+    const { wallet, mnemonic } = await funded([2_000_000n]);
     const keystore = wallet.exportKeystore();
     const backup = await wallet.exportState();
     await wallet.close();
     const key = Object.keys(backup.entries).find((name) => /^account:/.test(name))!;
     const record = backup.entries[key] as { xpub: string };
     // Account 1 of the same seed, with its own origin: a key the keystore could sign for, but not the one it authenticated.
-    const other = deriveSigningAccountFromSeed(mnemonicToSeed(PHRASES[phraseIndex - 1]!), network, 1);
+    const other = deriveSigningAccountFromSeed(mnemonicToSeed(mnemonic), network, 1);
     const xpub = other.watchOnlyAccount().extendedPublicKey();
     const origin = { masterFingerprint: other.watchOnlyAccount().masterFingerprint, path: other.path };
     const store = createMemoryStore();
