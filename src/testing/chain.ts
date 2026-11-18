@@ -436,7 +436,7 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
 
   // ---- steps a test takes
 
-  /** Sets the simulated clock, which stamps the next block. Block times still never fall behind the median of the last eleven. */
+  /** Sets the simulated clock, which stamps the next block. A block's time is still at least a second after its parent's. */
   setTime(seconds: number): void {
     if (!Number.isInteger(seconds) || seconds < 0 || seconds > 0xffffffff) throw new RangeError('time must be Unix seconds');
     this.#time = seconds;
@@ -866,7 +866,8 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
   #assemble(options: MineOptions): Block {
     const parent = this.tip;
     const height = parent.height + 1;
-    const time = Math.max(this.#time, this.medianTimePast() + 1);
+    // Pearl's rule: at least a second after the parent (blockchain.MinTimestampDeltaSeconds).
+    const time = Math.max(this.#time, parent.time + 1);
     const view = new Map<string, SimulatedCoin | null>();
     const lookup = (input: Transaction['ins'][number]): SimulatedCoin | null => {
       const at = outpointOf(input);

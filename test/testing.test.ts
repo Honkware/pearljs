@@ -563,17 +563,17 @@ describe('the clock', () => {
     expect(new SimulatedChain({ network: quick, premine: 1, time: 2_000_000_000 }).tip.time).toBe(2_000_000_000);
   });
 
-  it('moves when a test moves it, and keeps block times ahead of the median', () => {
+  it('moves when a test moves it, and keeps each block time a second past its parent\'s', () => {
     const chain = small();
     chain.advanceTime(86_400);
     const expected = chain.time;
     chain.mine();
     expect(chain.tip.time).toBe(expected);
-    // Set back to before the chain's own blocks, the next one takes the earliest time the rule allows.
+    // Set back to before the chain's own blocks, the next one takes the earliest time Pearl allows.
     chain.setTime(chain.blocks[1]!.time);
-    const median = chain.medianTimePast();
+    const parent = chain.tip.time;
     chain.mine();
-    expect(chain.tip.time).toBe(median + 1);
+    expect(chain.tip.time).toBe(parent + 1);
     expect(() => chain.setTime(-1)).toThrow(RangeError);
     expect(chain.medianTimePast(0)).toBe(chain.blocks[0]!.time);
   });

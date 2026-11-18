@@ -1,19 +1,18 @@
-// A pearld served from a FakeChain (test/wallet-chain.ts): real serialized
-// blocks with merkle roots and hashes, Pearl's basic filter of each block
-// built from the scripts its outputs pay and its inputs spend, the filter
-// header chain, the mempool, and the address index for pearldBackend to
-// compare with. Its switches drop the address and transaction indexes,
-// refuse what pearld refuses its limited user, hide the mempool, or serve a
-// filter or block other than the honest one.
+// A pearld served from a FakeChain (test/wallet-chain.ts): the chain's real
+// blocks, with linked headers, bound certificates and merkle roots, Pearl's
+// basic filter of each block built from the scripts its outputs pay and its
+// inputs spend, the filter header chain, the mempool, and the address index
+// for pearldBackend to compare with. Its switches drop the address and
+// transaction indexes, refuse what pearld refuses its limited user, hide the
+// mempool or the last blocks, or serve a filter, header, block or block hash
+// other than the honest one.
 
 import {
   PEARLD_LIMITED_METHODS,
   PearlRpcError,
-  blockHash,
   blockHashHex,
   buildBasicFilter,
   buildFilter,
-  calculateMerkleRoot,
   encodeFilter,
   filterHeader,
   filterHeaderHex,
@@ -21,6 +20,7 @@ import {
   fromOutputScript,
   networks,
   serializeBlock,
+  serializeBlockHeader,
   type CompactFilter,
   type PearlBlock,
   type Rpc,
@@ -63,6 +63,20 @@ export class FakeNode implements Rpc {
   readonly lyingHeaders = new Map<string, string>();
   /** Serve the block at this height for getblock of another hash. */
   swapBlock: { asked: number; served: number } | null = null;
+  /**
+   * Serve this block at a height in place of the chain's: its hash from
+   * getblockhash, its header and the block itself, and under its hash the
+   * honest block's filter bytes, or with `ownFilter` the forged block's own.
+   */
+  readonly forged = new Map<number, { block: PearlBlock; ownFilter?: boolean }>();
+  /** Serve getblock of a hash with this block in place of the chain's. */
+  readonly servedBlocks = new Map<string, PearlBlock>();
+  /** Report these transactions as confirmed in the block at a height, wherever they are. */
+  readonly misplaced = new Map<string, number>();
+  /** Leave this many of the chain's last blocks out, as a node that has not seen them yet. */
+  behind = 0;
+  /** Fail every request as an unreachable server would. */
+  down = false;
   #cache = new Map<string, Served>();
 
   constructor(
@@ -73,37 +87,31 @@ export class FakeNode implements Rpc {
   /** Every block the chain holds, served as pearld would see it. */
   blocks(): Served[] {
     const served: Served[] = [];
-    let prev: Uint8Array = new Uint8Array(32);
     let prevHeader = '00'.repeat(32);
     const outputs = new Map<string, Uint8Array>();
-    for (const fake of this.chain.blocks) {
-      const id = `${fake.hash}:${hex(prev)}:${(this.extraFilterItems.get(fake.height) ?? []).map(hex).join(',')}`;
+    const all = this.chain.blocks.slice(0, this.chain.blocks.length - this.behind);
+    for (const real of all) {
+      const forged = this.forged.get(real.height);
+      const block = forged?.block ?? real.block;
+      const hash = blockHashHex(block.header);
+      const extra = this.extraFilterItems.get(real.height);
+      const id = `${hash}:${real.hash}:${prevHeader}:${forged?.ownFilter === true}:${(extra ?? []).map(hex).join(',')}`;
       let entry = this.#cache.get(id);
-      const spent = fake.txs.flatMap((tx) => (tx.isCoinbase() ? [] : tx.ins.map((input) => outputs.get(`${prevTxid(input)}:${input.index}`)).filter((s) => s !== undefined)));
+      const spent = block.transactions.flatMap((tx) => (tx.isCoinbase() ? [] : tx.ins.map((input) => outputs.get(`${prevTxid(input)}:${input.index}`)).filter((s) => s !== undefined)));
       if (entry === undefined) {
-        const block: PearlBlock = {
-          certificate: null,
-          header: {
-            version: 1,
-            prevBlock: prev,
-            merkleRoot: calculateMerkleRoot(fake.txs),
-            timestamp: 1767225600 + fake.height * 600,
-            bits: 0x207fffff,
-            proofCommitment: new Uint8Array(32),
-          },
-          transactions: [...fake.txs],
-        };
-        const hash = blockHashHex(block.header);
-        const extra = this.extraFilterItems.get(fake.height);
-        const honest = buildBasicFilter(block, spent);
-        const filter = extra === undefined ? honest : withItems(block, spent, extra, hash);
+        const honestSpent = real.block.transactions.flatMap((tx) => (tx.isCoinbase() ? [] : tx.ins.map((input) => outputs.get(`${prevTxid(input)}:${input.index}`)).filter((s) => s !== undefined)));
+        const own = forged?.ownFilter === true;
+        const source = own ? block : real.block;
+        const filterHash = own ? hash : real.hash;
+        const honest = buildBasicFilter(source, own ? spent : honestSpent);
+        // Served under this block's hash whatever key it was built with.
+        const filter = extra === undefined ? honest : withItems(source, own ? spent : honestSpent, extra, filterHash);
         const header = filterHeaderHex(filterHeader(filter, prevHeader));
-        entry = { height: fake.height, hash, block, filter, header };
+        entry = { height: real.height, hash, block, filter, header };
         this.#cache.set(id, entry);
       }
-      for (const tx of fake.txs) tx.outs.forEach((out, vout) => outputs.set(`${tx.getId()}:${vout}`, Uint8Array.from(out.script)));
+      for (const tx of block.transactions) tx.outs.forEach((out, vout) => outputs.set(`${tx.getId()}:${vout}`, Uint8Array.from(out.script)));
       served.push(entry);
-      prev = blockHash(entry.block.header);
       prevHeader = entry.header;
     }
     return served;
@@ -111,6 +119,7 @@ export class FakeNode implements Rpc {
 
   async call<T = unknown>(method: string, params: readonly unknown[] = []): Promise<T> {
     this.calls.push(method);
+    if (this.down) throw new PearlRpcError('network', method, 'connect ECONNREFUSED');
     const result = this.#answer(method, params);
     this.replyBytes += JSON.stringify(result, (_k, v: unknown) => (typeof v === 'bigint' ? Number(v) : v))?.length ?? 4;
     return result as T;
@@ -130,6 +139,11 @@ export class FakeNode implements Rpc {
       return found;
     };
     const located = (txid: unknown) => {
+      const claimed = this.misplaced.get(txid as string);
+      if (claimed !== undefined) {
+        const tx = [...blocks.flatMap((block) => block.block.transactions), ...[...this.chain.mempool.values()].map((entry) => entry.tx)].find((item) => item.getId() === txid);
+        if (tx !== undefined) return { tx, block: blocks[claimed]! };
+      }
       for (const block of blocks) {
         const index = block.block.transactions.findIndex((tx) => tx.getId() === txid);
         if (index >= 0) return { tx: block.block.transactions[index]!, block };
@@ -158,6 +172,7 @@ export class FakeNode implements Rpc {
       }
       case 'getblockheader': {
         const block = byHash(params[0]);
+        if (params[1] === false) return hex(serializeBlockHeader(block.block.header));
         return { hash: block.hash, height: block.height, confirmations: tip.height - block.height + 1 };
       }
       case 'getcfilter':
@@ -169,7 +184,8 @@ export class FakeNode implements Rpc {
       case 'getblock': {
         let block = byHash(params[0]);
         if (this.swapBlock !== null && block.height === this.swapBlock.asked) block = blocks[this.swapBlock.served]!;
-        if (params[1] === 0) return hex(serializeBlock(block.block));
+        const substitute = this.servedBlocks.get(block.hash);
+        if (params[1] === 0) return hex(serializeBlock(substitute ?? block.block));
         return { hash: block.hash, height: block.height, tx: block.block.transactions.map((tx) => tx.getId()) };
       }
       case 'getrawmempool':

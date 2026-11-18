@@ -302,8 +302,7 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletCh
       }
       return pays || tx.vin.some((input) => 'txid' in input && outpoints.has(`${input.txid}:${input.vout}`));
     };
-    const heights = Array.from({ length: Math.max(0, tip.height - state.height) }, (_, i) => state.height + 1 + i);
-    for (const { height, hash, filter, key } of await fetchBlockFilters(node, heights, concurrency)) {
+    for (const { height, hash, filter, key } of await fetchBlockFilters(node, network, state, tip.height, concurrency)) {
       if (filter.n > 0 && matchFilter(filter, key, script)) {
         for (const tx of (await node.getBlockWithTransactions(hash)).rawtx) {
           if (touches(tx)) found.set(tx.txid, { txid: tx.txid, vin: tx.vin, vout: tx.vout, blockhash: hash, height, ...(tx.blocktime === undefined ? {} : { blocktime: tx.blocktime }) });

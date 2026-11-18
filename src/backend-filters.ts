@@ -23,9 +23,10 @@
 
 import { fromOutputScript, toOutputScript } from './address.js';
 import type { FeeRate } from './amount.js';
-import { checkMerkleRoot, parseBlock } from './block.js';
+import { checkCertificateBinding, checkMerkleRoot, checkWitnessCommitment, parseBlock } from './block.js';
 import { blockHashHex } from './blockheader.js';
 import type { AddressPayment, BlockRef, ChainTransaction } from './client.js';
+import { checkCertificateRules } from './consensus.js';
 import { PearlError, StoreError } from './errors.js';
 import { decodeFilter, encodeFilter, filterHeader, filterHeaderHex, filterKey, matchAnyFilter } from './gcs.js';
 import type { CompactFilter } from './gcs.js';
@@ -61,11 +62,18 @@ export interface FilterBackendOptions {
   /** Requests at once. Default 8; a client made with `batch` sends them together. */
   concurrency?: number;
   /**
-   * Other pearld endpoints whose filter headers must agree with the ones
-   * computed here, one getcfilterheader each per round. An endpoint that does
-   * not know a block is skipped for that round.
+   * Other pearld endpoints that must confirm what the node serves: at the
+   * block before the birthday and at the last block of every round, each
+   * must have the same block at that height and the same filter header for
+   * it. An endpoint that cannot be asked or disagrees fails the sync.
    */
   crossCheck?: readonly Rpc[];
+  /**
+   * How many blocks apart the tips of the node and the cross-check endpoints
+   * may be. The scan goes no further than the lowest of them, and a sync
+   * fails with CROSS_CHECK_FAILED when they are further apart. Default 6.
+   */
+  crossCheckLag?: number;
   /** Where broadcast sends transactions instead of `rpc`; see PearldBackendOptions. */
   broadcast?: Rpc;
   /** Keep each block's filter in the store, so a newly watched address needs no filter fetched again. Default true. */
@@ -82,7 +90,7 @@ export interface FilterBackendOptions {
 export interface FilterSyncProgress {
   /** The last block scanned. */
   readonly height: number;
-  /** The node's tip when the sync began. */
+  /** The height this sync scans to: the node's tip when it began, or the lowest cross-check endpoint's. */
   readonly tip: number;
   /** Blocks downloaded in this sync because their filter matched. */
   readonly blocksFetched: number;
@@ -175,10 +183,11 @@ const ZERO_HEADER = '00'.repeat(32);
  * nodes is what catches that.
  */
 export function filterBackend(rpc: Rpc, options: FilterBackendOptions): FilterBackend {
-  const { network, birthday, batchSize = 100, concurrency = 8, keepFilters = true, maxAge = 1000 } = options;
+  const { network, birthday, batchSize = 100, concurrency = 8, keepFilters = true, maxAge = 1000, crossCheckLag = 6 } = options;
   if (!Number.isSafeInteger(birthday) || birthday < 0) throw new RangeError('birthday must be a block height');
   if (!Number.isSafeInteger(batchSize) || batchSize < 1) throw new RangeError('batchSize must be a positive integer');
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new RangeError('concurrency must be a positive integer');
+  if (!Number.isSafeInteger(crossCheckLag) || crossCheckLag < 0) throw new RangeError('crossCheckLag must be a number of blocks');
   const store = options.store ?? createMemoryStore();
   const prefix = options.prefix ?? 'filters/';
   const now = options.now ?? Date.now;
@@ -280,7 +289,13 @@ export function filterBackend(rpc: Rpc, options: FilterBackendOptions): FilterBa
       if (blockHashHex(block.header) !== hash) {
         throw new PearlError('BACKEND_RESPONSE', `getblock ${hash} returned block ${blockHashHex(block.header)}`);
       }
+      // The hash pins the header, which pins the transactions; the witnesses and the certificate are checked as pearld would.
       checkMerkleRoot(block);
+      checkWitnessCommitment(block);
+      if (height > 0) {
+        checkCertificateBinding(block);
+        checkCertificateRules(block.certificate, network, height);
+      }
       return { block, height, hash };
     });
     blocksFetched += blocks.length;
@@ -291,35 +306,54 @@ export function filterBackend(rpc: Rpc, options: FilterBackendOptions): FilterBa
   const matches = (filter: CompactFilter, filterKeyBytes: Uint8Array, among: readonly Uint8Array[]): boolean =>
     among.length > 0 && filter.n > 0 && matchAnyFilter(filter, filterKeyBytes, among);
 
-  // The filter header every other source must agree with at `hash`.
-  const crossCheck = async (hash: string, header: string, primaryToo: boolean): Promise<void> => {
-    const sources = primaryToo ? [node, ...others] : others;
-    await Promise.all(
-      sources.map(async (source, i) => {
-        let theirs: string;
-        try {
-          theirs = await source.getCFilterHeader(hash);
-        } catch (err) {
-          // A node that has not seen the block neither confirms nor contradicts.
-          if (source !== node && err instanceof PearlRpcError && err.kind === 'rpc' && err.rpcCode === RPC_ERROR_CODES.INVALID_ADDRESS_OR_KEY) return;
-          throw err;
-        }
-        if (theirs !== header) {
-          const who = source === node ? 'the node' : `cross-check endpoint ${primaryToo ? i : i + 1}`;
-          throw new PearlError('FILTER_HEADER_MISMATCH', `${who} has filter header ${theirs} for block ${hash}, where the filters chain to ${header}`);
-        }
-      }),
-    );
+  // Runs a request to cross-check endpoint i (from 0); one that cannot be asked fails the sync.
+  const ask = async <T>(i: number, run: (endpoint: PearldRpc) => Promise<T>): Promise<T> => {
+    try {
+      return await run(others[i]!);
+    } catch (err) {
+      throw new PearlError('CROSS_CHECK_FAILED', `cross-check endpoint ${i + 1} could not be asked: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
+    }
+  };
+
+  // The node, when asked, and every cross-check endpoint must have block
+  // `hash` at `height` and filter header `header` for it.
+  const confirm = async (height: number, hash: string, header: string, nodeToo: boolean): Promise<void> => {
+    const checks = others.map(async (_, i) => {
+      const theirs = await ask(i, (endpoint) => endpoint.getBlockHash(height));
+      if (theirs !== hash) throw new PearlError('CROSS_CHECK_FAILED', `cross-check endpoint ${i + 1} has block ${theirs} at height ${height}, where the node has ${hash}`);
+      const theirHeader = await ask(i, (endpoint) => endpoint.getCFilterHeader(hash));
+      if (theirHeader !== header) throw new PearlError('FILTER_HEADER_MISMATCH', `cross-check endpoint ${i + 1} has filter header ${theirHeader} for block ${hash}, where the filters chain to ${header}`);
+    });
+    if (nodeToo) {
+      checks.push(
+        node.getCFilterHeader(hash).then((theirs) => {
+          if (theirs !== header) throw new PearlError('FILTER_HEADER_MISMATCH', `the node has filter header ${theirs} for block ${hash}, where the filters chain to ${header}`);
+        }),
+      );
+    }
+    await Promise.all(checks);
+  };
+
+  // The highest block every source has: the node's tip, or the lowest
+  // cross-check endpoint's when that is lower, within crossCheckLag.
+  const reach = async (tip: number): Promise<number> => {
+    if (others.length === 0) return tip;
+    const theirs = await Promise.all(others.map((_, i) => ask(i, async (endpoint) => safeHeight(await endpoint.getBlockCount(), 'getblockcount'))));
+    const all = [tip, ...theirs];
+    if (Math.max(...all) - Math.min(...all) > crossCheckLag) {
+      throw new PearlError('CROSS_CHECK_FAILED', `the node's tip is at height ${tip} and the cross-check endpoints' at ${theirs.join(', ')}, more than crossCheckLag (${crossCheckLag}) blocks apart`);
+    }
+    return Math.min(...all);
   };
 
   // The block before the birthday and its filter header, or null while the
   // chain is shorter than that.
-  const anchor = async (tip: BlockRef): Promise<Cursor | null> => {
+  const anchor = async (reached: number): Promise<Cursor | null> => {
     if (birthday === 0) return { height: -1, hash: '', header: ZERO_HEADER };
-    if (tip.height < birthday - 1) return null;
+    if (reached < birthday - 1) return null;
     const hash = await node.getBlockHash(birthday - 1);
     const header = await node.getCFilterHeader(hash);
-    await crossCheck(hash, header, false);
+    await confirm(birthday - 1, hash, header, false);
     return { height: birthday - 1, hash, header };
   };
 
@@ -327,7 +361,7 @@ export function filterBackend(rpc: Rpc, options: FilterBackendOptions): FilterBa
 
   // Undoes blocks the node no longer has on its best chain, back to the
   // last height where the stored hash and the node's agree.
-  const reconcile = async (tip: BlockRef): Promise<void> => {
+  const reconcile = async (tip: BlockRef, reached: number): Promise<void> => {
     const current = state!;
     if (current.cursor.height < birthday) return;
     if ((await hashAt(current.cursor.height, tip)) === current.cursor.hash) return;
@@ -343,7 +377,7 @@ export function filterBackend(rpc: Rpc, options: FilterBackendOptions): FilterBa
     }
     if (common === null) {
       // Back past the birthday: the anchor block itself may be gone.
-      const fresh = await anchor(tip);
+      const fresh = await anchor(reached);
       common = fresh !== null && fresh.hash === current.anchor.hash ? current.anchor : null;
       if (common === null) {
         await disconnect(current.anchor.height, null);
@@ -374,25 +408,26 @@ export function filterBackend(rpc: Rpc, options: FilterBackendOptions): FilterBa
 
   // Scans one round of blocks after the cursor. False when the node's chain
   // changed under the round, so the caller reconciles and tries again.
-  const scanRound = async (to: number): Promise<boolean> => {
+  const scanRound = async (to: number, tip: BlockRef): Promise<boolean> => {
     const current = state!;
-    const heights = Array.from({ length: to - current.cursor.height }, (_, i) => current.cursor.height + 1 + i);
+    const moved = async (): Promise<boolean> => !(await stillOn(current.cursor)) || (await node.getBestBlock()).hash !== tip.hash;
     let filters: HeightFilter[];
     try {
-      filters = await fetchBlockFilters(node, heights, concurrency);
+      filters = await fetchBlockFilters(node, network, current.cursor, to, concurrency);
     } catch (err) {
-      // A height past a tip that moved back, or a block that left the chain.
-      if (err instanceof PearlRpcError && err.kind === 'rpc' && !((await stillOn(current.cursor)) && (await node.getBlockCount()) >= to)) return false;
+      // A height past a tip that moved back, a block that left the chain, or headers from both sides of a reorganization.
+      const changing = (err instanceof PearlRpcError && err.kind === 'rpc') || (err instanceof PearlError && err.code === 'BLOCK_HEADER_INVALID');
+      if (changing && (await moved())) return false;
       throw err;
     }
     let prev = current.cursor.header;
     const headers = filters.map(({ filter }) => (prev = filterHeaderHex(filterHeader(filter, prev))));
     const last = filters.at(-1)!;
     try {
-      await crossCheck(last.hash, prev, true);
+      // The headers link every block of the round to the last, and the filter headers every filter, so confirming the last confirms the round.
+      await confirm(last.height, last.hash, prev, true);
     } catch (err) {
-      // The node's chain may have moved between the hashes and the filters.
-      if (err instanceof PearlError && err.code === 'FILTER_HEADER_MISMATCH' && !(await stillOn(current.cursor))) return false;
+      if (err instanceof PearlError && (err.code === 'FILTER_HEADER_MISMATCH' || err.code === 'CROSS_CHECK_FAILED') && (await moved())) return false;
       throw err;
     }
     const list = [...scripts].map((script) => fromHex(script));
@@ -474,23 +509,24 @@ export function filterBackend(rpc: Rpc, options: FilterBackendOptions): FilterBa
       blocksFetched = 0;
       const best = await node.getBestBlock();
       const tip: BlockRef = { height: safeHeight(best.height, 'getbestblock'), hash: best.hash };
+      const reached = await reach(tip.height);
       for (let attempt = 0; ; attempt++) {
         signal?.throwIfAborted();
-        if (state !== null) await reconcile(tip);
+        if (state !== null) await reconcile(tip, reached);
         if (state === null) {
-          const start = await anchor(tip);
+          const start = await anchor(reached);
           if (start === null) break;
           state = { version: STATE_VERSION, network: network.name, birthday, anchor: start, cursor: start };
           await store.set(key.state, state as unknown as JsonValue);
         }
         let changed = false;
-        while (state!.cursor.height < tip.height) {
+        while (state!.cursor.height < reached) {
           signal?.throwIfAborted();
-          if (!(await scanRound(Math.min(tip.height, state!.cursor.height + batchSize)))) {
+          if (!(await scanRound(Math.min(reached, state!.cursor.height + batchSize), tip))) {
             changed = true;
             break;
           }
-          onProgress?.({ height: state!.cursor.height, tip: tip.height, blocksFetched });
+          onProgress?.({ height: state!.cursor.height, tip: reached, blocksFetched });
         }
         if (!changed) break;
         if (attempt >= 3) throw new PearlError('BACKEND_RESPONSE', 'the node\'s chain kept changing under the filter scan; try again');
@@ -518,13 +554,21 @@ export function filterBackend(rpc: Rpc, options: FilterBackendOptions): FilterBa
         const list = added.map((script) => fromHex(script));
         const records = (await store.list(key.blocks)) as [string, [string, string, string | null]][];
         const matched: { height: number; hash: string }[] = [];
-        const missing: { height: number; hash: string }[] = [];
-        for (const [stored, [hash, , filter]] of records) {
+        const missing: { height: number; hash: string; prev: string; header: string }[] = [];
+        let prevHeader = state.anchor.header;
+        for (const [stored, [hash, header, filter]] of records) {
           const height = Number(stored.slice(key.blocks.length));
-          if (filter === null) missing.push({ height, hash });
+          if (filter === null) missing.push({ height, hash, prev: prevHeader, header });
           else if (matches(decodeFilter(filter), filterKey(hash), list)) matched.push({ height, hash });
+          prevHeader = header;
         }
-        const refetched = await mapLimit(missing, concurrency, async ({ height, hash }) => ({ height, hash, ...(await node.getCFilter(hash)) }));
+        // A filter fetched again must chain to the header confirmed when its block was scanned.
+        const refetched = await mapLimit(missing, concurrency, async ({ height, hash, prev, header }) => {
+          const fetched = await node.getCFilter(hash);
+          const theirs = filterHeaderHex(filterHeader(fetched.filter, prev));
+          if (theirs !== header) throw new PearlError('FILTER_HEADER_MISMATCH', `the node's filter for block ${hash} chains to ${theirs}, where the scan confirmed ${header}`);
+          return { height, hash, ...fetched };
+        });
         for (const { height, hash, filter, key: k } of refetched) if (matches(filter, k, list)) matched.push({ height, hash });
         matched.sort((a, b) => a.height - b.height);
         await fetchMatches(matched, writes);
@@ -545,6 +589,18 @@ export function filterBackend(rpc: Rpc, options: FilterBackendOptions): FilterBa
   };
 
   const tipHeight = (): number => state?.cursor.height ?? -1;
+
+  // Whether the node's claim that a transaction is in a block holds: the
+  // block is one the scan confirmed at that height, and holds the transaction.
+  const inScannedBlock = async (txid: string, block: BlockRef): Promise<boolean> => {
+    if (state === null || block.height < birthday || block.height > state.cursor.height) return false;
+    const record = (await store.get(key.block(block.height))) as [string, string, string | null] | undefined;
+    if (record?.[0] !== block.hash) return false;
+    const fetched = parseBlock(await node.getRawBlock(block.hash));
+    if (blockHashHex(fetched.header) !== block.hash) return false;
+    checkMerkleRoot(fetched);
+    return fetched.transactions.some((tx) => transactionId(tx) === txid);
+  };
   const blockRef = (item: Found): BlockRef => ({ height: item.height, hash: item.hash, time: item.time });
 
   const getUtxos = async (watched: readonly Watched[]): Promise<WalletUtxo[]> => {
@@ -637,11 +693,13 @@ export function filterBackend(rpc: Rpc, options: FilterBackendOptions): FilterBa
       const item = found.get(txid);
       if (item !== undefined) return { txid, block: blockRef(item) };
       if (pending.has(txid)) return { txid, block: null };
-      return base.getTransaction(txid).catch((err: unknown) => {
+      const told = await base.getTransaction(txid).catch((err: unknown) => {
         // Without --txindex pearld cannot say anything of a confirmed transaction it did not find for us.
         if (err instanceof PearlError && err.code === 'BACKEND_MISSING_INDEX') return null;
         throw err;
       });
+      if (told === null || told.block === null) return told;
+      return (await inScannedBlock(txid, told.block)) ? told : null;
     },
 
     async getRawTransaction(txid) {
@@ -649,7 +707,9 @@ export function filterBackend(rpc: Rpc, options: FilterBackendOptions): FilterBa
       const item = found.get(txid) ?? pending.get(txid);
       if (item !== undefined) return item.hex;
       try {
-        return await node.getRawTransactionHex(txid);
+        const hex = await node.getRawTransactionHex(txid);
+        if (transactionId(parseTransaction(hex)) !== txid) throw new PearlError('BACKEND_RESPONSE', `getrawtransaction ${txid} returned transaction ${transactionId(parseTransaction(hex))}`);
+        return hex;
       } catch (err) {
         if (err instanceof PearlRpcError && err.rpcCode === RPC_ERROR_CODES.INVALID_ADDRESS_OR_KEY) return null;
         throw err;

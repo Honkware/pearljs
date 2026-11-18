@@ -1096,6 +1096,11 @@ export abstract class PearldMethods implements Rpc {
     return this.call('getblockheader', [hash, true]);
   }
 
+  /** The block's 108-byte header as bytes, ready for parseBlockHeader. Code -5 for a hash pearld does not know. */
+  async getRawBlockHeader(hash: string): Promise<Uint8Array> {
+    return fromHex(await this.call<string>('getblockheader', [hash, false]), 'expected hex from the server');
+  }
+
   /**
    * Headers after the first locator on the best chain, up to hashStop or
    * 100 of them (wire.MaxBlockHeadersPerMsg). Each is hex of the block as

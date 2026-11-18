@@ -12,6 +12,8 @@ import {
   probePearld,
   PearlRpcError,
   assembleScriptTree,
+  blockHash,
+  blockHashHex,
   buildFilter,
   checksigScript,
   createInvoice,
@@ -23,9 +25,11 @@ import {
   oysterBackend,
   pearldBackend,
   refreshInvoice,
+  serializeBlockHeader,
   spendableUtxos,
   sumBalance,
   toOutputScript,
+  type PearlBlockHeader,
 } from '../src/index.js';
 import {
   blockHeights,
@@ -201,7 +205,16 @@ describe('pearld backend and P2MR addresses', () => {
   const script = p2mr({ merkleRoot: tree.root }).output;
   const address = fromOutputScript(script, network);
   const other = toOutputScript(receive0, network);
-  const hashOf = (height: number): string => height.toString(16).padStart(64, '0');
+  // Linked headers, so the scan's header checks pass; a variant at a height gives that block and the ones after it other hashes.
+  const headerOf = (height: number, variants: ReadonlyMap<number, number> = new Map()): PearlBlockHeader => ({
+    version: 1,
+    prevBlock: height === 0 ? new Uint8Array(32) : blockHash(headerOf(height - 1, variants)),
+    merkleRoot: new Uint8Array(32).fill(variants.get(height) ?? 0),
+    timestamp: 1767225600 + height * 600,
+    bits: network.powLimitBits,
+    proofCommitment: new Uint8Array(32),
+  });
+  const hashOf = (height: number, variants?: ReadonlyMap<number, number>): string => blockHashHex(headerOf(height, variants));
   const vout = (n: number, to: Uint8Array, value: bigint) => ({ n, value, scriptPubKey: { hex: Buffer.from(to).toString('hex'), address: fromOutputScript(to, network) } });
   const tx = (txid: string, spends: [string, number][], pays: [Uint8Array, bigint][]) => ({
     txid,
@@ -215,10 +228,10 @@ describe('pearld backend and P2MR addresses', () => {
     const blocks: ReturnType<typeof tx>[][] = [[], [tx(funding, [['ff'.repeat(32), 0]], [[script, 700n], [script, 300n], [other, 5n]])], [tx('d4'.repeat(32), [], [[other, 9n]])], [tx(spend, [[funding, 0]], [[other, 650n]])]];
     const mempool = [tx(pending, [[funding, 1]], [[script, 250n]])];
     const calls: string[] = [];
-    // A replaced block gets another hash at its height.
-    const renamed = new Map<number, string>();
-    const hashAt = (height: number): string => renamed.get(height) ?? hashOf(height);
-    const heightOf = (hash: string): number => [...renamed].find(([, name]) => name === hash)?.[0] ?? parseInt(hash, 16);
+    // A replaced block gets another header at its height.
+    const renamed = new Map<number, number>();
+    const hashAt = (height: number): string => hashOf(height, renamed);
+    const heightOf = (hash: string): number => blocks.findIndex((_, height) => hashAt(height) === hash);
     const rpc = {
       async call<T>(method: string, params: readonly unknown[] = []): Promise<T> {
         calls.push(method);
@@ -235,7 +248,7 @@ describe('pearld backend and P2MR addresses', () => {
             case 'getblock':
               return { rawtx: blocks[heightOf(params[0] as string)] };
             case 'getblockheader':
-              return { height: heightOf(params[0] as string) };
+              return params[1] === false ? Buffer.from(serializeBlockHeader(headerOf(heightOf(params[0] as string), renamed))).toString('hex') : { height: heightOf(params[0] as string) };
             case 'getrawmempool':
               return mempool.map((item) => item.txid);
             case 'getrawtransaction':
@@ -283,7 +296,7 @@ describe('pearld backend and P2MR addresses', () => {
     expect(filters()).toBe(5);
     // The block is replaced by one without it: the scan runs again from the start and the output is back.
     blocks.splice(3, 2, []);
-    renamed.set(3, 'ee'.repeat(32));
+    renamed.set(3, 0xee);
     expect(await backend.getUtxos([address])).toEqual([
       { txid: funding, vout: 0, value: 700n, script, address, confirmations: 3, coinbase: false },
       { txid: funding, vout: 1, value: 300n, script, address, confirmations: 3, coinbase: false },
