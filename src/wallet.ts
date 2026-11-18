@@ -2124,7 +2124,11 @@ export class PearlWallet {
         const { feeRate, maxFeeRate } = await this.#feeRates(options);
         const record = this.#account(options.account);
         const destination = this.#issue(record, false, options.label ?? 'sweep');
-        const signed = sweepKey(privateKey, { network: this.network, utxos, destination, feeRate, minConfirmations: 0, coinbaseMaturity: this.network.coinbaseMaturity });
+        const spend = { network: this.network, utxos, destination, feeRate, minConfirmations: 0, coinbaseMaturity: this.network.coinbaseMaturity };
+        // Held to the ceiling before the key signs: sweepKey builds this same payment.
+        const unsigned = buildPayment({ ...spend, recipients: [{ address: destination, amount: 'max' }] });
+        checkFeeCeiling(unsigned.transaction, unsigned.prevouts, unsigned.vsize, maxFeeRate);
+        const signed = sweepKey(privateKey, spend);
         checkFeeCeiling(signed.transaction, signed.prevouts, signed.vsize, maxFeeRate);
         const entry = this.#record(signed.transaction, signed.prevouts, { broadcast: false, changeOutput: null, label: options.label });
         await this.#flush();

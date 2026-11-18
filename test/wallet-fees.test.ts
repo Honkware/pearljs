@@ -3,13 +3,41 @@
 // signed or recorded, whether the rate came from the caller or the backend,
 // and a rate the backend estimates is checked like any other answer of its.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_MAX_FEE_RATE, encodeWif, keyPathAddress, networks, parsePearl } from '../src/index.js';
 import type { PearlWallet } from '../src/index.js';
+import type * as Ecc from 'tiny-secp256k1';
+import type * as Builder from '../src/builder.js';
 import { FakeChain, STRANGER, newWallet } from './wallet-chain.js';
 
 const network = networks.regtest;
 const prl = (text: string): bigint => parsePearl(text);
+// Schnorr signatures made, so a test can tell a refusal before signing from one after, and a
+// switch that makes every payment built pay this much more fee than its rate asks.
+const signatures = vi.hoisted(() => ({ count: 0 }));
+const overpay = vi.hoisted(() => ({ by: 0n }));
+vi.mock('../src/builder.js', async (importOriginal) => {
+  const builder = await importOriginal<typeof Builder>();
+  return {
+    ...builder,
+    buildPayment: (...args: Parameters<typeof builder.buildPayment>) => {
+      const payment = builder.buildPayment(...args);
+      if (overpay.by > 0n) payment.transaction.outs[0]!.value -= overpay.by;
+      return payment;
+    },
+  };
+});
+vi.mock('tiny-secp256k1', async (importOriginal) => {
+  const ecc = await importOriginal<typeof Ecc>();
+  return {
+    ...ecc,
+    signSchnorr: (...args: Parameters<typeof ecc.signSchnorr>) => {
+      signatures.count += 1;
+      return ecc.signSchnorr(...args);
+    },
+  };
+});
+
 const feeTooHigh = expect.objectContaining({ name: 'SigningError', code: 'FEE_TOO_HIGH' });
 const pay = (amount: string) => [{ address: STRANGER, amount: prl(amount) }];
 
@@ -88,12 +116,31 @@ describe('wallet: fee ceiling', () => {
     chain.mine();
     const wif = encodeWif(key, network);
     chain.feeRate = prl('1');
+    signatures.count = 0;
     await expect(wallet.sweep({ wif })).rejects.toEqual(feeTooHigh);
     await expect(wallet.sweep({ wif, feeRate: 20_000n, maxFeeRate: 10_000n })).rejects.toEqual(feeTooHigh);
+    expect(signatures.count).toBe(0);
     expect(wallet.addresses()).toHaveLength(0);
     expect(chain.mempool.size).toBe(0);
     const swept = await wallet.sweep({ wif, feeRate: prl('1'), maxFeeRate: prl('1') });
     expect(swept.fee).toBeGreaterThan(prl('0.1'));
+  });
+
+  it('refuses a sweep whose fee comes out above the ceiling before the key signs anything', async () => {
+    const chain = new FakeChain();
+    const wallet = await newWallet(chain);
+    const key = new Uint8Array(32).fill(7);
+    chain.pay(keyPathAddress(key, network), prl('3'));
+    chain.mine();
+    signatures.count = 0;
+    overpay.by = prl('1');
+    try {
+      await expect(wallet.sweep({ wif: encodeWif(key, network), feeRate: 2000n })).rejects.toEqual(feeTooHigh);
+    } finally {
+      overpay.by = 0n;
+    }
+    expect(signatures.count).toBe(0);
+    expect(chain.mempool.size).toBe(0);
   });
 
   it('holds imported and XMSS coins to the ceiling, and spends no XMSS index on a refused payment', async () => {
