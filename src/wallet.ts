@@ -1952,11 +1952,21 @@ export class PearlWallet {
     });
   }
 
-  /** Releases what a prepared send holds. Returns false when there is no such hold any more. */
+  /**
+   * Releases what a prepared send holds. Returns false when there is no such
+   * hold any more. WALLET_TRANSACTION_KNOWN, and the hold stays, when the
+   * signer has broadcast it and the backend holds it.
+   */
   async cancelPrepared(id: string): Promise<boolean> {
     return this.#exclusive(async () => {
       this.#prunePrepared();
-      if (!this.#prepared.delete(id)) return false;
+      const record = this.#prepared.get(id);
+      if (record === undefined) return false;
+      const txid = record.tx.getId();
+      if ((await this.#backend.getTransaction(txid)) !== null) {
+        throw new WalletError('WALLET_TRANSACTION_KNOWN', `prepared transaction ${txid} was broadcast and the backend holds it, so its coins stay held; the next sync records it`);
+      }
+      this.#prepared.delete(id);
       this.#del(`prepared:${id}`);
       return true;
     });
@@ -2126,13 +2136,19 @@ export class PearlWallet {
 
   /**
    * Gives up on a pending transaction that will not confirm: its inputs
-   * become spendable again. If it confirms after all, the next sync takes
-   * it back.
+   * become spendable again. WALLET_TRANSACTION_KNOWN, and nothing is freed,
+   * while the backend holds it in its mempool or a block. If it is seen
+   * there later, the wallet counts it again.
    */
   async abandon(txid: string): Promise<void> {
     await this.#exclusive(async (events) => {
       const entry = this.#txs.get(txid);
       if (entry === undefined || entry.status !== 'active' || entry.block !== null) throw new WalletError('WALLET_NOT_REPLACEABLE', `transaction ${txid} is not a pending transaction of this wallet`);
+      const found = await this.#backend.getTransaction(txid);
+      if (found !== null) {
+        this.#observe(entry, found.block, events);
+        throw new WalletError('WALLET_TRANSACTION_KNOWN', `transaction ${txid} is ${found.block === null ? "in the backend's mempool" : `in block ${found.block.hash}`} and may still confirm, so its coins stay spent`);
+      }
       entry.status = 'abandoned';
       this.#putTx(entry);
       events.push(['conflict', { txid, status: 'abandoned', by: null }]);
@@ -2935,7 +2951,7 @@ export class PearlWallet {
         changed = true;
       }
       // Back in the mempool, so active again unless an active transaction still spends its inputs.
-      if (entry.status === 'conflicted' || entry.status === 'orphaned') {
+      if (entry.status === 'conflicted' || entry.status === 'orphaned' || entry.status === 'abandoned') {
         const spentBy = this.#ledger().spentBy;
         const clash = entry.tx.ins.some((input) => {
           const spender = spentBy.get(outpointKey(prevTxid(input), input.index));
@@ -3042,7 +3058,17 @@ export class PearlWallet {
   // gone; a gone one is conflicted when another transaction spends one of
   // its inputs, and missing otherwise.
   async #checkPending(events: PendingEvent[]): Promise<void> {
+    let spentBy: Map<string, string> | undefined;
     for (const entry of [...this.#txs.values()]) {
+      if (entry.status === 'abandoned') {
+        // One whose inputs nothing else of the wallet's spends can still reach a block, and counts again once seen.
+        spentBy ??= this.#ledger().spentBy;
+        if (entry.tx.ins.some((input) => spentBy!.has(outpointKey(prevTxid(input), input.index)))) continue;
+        this.#signal?.throwIfAborted();
+        const found = await this.#backend.getTransaction(entry.txid);
+        if (found !== null) this.#observe(entry, found.block, events);
+        continue;
+      }
       if (entry.status !== 'active' || entry.block !== null) continue;
       this.#signal?.throwIfAborted();
       const found = await this.#backend.getTransaction(entry.txid);
@@ -3223,7 +3249,7 @@ export class PearlWallet {
         throw new WalletError('WALLET_BROADCAST_REFUSED', `the node refused transaction ${entry.txid}: ${(err as Error).message}`, { cause: err });
       }
       if (outcome === 'unknown') {
-        throw new WalletError('WALLET_BROADCAST_UNCERTAIN', `broadcasting ${entry.txid} failed; it stays recorded as not broadcast, so call rebroadcast or abandon: ${(err as Error).message}`, { cause: err });
+        throw new WalletError('WALLET_BROADCAST_UNCERTAIN', `broadcasting ${entry.txid} failed and it may have reached the node; it stays recorded as not broadcast. Call refresh to see whether the backend has it, then rebroadcast; abandon only frees its coins once the backend holds it in neither its mempool nor a block: ${(err as Error).message}`, { cause: err });
       }
     }
     entry.broadcast = true;

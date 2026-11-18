@@ -112,4 +112,41 @@ describe('wallet: broadcast replies', () => {
     await wallet.abandon(txid);
     expect(wallet.balance().confirmed).toBe(prl('3'));
   });
+
+  it('does not abandon a send the node took though the reply was lost, so paying again cannot pay twice', async () => {
+    const { chain, wallet, accept } = await funded();
+    chain.broadcast = async (hex) => {
+      await accept(hex);
+      throw new PearlRpcError('network', 'sendrawtransaction', 'socket hang up');
+    };
+    const err = await wallet.send(payment).catch((e: unknown) => e);
+    expect(err).toMatchObject({ code: 'WALLET_BROADCAST_UNCERTAIN' });
+    const txid = wallet.history()[0]!.txid;
+    chain.broadcast = accept;
+    await expect(wallet.abandon(txid)).rejects.toMatchObject({ code: 'WALLET_TRANSACTION_KNOWN' });
+    // A larger coin arrives; with the first send's coins still spent, the balance holds no 1 PRL to pay again from them.
+    chain.pay(await wallet.receiveAddress(), prl('10'));
+    chain.mine();
+    await wallet.sync();
+    expect(wallet.transaction(txid)).toMatchObject({ status: 'confirmed' });
+    expect(wallet.balance().confirmed).toBe(prl('12') - wallet.transaction(txid)!.fee!);
+    expect(await wallet.rebroadcast()).toEqual({ accepted: [], refused: [], failed: [] });
+    expect(err).toMatchObject({ message: expect.stringContaining('Call refresh') });
+  });
+
+  it('counts an abandoned send again once the backend shows it, in the mempool or a block', async () => {
+    for (const how of ['refresh', 'sync'] as const) {
+      const { chain, wallet, accept } = await funded();
+      chain.failNextBroadcast = true;
+      await expect(wallet.send(payment)).rejects.toMatchObject({ code: 'WALLET_BROADCAST_UNCERTAIN' });
+      const entry = wallet.history()[0]!;
+      await wallet.abandon(entry.txid);
+      expect(wallet.balance().confirmed).toBe(prl('3'));
+      // It reached a node after all, and comes to this one.
+      await accept(wallet.transaction(entry.txid)!.hex);
+      await wallet[how]();
+      expect(wallet.transaction(entry.txid)).toMatchObject({ status: 'pending' });
+      expect(wallet.balance().confirmed).toBe(0n);
+    }
+  });
 });

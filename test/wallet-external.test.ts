@@ -138,6 +138,17 @@ describe('wallet: payments signed elsewhere', () => {
     expect(again.inputs).toEqual(brief.inputs);
   });
 
+  it('keeps holding a prepared send the signer broadcast itself, and records it at the next sync', async () => {
+    const { chain, wallet } = await watching(['3']);
+    const prepared = await wallet.prepareSend(payment);
+    await chain.broadcast(signElsewhere(prepared).toHex());
+    await expect(wallet.cancelPrepared(prepared.id!)).rejects.toMatchObject({ code: 'WALLET_TRANSACTION_KNOWN' });
+    expect(wallet.balance().locked).toBe(prl('3'));
+    await wallet.sync();
+    expect(wallet.transaction(prepared.txid)).toMatchObject({ status: 'pending', direction: 'outgoing' });
+    expect(wallet.balance().confirmed).toBe(0n);
+  });
+
   it('keeps a hold across a restart', async () => {
     const { chain, store, wallet } = await watching(['3']);
     const prepared = await wallet.prepareSend(payment);
