@@ -515,6 +515,16 @@ export interface PsbtPaymentExpectations {
   recipients: readonly { address: string; amount: bigint }[];
   /** The highest fee to accept, in grain. No limit unless given. */
   maxFee?: bigint;
+  /**
+   * The account's next unused change index. Change is accepted at an index
+   * below it plus gapLimit, where a restore scanning the change chain finds
+   * it. 0 unless given.
+   */
+  nextChangeIndex?: number;
+  /** How far past nextChangeIndex change may be. 250 (OYSTER_RECOVERY_WINDOW, the gap a restore scans) unless given. */
+  gapLimit?: number;
+  /** Accept change on the account's receive chain as well. False unless given. */
+  receiveChainChange?: boolean;
 }
 
 /** What checkPsbtPayment found. Amounts are in grain. */
@@ -539,16 +549,22 @@ export interface PsbtPaymentSummary {
  * all of them, so a PSBT that understates or overstates one yields a
  * transaction no node accepts, not a larger fee.
  *
+ * Change must be on the account's change chain, below nextChangeIndex plus
+ * gapLimit, so a restore of the account finds it.
+ *
  * Throws a SigningError: PSBT_RECIPIENT_MISSING when no output pays a
  * recipient its amount, PSBT_OUTPUT_UNEXPECTED for an output that is neither
- * a recipient nor the account's own, INPUT_UNPREPARED and PREVOUT_MISMATCH
+ * a recipient nor the account's own, or is the account's own somewhere a
+ * restore would not look, INPUT_UNPREPARED and PREVOUT_MISMATCH
  * for the inputs, OUTPUTS_EXCEED_INPUTS, and FEE_TOO_HIGH above maxFee.
  */
 export function checkPsbtPayment(psbt: Psbt, account: PearlAccount, expectations: PsbtPaymentExpectations): PsbtPaymentSummary {
-  const { network, maxFee } = expectations;
+  const { network, maxFee, nextChangeIndex = 0, gapLimit = 250, receiveChainChange = false } = expectations;
   if (maxFee !== undefined && (typeof maxFee !== 'bigint' || maxFee < 0n)) {
     throw new TypeError('maxFee must be a non-negative bigint of grain');
   }
+  if (!Number.isSafeInteger(nextChangeIndex) || nextChangeIndex < 0) throw new RangeError('nextChangeIndex must be a non-negative integer');
+  if (!Number.isSafeInteger(gapLimit) || gapLimit < 1) throw new RangeError('gapLimit must be a positive integer');
   const outputs = psbtOutputs(psbt, network, account);
   const unmatched = new Set(outputs.keys());
   let sent = 0n;
@@ -569,6 +585,16 @@ export function checkPsbtPayment(psbt: Psbt, account: PearlAccount, expectations
         'PSBT_OUTPUT_UNEXPECTED',
         `PSBT output ${i} pays ${output.value} grain to ${output.address ?? 'a script without an address'}, ` +
           'which is not an expected recipient and is not proven to belong to the account',
+      );
+    }
+    const { index, change: onChangeChain } = output.child!;
+    if (!onChangeChain && !receiveChainChange) {
+      throw new SigningError('PSBT_OUTPUT_UNEXPECTED', `PSBT output ${i} returns ${output.value} grain to the account's receive chain (index ${index}), not its change chain`);
+    }
+    if (index >= nextChangeIndex + gapLimit) {
+      throw new SigningError(
+        'PSBT_OUTPUT_UNEXPECTED',
+        `PSBT output ${i} returns ${output.value} grain to the account at index ${index}, past nextChangeIndex ${nextChangeIndex} plus gapLimit ${gapLimit}, where a restore would not find it`,
       );
     }
     change += output.value;

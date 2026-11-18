@@ -191,6 +191,24 @@ describe('checkPsbtPayment', () => {
     expect(code(() => checkPsbtPayment(two.psbt, hot, { network, recipients }))).toBe('PSBT_OUTPUT_UNEXPECTED');
   });
 
+  it('refuses change a restore would not find: far past the next change index, or on the receive chain', () => {
+    const parked = withdrawal({ account: hot, index: 2147483647 });
+    expect(code(() => checkPsbtPayment(parked.psbt, hot, { network, recipients }))).toBe('PSBT_OUTPUT_UNEXPECTED');
+    expect(code(() => checkPsbtPayment(withdrawal({ account: hot, index: 250 }).psbt, hot, { network, recipients }))).toBe('PSBT_OUTPUT_UNEXPECTED');
+    expect(checkPsbtPayment(withdrawal({ account: hot, index: 249 }).psbt, hot, { network, recipients }).change).toBeGreaterThan(0n);
+    const late = withdrawal({ account: hot, index: 1000 }).psbt;
+    expect(code(() => checkPsbtPayment(late, hot, { network, recipients, nextChangeIndex: 990, gapLimit: 10 }))).toBe('PSBT_OUTPUT_UNEXPECTED');
+    expect(checkPsbtPayment(late, hot, { network, recipients, nextChangeIndex: 990, gapLimit: 11 }).change).toBeGreaterThan(0n);
+
+    const receive = buildPayment({ network, utxos, recipients, feeRate: 2000n, changeAddress: hot.deriveAddress(3) });
+    receive.inputs.forEach((utxo, i) => hot.prepareInput(receive.psbt, i, utxo));
+    hot.prepareOutput(receive.psbt, receive.changeIndex, { index: 3 });
+    expect(psbtOutputs(receive.psbt, network, hot)[receive.changeIndex]).toMatchObject({ mine: true, child: { index: 3, change: false } });
+    expect(code(() => checkPsbtPayment(receive.psbt, hot, { network, recipients }))).toBe('PSBT_OUTPUT_UNEXPECTED');
+    expect(checkPsbtPayment(receive.psbt, hot, { network, recipients, receiveChainChange: true }).change).toBe(receive.change);
+    expect(() => checkPsbtPayment(receive.psbt, hot, { network, recipients, gapLimit: 0 })).toThrow(RangeError);
+  });
+
   it('refuses a recipient paid another amount, and matches each recipient to its own output', () => {
     const { psbt } = withdrawal();
     expect(code(() => checkPsbtPayment(psbt, hot, { network, recipients: [{ address: customer, amount: AMOUNT + 1n }] }))).toBe(
