@@ -165,8 +165,6 @@ export interface WalletConnection {
 export interface WatchOptions {
   /** Milliseconds between full syncs; 60 seconds unless given. */
   pollInterval?: number;
-  /** @deprecated The earlier name of pollInterval, read when pollInterval is left out. */
-  intervalMs?: number;
   notifier?: WalletNotifier;
 }
 
@@ -237,8 +235,6 @@ export interface CreateWalletOptions extends WalletConnection {
    * keeps it unlocked until lock(), 0 returns it locked.
    */
   unlockTimeout?: number | null;
-  /** @deprecated The earlier name of unlockTimeout, read when unlockTimeout is left out. */
-  unlockTimeoutMs?: number | null;
   /** Unused addresses in a row a restore scans before it stops; also the most unused receive addresses handed out in a row. OYSTER_RECOVERY_WINDOW unless given. */
   gapLimit?: number;
   /** DEFAULT_LOOKAHEAD unless given. */
@@ -278,8 +274,6 @@ export interface RestoreWalletOptions extends WalletConnection {
   gapLimit?: number;
   /** As for create: how long the restored wallet stays unlocked. */
   unlockTimeout?: number | null;
-  /** @deprecated The earlier name of unlockTimeout, read when unlockTimeout is left out. */
-  unlockTimeoutMs?: number | null;
 }
 
 /** Which of the wallet's outputs a send may spend. */
@@ -671,8 +665,8 @@ function originOf(account: PearlAccount): { masterFingerprint: string; path: str
   return account.masterFingerprint === null || account.path === null ? null : { masterFingerprint: account.masterFingerprint, path: account.path };
 }
 
-function unlockTimeout(options: { unlockTimeout?: number | null; unlockTimeoutMs?: number | null }): number | null {
-  const value = options.unlockTimeout === undefined ? options.unlockTimeoutMs : options.unlockTimeout;
+function unlockTimeout(options: { unlockTimeout?: number | null }): number | null {
+  const value = options.unlockTimeout;
   if (value === undefined) return DEFAULT_CREATE_UNLOCK_MS;
   if (value !== null && value !== 0) checkPositive(value, 'unlockTimeout');
   return value;
@@ -1757,7 +1751,7 @@ export class PearlWallet {
    */
   watch(options: WatchOptions = {}): () => void {
     const report = (err: unknown): void => this.#emitter.emit('error', err instanceof Error ? err : new Error(String(err)));
-    const timer = setInterval(() => this.sync().catch(report), options.pollInterval ?? options.intervalMs ?? 60_000);
+    const timer = setInterval(() => this.sync().catch(report), options.pollInterval ?? 60_000);
     const stops: (() => void)[] = [() => clearInterval(timer)];
     const notifier = options.notifier;
     if (notifier !== undefined) {

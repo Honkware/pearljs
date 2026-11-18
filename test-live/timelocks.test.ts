@@ -28,9 +28,11 @@ import {
   p2tr,
   prepareP2mrScriptPathInput,
   prepareTaprootScriptPathInput,
+  scriptPathWitness,
   SEQUENCE_LOCKTIME_IS_SECONDS,
+  Transaction,
 } from '../src/index.js';
-import type { ScriptTree, SpendEstimate, Transaction } from '../src/index.js';
+import type { ScriptRejectedError, ScriptTree, SigningError, SpendEstimate } from '../src/index.js';
 import { addChange, broadcast, confirm, describeLive, fund, mine, network, nextBlock, pearld, prevoutsOf, testMempoolAccept } from './chain.js';
 
 const account = deriveSigningAccountFromSeed(
@@ -70,15 +72,34 @@ function spend(locked: Locked, fields: { locktime?: number; sequence: number; ve
   if (viaP2mr) prepareP2mrScriptPathInput(psbt, 0, { tree, leafIndex: 0, value: VALUE, previousTransaction: funding });
   else prepareTaprootScriptPathInput(psbt, 0, { internalPubkey, tree, leafIndex: 0, value: VALUE });
   account.signScriptPathInput(psbt, 0, { index, leafHash: tree.leaves[0]!.leafHash });
-  const signed = finalizePsbt(psbt);
+  let signed: Transaction;
+  try {
+    signed = finalizePsbt(psbt);
+  } catch (err) {
+    // finalizePsbt runs the leaf before writing a witness and refuses one that
+    // fails. The witness is put together by hand, so pearld can refuse it too
+    // and refusal() can hold the two verdicts against each other.
+    expect(err).toMatchObject({ code: 'WITNESS_ITEMS_NEEDED', cause: { code: 'SCRIPT_REJECTED' } });
+    const input = psbt.data.inputs[0]!;
+    const leaf = input.tapLeafScript![0]!;
+    signed = Transaction.fromBuffer(psbt.data.globalMap.unsignedTx.toBuffer());
+    signed.setWitness(0, scriptPathWitness([input.tapScriptSig![0]!.signature], leaf.script, leaf.controlBlock));
+    refusedHere.set(signed, (err as SigningError).cause as ScriptRejectedError);
+  }
   expect(signed.virtualSize()).toBe(estimate);
   expect(estimateVsize(signed, spends)).toBe(estimate);
   return signed;
 }
 
+/** What finalizePsbt refused, for spends whose witness was put together by hand. */
+const refusedHere = new WeakMap<Transaction, ScriptRejectedError>();
+
 async function refusal(tx: Transaction): Promise<string> {
   const result = await testMempoolAccept(tx);
   expect(result.allowed).toBe(false);
+  const here = refusedHere.get(tx);
+  // pearld's script engine and finalizePsbt refuse it for the same reason.
+  if (here !== undefined) expect(result['reject-reason']).toContain(here.scriptMessage);
   return result['reject-reason']!;
 }
 

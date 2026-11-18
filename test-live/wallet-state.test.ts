@@ -30,7 +30,7 @@ import {
 } from '../src/index.js';
 import type { HistoryEntry, JsonValue, SendResult, WalletCoin } from '../src/index.js';
 import { createFileStore } from '../src/store-file.js';
-import { describeLive, FEE_RATE, fund, live, mine, network, nowhere, pearld } from './chain.js';
+import { describeLive, eventually, FEE_RATE, fund, live, mine, network, nowhere, pearld } from './chain.js';
 import { connection, expectSendMatchesNode, holdable, nodeBackend, nodeBalance, nodeSocket, nodeView, outpoint, outsider, PASSPHRASE, QUICK_KDF, recordEvents } from './wallets.js';
 
 const { payPending, elsewhere, lastPayer } = outsider(9);
@@ -60,7 +60,7 @@ describeLive('wallet state on pearld', () => {
   });
 
   it('creates an encrypted wallet in a file and shows a payment pending and then confirmed, as the node has it', async () => {
-    wallet = await PearlWallet.create({ ...connection(createFileStore(path, { create: true }), backend), passphrase: PASSPHRASE, unlockTimeoutMs: null });
+    wallet = await PearlWallet.create({ ...connection(createFileStore(path, { create: true }), backend), passphrase: PASSPHRASE, unlockTimeout: null });
     const phrase = (await wallet.mnemonic())!;
     expect(phrase.split(' ')).toHaveLength(24);
     const file = storeText(path);
@@ -327,7 +327,7 @@ describeLive('wallet state on pearld', () => {
     expect(wrong).toMatchObject({ code: 'KEYSTORE_BAD_PASSPHRASE' });
 
     // From the keys: the chain gives back every coin and confirmed transaction, and no label.
-    const fromKeys = await PearlWallet.restore({ ...connection(createMemoryStore()), keystore, passphrase: PASSPHRASE, unlockTimeoutMs: null });
+    const fromKeys = await PearlWallet.restore({ ...connection(createMemoryStore()), keystore, passphrase: PASSPHRASE, unlockTimeout: null });
     expect(fromKeys.balance().total).toBe(0n);
     await fromKeys.sync();
     expect(fromKeys.balance()).toEqual(wallet.balance());
@@ -345,7 +345,7 @@ describeLive('wallet state on pearld', () => {
 
     // With the backup: labels, the replaced transaction and every index are back before any sync.
     const restoredPath = join(dir, 'restored.json');
-    const withState = await PearlWallet.restore({ ...connection(createFileStore(restoredPath, { create: true })), keystore, backup: state, passphrase: PASSPHRASE, unlockTimeoutMs: null });
+    const withState = await PearlWallet.restore({ ...connection(createFileStore(restoredPath, { create: true })), keystore, backup: state, passphrase: PASSPHRASE, unlockTimeout: null });
     expect(withState.history()).toEqual(wallet.history());
     expect(withState.addresses()).toEqual(wallet.addresses());
     expect(withState.accounts()).toEqual(wallet.accounts());
@@ -357,13 +357,13 @@ describeLive('wallet state on pearld', () => {
     expect(withState.history()).toMatchObject(wallet.history().map(({ txid, status, amount, fee, label }) => ({ txid, status, amount, fee, ...(label === undefined ? {} : { label }) })));
     expect(withState.transaction(sent.txid)).toMatchObject({ status: 'confirmed', direction: 'outgoing', fee: sent.fee });
     await withState.close();
-    const occupied = await PearlWallet.restore({ ...connection(createFileStore(restoredPath)), keystore, passphrase: PASSPHRASE, unlockTimeoutMs: null }).catch((err: unknown) => err);
+    const occupied = await PearlWallet.restore({ ...connection(createFileStore(restoredPath)), keystore, passphrase: PASSPHRASE, unlockTimeout: null }).catch((err: unknown) => err);
     expect(occupied).toMatchObject({ name: 'WalletError', code: 'WALLET_EXISTS' });
   });
 
   it('spends from an XMSS key, freezes it when an older backup is restored, sees its index on chain and spends again after burning past it', async () => {
     const xmssPath = join(dir, 'xmss.json');
-    const vault = await PearlWallet.create({ ...connection(createFileStore(xmssPath, { create: true })), passphrase: PASSPHRASE, unlockTimeoutMs: null, kdf: QUICK_KDF });
+    const vault = await PearlWallet.create({ ...connection(createFileStore(xmssPath, { create: true })), passphrase: PASSPHRASE, unlockTimeout: null, kdf: QUICK_KDF });
     const key = await vault.addXmssKey({ label: 'vault' });
     expect(key).toMatchObject({ nextIndex: 0, remaining: 31, highestOnChain: -1, frozen: null });
     const script = toOutputScript(key.address, network);
@@ -397,7 +397,7 @@ describeLive('wallet state on pearld', () => {
     await vault.close();
 
     // The backup was taken at index 0. Restored, the key refuses to sign at all.
-    const restored = await PearlWallet.restore({ ...connection(createMemoryStore()), keystore, backup, passphrase: PASSPHRASE, unlockTimeoutMs: null });
+    const restored = await PearlWallet.restore({ ...connection(createMemoryStore()), keystore, backup, passphrase: PASSPHRASE, unlockTimeout: null });
     expect(restored.xmssKeys()).toMatchObject([{ id: key.id, nextIndex: 0, highestOnChain: -1, frozen: 'restored' }]);
     const send = (wallet: PearlWallet): Promise<SendResult> =>
       wallet.send({ recipients: [{ address: elsewhere(72), amount: 3_000_000n }], from: { xmss: key.id }, feeRate: FEE_RATE });
@@ -444,7 +444,7 @@ describeLive('wallet state on pearld', () => {
       backend: pearldBackend(ws, { network }),
       transactions: pearldTransactionSource(ws),
       passphrase: PASSPHRASE,
-      unlockTimeoutMs: null,
+      unlockTimeout: null,
       kdf: QUICK_KDF,
     });
     try {
@@ -455,7 +455,7 @@ describeLive('wallet state on pearld', () => {
       const confirmations = recordEvents(watcher, 'confirmation');
       const balances = recordEvents(watcher, 'balance');
       // An hour between syncs: whatever arrives during the test came by notification.
-      const stop = watcher.watch({ notifier: ws, intervalMs: 3_600_000 });
+      const stop = watcher.watch({ notifier: ws, pollInterval: 3_600_000 });
       await ws.call('getblockcount');
 
       const txid = await payPending(address, 7_000_000n);
@@ -466,10 +466,11 @@ describeLive('wallet state on pearld', () => {
       watcher.on('confirmation', () => (confirmedWhenAnnounced ??= watcher.balance().confirmed));
       const [hash] = await mine(1);
       expect(await confirmations.until((event) => event.txid === txid)).toEqual({ txid, block: { height: await pearld.getBlockCount(), hash } });
-      // The balance follows once the block itself is announced.
+      // The balance counts the payment from pearld's recvtx, which comes before blockconnected; the tip
+      // moves when the refresh that blockconnected starts has finished.
       await balances.until((balance) => balance.confirmed === 7_000_000n);
       expect(watcher.balance()).toMatchObject({ confirmed: 7_000_000n, unconfirmed: 0n });
-      expect(watcher.tip).toEqual(await nodeBackend.getTip());
+      expect(await eventually(async () => watcher.tip, (tip) => tip?.hash === hash)).toEqual(await nodeBackend.getTip());
 
       // An address handed out while watching is watched too, and a spend of the wallet's coin is announced.
       const later = await watcher.receiveAddress();

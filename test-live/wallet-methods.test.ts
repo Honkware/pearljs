@@ -159,8 +159,11 @@ describeOyster('Oyster wallet methods', () => {
       expect(await backend.getTip()).toEqual(await node.getTip());
       expect(await backend.getUtxos([address])).toEqual(await node.getUtxos([address]));
       expect(await backend.getBalance([address])).toEqual({ confirmed: 9_000_000n, unconfirmed: 0n, immature: 0n });
-      expect(await backend.getHistory(address)).toEqual([{ txid: funding.getId(), block: await node.getTip(), received: 9_000_000n }]);
-      expect(await backend.getTransaction(funding.getId())).toEqual({ txid: funding.getId(), block: await node.getTip() });
+      // Oyster gives the block's header time with the block.
+      const best = await node.getTip();
+      const block = { ...best, time: (await pearld.getBlockHeader(best.hash)).time };
+      expect(await backend.getHistory(address)).toEqual([{ txid: funding.getId(), block, received: 9_000_000n }]);
+      expect(await backend.getTransaction(funding.getId())).toEqual({ txid: funding.getId(), block });
       expect(await backend.getTransaction('00'.repeat(32))).toBeNull();
       expect(await backend.findUsed!([address, miner.deriveAddress(0)])).toEqual([address]);
       expect(await backend.getSpendStatus({ txid: funding.getId(), vout: 0 })).toEqual({ status: 'unspent', confirmations: 1 });
