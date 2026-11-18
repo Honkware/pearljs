@@ -2912,6 +2912,8 @@ export class PearlWallet {
   // transaction spending the same outputs is recorded in one too, the record
   // is the stale one: a chain holds only one of them.
   #settleConflicts(entry: TxEntry, events: PendingEvent[]): void {
+    // Every coinbase has the same null input, which spends nothing.
+    if (entry.tx.isCoinbase()) return;
     const spends = new Set(entry.tx.ins.map((input) => outpointKey(prevTxid(input), input.index)));
     for (const other of this.#txs.values()) {
       if (other === entry || other.status !== 'active') continue;

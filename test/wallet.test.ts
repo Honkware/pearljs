@@ -81,6 +81,19 @@ describe('wallet: receiving', () => {
     await wallet.sync();
     expect(wallet.balance()).toMatchObject({ immature: 0n, confirmed: prl('50') });
   });
+
+  it('keeps every coinbase it was paid, though each has the same null input', async () => {
+    const chain = new FakeChain();
+    const wallet = await newWallet(chain);
+    const address = await wallet.receiveAddress();
+    chain.mine(1, { coinbaseTo: address, value: prl('50') });
+    chain.mine(1, { coinbaseTo: address, value: prl('50') });
+    await wallet.sync();
+    chain.mine(1, { coinbaseTo: address, value: prl('50') });
+    await wallet.sync();
+    expect(wallet.history().map((entry) => entry.status)).toEqual(['confirmed', 'confirmed', 'confirmed']);
+    expect(wallet.balance().total).toBe(prl('150'));
+  });
 });
 
 describe('wallet: sending', () => {
