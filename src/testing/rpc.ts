@@ -285,7 +285,8 @@ const handlers: Record<string, Handler> = {
         return { ...ids, allowed: true, vsize, fees: { base: new PrlAmount(fee), 'effective-feerate': new PrlAmount(rate), 'effective-includes': null } };
       } catch (err) {
         if (!(err instanceof SimulatedRefusal)) throw err;
-        return { ...ids, 'reject-reason': err.message };
+        // handleTestMempoolAccept reports an orphan with Bitcoin Core's reason, not the mempool's text.
+        return { ...ids, 'reject-reason': err.message.startsWith('orphan transaction ') ? 'missing-inputs' : err.message };
       }
     });
   },

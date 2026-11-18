@@ -57,6 +57,8 @@ const TX_ERROR = -25;
 const TX_REJECTED = -26;
 const TX_IN_CHAIN = -27;
 const MEDIAN_TIME_BLOCKS = 11;
+// The refusals of CheckTransactionStandard (node/mempool/policy.go), which the mempool words as "is not standard".
+const STANDARDNESS = new Set(['POLICY_VERSION', 'POLICY_NOT_FINAL', 'POLICY_TX_TOO_LARGE', 'POLICY_SIGSCRIPT_SIZE', 'POLICY_SIGSCRIPT_NOT_PUSH_ONLY', 'POLICY_DUST', 'POLICY_MULTIPLE_NULLDATA']);
 // The faucet's share of a coinbase is cut into this many coins, so many payments can be made before any waits on change.
 const FAUCET_SPLIT = 4;
 const FINAL_SEQUENCE = 0xffffffff;
@@ -749,13 +751,14 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
   }
 
   // CheckTransactionInputs' maturity rule and the sequence locks, for a transaction entering a block at `height`.
+  // The maturity rule is a chain rule, -25 from the mempool too; the mempool's sequence-lock refusal is its own, -26.
   #checkChainRules(tx: Transaction, coins: readonly SimulatedCoin[], height: number, code: number): void {
     coins.forEach((coin, i) => {
       if (!coin.coinbase) return;
       const since = height - coin.height;
       if (since < this.network.coinbaseMaturity) {
         throw new SimulatedRefusal(
-          code,
+          TX_ERROR,
           `tried to spend coinbase transaction output ${outpointOf(tx.ins[i]!)} from height ${coin.height} at height ${height} before required maturity of ${this.network.coinbaseMaturity} blocks`,
         );
       }
@@ -779,10 +782,18 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
     }
   }
 
-  #runScripts(tx: Transaction, prevouts: readonly TxOutput[], code: number): void {
+  // ValidateTransactionScripts' refusal, a chain rule error (-25), worded as blockchain/scriptval.go words it:
+  // the engine's description, which is empty for a failed key-path signature, then the input's witness and scripts.
+  #runScripts(tx: Transaction, prevouts: readonly TxOutput[]): void {
     const result = verifyTransaction(tx, prevouts);
     if (!result.ok) {
-      throw new SimulatedRefusal(code, `failed to validate input ${tx.getId()}:${result.inputIndex} which references output ${outpointOf(tx.ins[result.inputIndex]!)} - ${result.code}${result.message === '' ? '' : `: ${result.message}`}`);
+      const input = tx.ins[result.inputIndex]!;
+      const witness = `[${input.witness.map((item) => toHex(item)).join(' ')}]`;
+      throw new SimulatedRefusal(
+        TX_ERROR,
+        `failed to validate input ${tx.getId()}:${result.inputIndex} which references output ${outpointOf(input)} - ${result.message} ` +
+          `(input witness ${witness}, input script bytes ${toHex(input.script)}, prev output script bytes ${toHex(prevouts[result.inputIndex]!.script)})`,
+      );
     }
   }
 
@@ -807,10 +818,20 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
       const fee = coins.reduce((sum, coin) => sum + coin.value, 0n) - tx.outs.reduce((sum, out) => sum + out.value, 0n);
       const evicts = checkReplacement(tx, fee, this.#pool, { relayFeeRate: this.relayFeeRate, rejectReplacement: this.rejectReplacement });
       checkPackageLimits(tx, this.#pool, { replaced: evicts });
-      this.#runScripts(tx, coins, TX_REJECTED);
+      this.#runScripts(tx, coins);
       return { entry: { tx, fee, vsize: tx.virtualSize(), time: this.#time, height: this.height }, evicts };
     } catch (err) {
-      if (err instanceof PolicyError) throw new SimulatedRefusal(TX_REJECTED, err.message, { cause: err });
+      if (err instanceof PolicyError) {
+        // CheckTransactionSanity and CheckTransactionInputs are chain rules, -25; but for the lone coinbase the rest are the mempool's, -26.
+        const code = err.code.startsWith('SANITY_') && err.code !== 'SANITY_COINBASE' ? TX_ERROR : TX_REJECTED;
+        // validateStandardness (node/mempool/mempool.go:1636) names the transaction in front of what CheckTransactionStandard and checkInputsStandard say.
+        const message = STANDARDNESS.has(err.code)
+          ? `transaction ${txid} is not standard: ${err.message}`
+          : err.code === 'POLICY_NONSTANDARD_INPUT'
+            ? `transaction ${txid} has a non-standard input: ${err.message}`
+            : err.message;
+        throw new SimulatedRefusal(code, message, { cause: err });
+      }
       throw err;
     }
   }
@@ -902,7 +923,7 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
       if (fee < 0n) throw new SimulatedRefusal(TX_ERROR, `total value of all transaction inputs for transaction ${txid} is less than the amount spent`);
       if (!isFinal(tx, height, this.medianTimePast())) throw new SimulatedRefusal(TX_ERROR, `block contains unfinalized transaction ${txid}`);
       this.#checkChainRules(tx, coins, height, TX_ERROR);
-      if (!checked) this.#runScripts(tx, coins, TX_ERROR);
+      if (!checked) this.#runScripts(tx, coins);
       for (const input of tx.ins) view.set(outpointOf(input), null);
       tx.outs.forEach((out, vout) => view.set(key(txid, vout), { script: out.script, value: out.value, height, coinbase: false }));
       txs.push(tx);

@@ -167,7 +167,8 @@ describe('confirmations and coinbase maturity', () => {
     chain.mine(3);
     // Four confirmations: the next block would be the fifth since the coinbase, one short of five blocks after it.
     const err = refusal(() => chain.accept(early));
-    expect(err.rpcCode).toBe(-26);
+    // A chain rule (CheckTransactionInputs), so -25, as pearld answered on regtest.
+    expect(err.rpcCode).toBe(-25);
     expect(err.message).toContain(
       `TX rejected: tried to spend coinbase transaction output ${coin!.txid}:0 from height ${minedAt} at height ${chain.height + 1} before required maturity of 5 blocks`,
     );
@@ -210,14 +211,15 @@ describe('the simulated mempool', () => {
   it('refuses what pearld refuses, with its code and text', () => {
     const { chain, coin } = funded();
     const good = spend(alice, coin, { amount: prl('4') });
+    // Chain rules (sanity, inputs, scripts) come back as -25 and the mempool's own as -26, as pearld answered on regtest.
     const cases: [string, Transaction, number, string][] = [
-      ['a signature by the wrong key', spend(bob, coin), -26, 'TX rejected: failed to validate input'],
-      ['an output below the dust threshold', spend(alice, coin, { amount: 100n }), -26, 'TX rejected: transaction output 0: payment is dust: 100'],
+      ['a signature by the wrong key', spend(bob, coin), -25, 'TX rejected: failed to validate input'],
+      ['an output below the dust threshold', spend(alice, coin, { amount: 100n }), -26, 'is not standard: transaction output 0: payment is dust: 100'],
       ['a fee under the relay minimum', spend(alice, coin, { fee: 10n }), -26, 'which is under the required amount of'],
-      ['more out than in', spend(alice, { ...coin, value: coin.value + 1n }, { fee: 0n }), -26, 'TX rejected: total value of all transaction inputs'],
-      ['version 3', spend(alice, coin, { version: 3 }), -26, 'TX rejected: transaction version 3 is not in the valid range of 1-2'],
+      ['more out than in', spend(alice, { ...coin, value: coin.value + 1n }, { fee: 0n }), -25, 'TX rejected: total value of all transaction inputs'],
+      ['version 3', spend(alice, coin, { version: 3 }), -26, 'is not standard: transaction version 3 is not in the valid range of 1-2'],
       ['an input nobody has seen', spend(alice, { ...coin, txid: 'ab'.repeat(32) }), -25, `references outputs of unknown or fully-spent transaction ${'ab'.repeat(32)}`],
-      ['a lock time in the future', spend(alice, coin, { locktime: 10_000, sequence: 0xfffffffe }), -26, 'TX rejected: transaction is not finalized'],
+      ['a lock time in the future', spend(alice, coin, { locktime: 10_000, sequence: 0xfffffffe }), -26, 'is not standard: transaction is not finalized'],
     ];
     for (const [name, tx, code, text] of cases) {
       const err = refusal(() => chain.accept(tx));
