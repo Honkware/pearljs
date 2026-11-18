@@ -3,7 +3,7 @@
  * run, then on every run sync, print what it holds and where to pay it, and
  * pay an address if asked.
  *
- * Needs a running pearld started with --addrindex. Settings come from the
+ * Needs a running pearld, with --addrindex or its filter index. Settings come from the
  * environment (see lib/env.ts), plus:
  *
  *   WALLET_FILE         the directory the wallet lives in, for example ./regtest-wallet
@@ -15,7 +15,7 @@
  *   node dist-examples/examples/wallet-node.js
  */
 import { existsSync } from 'node:fs';
-import { PearlWallet, PearldClient, formatPearl, parsePearl, pearldBackend, pearldTransactionSource } from 'pearljs';
+import { PearlWallet, PearldClient, connectPearld, formatPearl, parsePearl } from 'pearljs';
 import { createFileStore } from 'pearljs/store-file';
 import { dispatcher, network, pearld, required } from './lib/env.js';
 
@@ -26,8 +26,8 @@ const passphrase = required('WALLET_PASSPHRASE');
 const fresh = !existsSync(path);
 const connection = {
   store: createFileStore(path, { create: fresh }),
-  backend: pearldBackend(node, { network: network() }),
-  transactions: pearldTransactionSource(node),
+  // The backend is also the wallet's source of full transactions.
+  backend: await connectPearld(node, { network: network(), birthday: 0 }),
 };
 
 const wallet = fresh
