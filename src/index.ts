@@ -1,6 +1,7 @@
 /**
  * Everything pearljs exports, except the Node-only `pearljs/xmss-file-store`
- * and `pearljs/store-file`.
+ * and `pearljs/store-file`, and the test kit, `pearljs/testing` and
+ * `pearljs/testing-regtest`.
  * Each module here is also its own subpath, such as `pearljs/amount`.
  *
  * @module
