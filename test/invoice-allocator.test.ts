@@ -7,7 +7,11 @@ import { describe, expect, it } from 'vitest';
 import { encodeAddress } from '../src/address.js';
 import type { AddressPayment } from '../src/client.js';
 import { discoverAccount } from '../src/discovery.js';
-import { InvoiceGapError, InvoiceIndexAllocator, createInvoice, refreshInvoice } from '../src/invoice.js';
+import { InvoiceGapError, InvoiceIndexAllocator, InvoiceMonitor, createInvoice, refreshInvoice } from '../src/invoice.js';
+import { importWatchOnlyAccount } from '../src/keys.js';
+import { createMemoryStore } from '../src/store.js';
+import { SimulatedChain } from '../src/testing.js';
+import { PearlWallet } from '../src/wallet.js';
 import type { Invoice, InvoiceIndexAllocatorOptions } from '../src/invoice.js';
 import { networks } from '../src/networks.js';
 import { ScriptedChain, random } from './invoice-helpers.js';
@@ -150,5 +154,31 @@ describe('InvoiceIndexAllocator', () => {
     };
     const found = await discoverAccount({ deriveAddress }, backend);
     expect(new Set(found.receive.used.map((child) => child.index))).toEqual(paid);
+  });
+});
+
+describe('invoices paid into a wallet account', () => {
+  it('hands out the account\'s addresses, sees the payment and leaves the wallet holding it', async () => {
+    const chain = new SimulatedChain();
+    const wallet = await PearlWallet.create({ store: createMemoryStore(), backend: chain, passphrase: 'a long passphrase', kdf: { N: 2 ** 10 } });
+    const invoicesAccount = await wallet.addAccount(1, { label: 'invoices' });
+    wallet.lock();
+    const keys = importWatchOnlyAccount(invoicesAccount.xpub, chain.network);
+    const indices = new InvoiceIndexAllocator({ deriveAddress: (index) => keys.deriveAddress(index), client: chain });
+    const monitor = new InvoiceMonitor(chain, chain.network);
+    const now = chain.time;
+    const first = await indices.allocate(now);
+    const second = await indices.allocate(now);
+    expect([first.index, second.index]).toEqual([0, 1]);
+    let invoice = monitor.createInvoice({ id: 'order-7', address: second.address, amount: 400_000n, createdAt: now, expiresAt: now + 3600, requiredConfirmations: 1 });
+    chain.pay(second.address, 400_000n);
+    chain.mine();
+    invoice = await monitor.refreshInvoice(invoice, now + 600);
+    indices.track(second.index, invoice);
+    await wallet.sync();
+    expect(invoice.state).toBe('confirmed');
+    expect(wallet.balance({ account: invoicesAccount.id }).confirmed).toBe(400_000n);
+    expect(wallet.balance({ account: '0' }).total).toBe(0n);
+    await wallet.close();
   });
 });
