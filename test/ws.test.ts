@@ -655,6 +655,26 @@ describe('pearld websocket client', () => {
     await ws.close();
   });
 
+  it('remembers only the last thousand calls it gave up on, so a server that never answers grows nothing', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const ws = client({ timeout: 50 });
+    const ready = ws.connect();
+    await serve();
+    await ready;
+    const errors = collect(ws, 'error');
+    const calls = Array.from({ length: 1001 }, () => expect(ws.call('getblockcount')).rejects.toMatchObject({ kind: 'network' }));
+    await flush();
+    await vi.advanceTimersByTimeAsync(50);
+    await Promise.all(calls);
+    const [first, ...rest] = last().sent.slice(1);
+    // The latest thousand are still known and dropped quietly; the first is forgotten, so its reply is reported.
+    for (const sent of rest) last().push(`{"jsonrpc":"1.0","result":1,"error":null,"id":${sent.id}}`);
+    expect(errors).toEqual([]);
+    last().push(`{"jsonrpc":"1.0","result":1,"error":null,"id":${first!.id}}`);
+    expect(errors.map((err) => err.message)).toEqual([expect.stringContaining('unknown request id')]);
+    await ws.close();
+  });
+
   it('drops the connection on a frame past maxReplySize and fails the calls waiting on it', async () => {
     const ws = client({ maxReplySize: 100, reconnect: false });
     const ready = ws.connect();

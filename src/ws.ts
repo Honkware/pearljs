@@ -227,6 +227,9 @@ const OPEN = 1;
 const BLOCK_EVENTS = ['blockconnected', 'blockdisconnected'] as const;
 const FILTERED_EVENTS = ['filteredblockconnected', 'filteredblockdisconnected'] as const;
 
+// How many given-up call ids a connection remembers.
+const MAX_ABANDONED = 1000;
+
 /**
  * pearld's websocket RPC with typed notifications, reconnect and
  * resubscription, without the typed methods; PearlWsClient adds those.
@@ -258,7 +261,9 @@ export class JsonRpcWsClient implements Rpc {
   #closeTimer: ReturnType<typeof setTimeout> | undefined;
   #id = 0;
   readonly #pending = new Map<number, Pending>();
-  // Ids of calls given up on by timeout or abort, so a late reply is dropped quietly.
+  // Ids of calls given up on by timeout or abort, so a late reply is dropped quietly: the most
+  // recent MAX_ABANDONED of them, since a server that never answers would otherwise grow the set
+  // for as long as the connection lasts.
   readonly #abandoned = new Set<number>();
   readonly #listeners = new Map<string, Set<Listener>>();
 
@@ -496,7 +501,10 @@ export class JsonRpcWsClient implements Rpc {
     return new Promise((resolve, reject) => {
       const give = (error: PearlRpcError) => {
         abandoned = error;
-        if (sent !== undefined && this.#pending.delete(sent)) this.#abandoned.add(sent);
+        if (sent !== undefined && this.#pending.delete(sent)) {
+          this.#abandoned.add(sent);
+          if (this.#abandoned.size > MAX_ABANDONED) this.#abandoned.delete(this.#abandoned.values().next().value!);
+        }
         reject(error);
       };
       const timer =
