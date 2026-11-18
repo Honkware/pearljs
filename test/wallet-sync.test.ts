@@ -171,4 +171,21 @@ describe('wallet: sync against a backend that answers oddly', () => {
       expect(wallet.xmssKeys()[0]).toMatchObject({ highestOnChain: 0, frozen: 'behind' });
     }
   });
+
+  // Found on a live pearld: filterBackend reports a block's time with its
+  // history and pearldBackend does not, so the same wallet showed different
+  // entries on the two, and a time that was gone once the store was read again.
+  it("records a transaction's block as height and hash whatever else the backend reports with it", async () => {
+    const chain = new FakeChain();
+    const store = createMemoryStore();
+    const wallet = await newWallet(chain, { store });
+    const paid = chain.pay(await wallet.receiveAddress(), prl('2')).getId();
+    const [block] = chain.mine();
+    const real = chain.getHistory.bind(chain);
+    chain.getHistory = async (watched) => (await real(watched)).map((entry) => (entry.block === null ? entry : { ...entry, block: { ...entry.block, time: 1_700_000_000 } }));
+    await wallet.sync();
+    expect(wallet.transaction(paid)!.block).toEqual({ height: block!.height, hash: block!.hash });
+    const reopened = await PearlWallet.open({ store, backend: chain });
+    expect(reopened.history()).toEqual(wallet.history());
+  });
 });

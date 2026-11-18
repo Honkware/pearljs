@@ -2854,10 +2854,12 @@ export class PearlWallet {
     prevouts: LedgerTransaction['prevouts'],
     extra: { broadcast: boolean; changeOutput: number | null; maxOutput?: number; label?: string | undefined; block?: BlockRef | null },
   ): TxEntry {
+    const block = extra.block ?? null;
     const entry: TxEntry = {
       txid: tx.getId(),
       tx,
-      block: extra.block ?? null,
+      // Height and hash only, as the store keeps it: some backends report the block's time too.
+      block: block === null ? null : { height: block.height, hash: block.hash },
       status: 'active',
       prevouts,
       seenAt: this.#now(),
