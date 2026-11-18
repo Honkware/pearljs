@@ -102,7 +102,7 @@ describe('wallet: sync against a backend that answers oddly', () => {
       watchBlocks: (options: { onBlock: (event: BlockEvent) => void }) => ((onBlock = options.onBlock), () => undefined),
       notifyReceived: async () => undefined,
     } as unknown as WalletNotifier;
-    const stop = wallet.watch({ notifier, intervalMs: 3_600_000 });
+    const stop = wallet.watch({ notifier, pollInterval: 3_600_000 });
     const payment = chain.pay(await wallet.receiveAddress(), prl('7'));
     const tip = wallet.tip;
     const [mined] = chain.mine();

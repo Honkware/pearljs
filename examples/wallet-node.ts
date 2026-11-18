@@ -48,7 +48,7 @@ try {
   console.log('pay to     ', await wallet.currentAddress());
 
   if (process.env.PAY_TO !== undefined) {
-    await wallet.unlock(passphrase, { timeoutMs: 60_000 });
+    await wallet.unlock(passphrase, { timeout: 60_000 });
     const sent = await wallet.send({ recipients: [{ address: process.env.PAY_TO, amount: parsePearl(required('PAY_AMOUNT')) }], rbf: true });
     console.log('sent       ', sent.txid, 'fee', formatPearl(sent.fee), 'PRL');
   }

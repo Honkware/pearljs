@@ -26,7 +26,7 @@ const calls = (chain: FakeChain, name: string): number => chain.calls.get(name) 
 
 /** A wallet with `spent` addresses that were paid and emptied long ago, `held` that hold a coin, synced. */
 async function aged(chain: FakeChain, spent: number, held: number, options: { quietSyncInterval?: number } = {}): Promise<PearlWallet> {
-  const wallet = await PearlWallet.create({ store: createMemoryStore(), backend: chain, transactions: chain, passphrase: PASSPHRASE, mnemonic: MNEMONIC, kdf: FAST_KDF, gapLimit: 100, unlockTimeoutMs: null, ...options });
+  const wallet = await PearlWallet.create({ store: createMemoryStore(), backend: chain, transactions: chain, passphrase: PASSPHRASE, mnemonic: MNEMONIC, kdf: FAST_KDF, gapLimit: 100, unlockTimeout: null, ...options });
   for (let i = 0; i < spent; i += 1) chain.pay(await wallet.receiveAddress(), prl('1'));
   chain.mine();
   await wallet.sync();
@@ -303,7 +303,7 @@ describe('wallet: history, snapshots and JSON', () => {
     expect(during.at(-1)).toBe(false);
     // An unlock that times out is a change too.
     wallet.lock();
-    await wallet.unlock(PASSPHRASE, { timeoutMs: 20 });
+    await wallet.unlock(PASSPHRASE, { timeout: 20 });
     const unlocked = wallet.getSnapshot();
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(wallet.getSnapshot()).toMatchObject({ locked: true });

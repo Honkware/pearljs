@@ -76,7 +76,6 @@
       "PearldMethods",
       "PearldRpc",
       "PolicyError",
-      "PrlAmount",
       "Psbt",
       "RPC_ERROR_CODES",
       "SCRIPT_ERROR_CODES",
@@ -92,7 +91,6 @@
       "UnsupportedMethodError",
       "WALLET_SCHEMA_VERSION",
       "WITNESS_PROGRAM_LENGTH",
-      "WalletEmitter",
       "WalletError",
       "WalletInsufficientFundsError",
       "XMSS_LAST_INDEX",
@@ -330,8 +328,7 @@
       "xmssLeafScript",
       "xmssScriptPathWitness",
       "xmssSign",
-      "xmssVerify",
-      "xmssWalletScript"
+      "xmssVerify"
     ],
     "types": [
       "AccountChild",
@@ -490,6 +487,7 @@
       "PeerInfo",
       "PrepareSendOptions",
       "PreparedSend",
+      "PrlAmount",
       "PsbtKeyPathSighashOptions",
       "PsbtOutput",
       "PsbtPaymentExpectations",
@@ -600,6 +598,7 @@
       "WalletTransactionEntry",
       "WalletUtxo",
       "WalletXmssKey",
+      "WatchOptions",
       "Watched",
       "WitnessAddress",
       "WitnessProgram",
@@ -1100,7 +1099,6 @@
       "PearldClient",
       "PearldMethods",
       "PearldRpc",
-      "PrlAmount",
       "RPC_ERROR_CODES",
       "desktopOysterClient",
       "fallbackTransport",
@@ -1145,6 +1143,7 @@
       "NodeInfo",
       "OutPointParam",
       "PeerInfo",
+      "PrlAmount",
       "RawTxInput",
       "ReceivedByAccount",
       "ReceivedByAddress",
@@ -1404,7 +1403,6 @@
       "DEFAULT_SCAN_LIMIT",
       "PearlWallet",
       "WALLET_SCHEMA_VERSION",
-      "WalletEmitter",
       "WalletInsufficientFundsError",
       "balanceFromJson",
       "balanceToJson",
@@ -1413,8 +1411,7 @@
       "historyEntryFromJson",
       "historyEntryToJson",
       "oysterTransactionSource",
-      "pearldTransactionSource",
-      "xmssWalletScript"
+      "pearldTransactionSource"
     ],
     "types": [
       "ActivityScanner",
@@ -1448,7 +1445,8 @@
       "WalletSnapshot",
       "WalletStateBalance",
       "WalletSyncProgress",
-      "WalletXmssKey"
+      "WalletXmssKey",
+      "WatchOptions"
     ]
   },
   "wif": {

@@ -152,7 +152,7 @@ function signals(tx: Transaction, mempool: Mempool | undefined, cache: Map<strin
 export function replacementFee(
   evicted: readonly FeeAndVsize[],
   vsize: number,
-  relayFeeRate: bigint = DEFAULT_RELAY_FEE_RATE,
+  relayFeeRate: FeeRate = DEFAULT_RELAY_FEE_RATE,
 ): bigint {
   let fee = evicted.reduce((sum, entry) => sum + entry.fee, 0n) + minRelayFee(vsize, relayFeeRate);
   for (const entry of evicted) {
@@ -351,7 +351,7 @@ export function cpfpChildFee(
   parents: readonly FeeAndVsize[],
   childVsize: number,
   feeRate: FeeRate,
-  relayFeeRate: bigint = DEFAULT_RELAY_FEE_RATE,
+  relayFeeRate: FeeRate = DEFAULT_RELAY_FEE_RATE,
 ): bigint {
   const parentsFee = parents.reduce((sum, entry) => sum + entry.fee, 0n);
   const parentsVsize = parents.reduce((sum, entry) => sum + entry.vsize, 0);

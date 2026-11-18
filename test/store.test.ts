@@ -198,7 +198,7 @@ describe('file store', () => {
     expect(message).toContain(`is locked by process ${process.pid}`);
     expect(message).not.toMatch(/delete|remove/);
     // The holder is this live process, so the lock is not stale however long it is left.
-    expect(() => createFileStore(path, { breakStaleLock: true, staleLockMs: 1 })).toThrow('Two writers must never share a wallet');
+    expect(() => createFileStore(path, { breakStaleLock: true, staleLockAfter: 1 })).toThrow('Two writers must never share a wallet');
     expect(temporaries(path)).toEqual([]);
     await store.close();
     await createFileStore(path).close();
@@ -215,7 +215,7 @@ describe('file store', () => {
     };
     // A process id that does not exist here, as a holder in another PID namespace looks.
     const gone = { id: 'cd'.repeat(16), pid: 2 ** 22 + 12345, host: hostname(), heartbeatMs: 100 };
-    const options = { breakStaleLock: true, staleLockMs: 2_000 };
+    const options = { breakStaleLock: true, staleLockAfter: 2_000 };
 
     write(gone, 0);
     expect(() => createFileStore(path, options)).toThrow('if you are certain its holder is gone, open with breakLock: true');
@@ -234,7 +234,7 @@ describe('file store', () => {
     expect(() => createFileStore(path, options)).toThrow('is locked by process');
 
     write(gone, 5_000);
-    expect(() => createFileStore(path, { staleLockMs: 2_000 })).toThrow('open with breakStaleLock: true to take it over');
+    expect(() => createFileStore(path, { staleLockAfter: 2_000 })).toThrow('open with breakStaleLock: true to take it over');
     const store = createFileStore(path, options);
     expect(JSON.parse(readFileSync(lock, 'utf8'))).toMatchObject({ pid: process.pid, host: hostname() });
     await store.set('n', 1);
@@ -244,7 +244,7 @@ describe('file store', () => {
 
   it('touches its lock while it is open', async () => {
     const path = join(dir, 'wallet');
-    const store = createFileStore(path, { create: true, staleLockMs: 100 });
+    const store = createFileStore(path, { create: true, staleLockAfter: 100 });
     const lock = join(path, 'lock');
     const old = new Date(Date.now() - 60_000);
     utimesSync(lock, old, old);
@@ -350,7 +350,7 @@ ${body}
     );
     return script;
   };
-  const STALE = '{ breakStaleLock: true, staleLockMs: 200 }';
+  const STALE = '{ breakStaleLock: true, staleLockAfter: 200 }';
   const untilStale = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 300));
 
   it('keeps the last complete state when a process dies between writing and linking', async () => {
@@ -365,17 +365,17 @@ ${body}
     await wallet.close();
     const before = newest(path);
 
-    const script = child(path, `await store.batch([{ type: 'delete', key: 'meta' }, { type: 'set', key: 'account:0', value: 'half written' }]);`, { crashAtLink: true, open: '{ staleLockMs: 200 }' });
+    const script = child(path, `await store.batch([{ type: 'delete', key: 'meta' }, { type: 'set', key: 'account:0', value: 'half written' }]);`, { crashAtLink: true, open: '{ staleLockAfter: 200 }' });
     const result = spawnSync(process.execPath, [script]);
     expect(result.signal).toBe('SIGKILL');
     expect(temporaries(path)).toHaveLength(1);
     expect(newest(path)).toBe(before);
 
     // The dead process's lock stays until it is broken on purpose, and is not stale while it could still be touched.
-    expect(() => createFileStore(path, { breakStaleLock: true, staleLockMs: 60_000 })).toThrow('is locked by process');
+    expect(() => createFileStore(path, { breakStaleLock: true, staleLockAfter: 60_000 })).toThrow('is locked by process');
     await untilStale();
-    expect(() => createFileStore(path, { staleLockMs: 200 })).toThrow('open with breakStaleLock: true to take it over');
-    const store = createFileStore(path, { breakStaleLock: true, staleLockMs: 200 });
+    expect(() => createFileStore(path, { staleLockAfter: 200 })).toThrow('open with breakStaleLock: true to take it over');
+    const store = createFileStore(path, { breakStaleLock: true, staleLockAfter: 200 });
     expect(temporaries(path)).toEqual([]);
     const reopened = await PearlWallet.open({ store, backend: chain, transactions: chain });
     expect(reopened.balance()).toEqual(balance);
@@ -402,7 +402,7 @@ ${body}
       proc.kill('SIGKILL');
       await new Promise((resolve) => proc.once('exit', resolve));
       await untilStale();
-      const store = createFileStore(path, { breakStaleLock: true, staleLockMs: 200 });
+      const store = createFileStore(path, { breakStaleLock: true, staleLockAfter: 200 });
       const n = (await store.get('n')) as number;
       const items = await store.list('item:');
       expect(n).toBeGreaterThanOrEqual(20);
@@ -415,13 +415,13 @@ ${body}
   it('keeps a second process off a wallet another has open, however long it stays open', async () => {
     const path = join(dir, 'wallet');
     await createFileStore(path, { create: true }).close();
-    const proc = spawn(process.execPath, [child(path, `process.stdout.write('open'); setInterval(() => {}, 1000);`, { open: '{ staleLockMs: 200 }' })]);
+    const proc = spawn(process.execPath, [child(path, `process.stdout.write('open'); setInterval(() => {}, 1000);`, { open: '{ staleLockAfter: 200 }' })]);
     await new Promise<void>((resolve) => proc.stdout.once('data', () => resolve()));
     try {
       expect(() => createFileStore(path)).toThrow(`is locked by process ${proc.pid}`);
       // The holder is alive and touching its lock, so breakStaleLock does not take it even past the stale interval.
       await untilStale();
-      expect(() => createFileStore(path, { breakStaleLock: true, staleLockMs: 200 })).toThrow('Two writers must never share a wallet');
+      expect(() => createFileStore(path, { breakStaleLock: true, staleLockAfter: 200 })).toThrow('Two writers must never share a wallet');
       expect(Date.now() - statSync(join(path, 'lock')).mtimeMs).toBeLessThan(250);
     } finally {
       proc.kill('SIGKILL');

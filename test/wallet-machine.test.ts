@@ -54,7 +54,7 @@ async function run(seed: number, steps: number): Promise<Set<string>> {
   const inner = createMemoryStore();
   let { store, failNext } = failing(inner);
   const open = { backend: chain, transactions: chain, quietSyncInterval: 3 };
-  let wallet = await PearlWallet.create({ ...open, store, passphrase: PASSPHRASE, mnemonic: MNEMONIC, kdf: FAST_KDF, gapLimit: 40, reorgDepth: REORG_DEPTH, unlockTimeoutMs: null });
+  let wallet = await PearlWallet.create({ ...open, store, passphrase: PASSPHRASE, mnemonic: MNEMONIC, kdf: FAST_KDF, gapLimit: 40, reorgDepth: REORG_DEPTH, unlockTimeout: null });
   const log: string[] = [];
   const did = new Set<string>();
   const note = (what: string): void => {

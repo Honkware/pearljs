@@ -229,7 +229,7 @@ describe('wallet: how long a new wallet stays unlocked', () => {
   it('returns a new wallet unlocked and locks it after the timeout', async () => {
     expect(DEFAULT_CREATE_UNLOCK_MS).toBe(300_000);
     const chain = new FakeChain();
-    const wallet = await PearlWallet.create({ ...connection(chain), unlockTimeoutMs: 40 });
+    const wallet = await PearlWallet.create({ ...connection(chain), unlockTimeout: 40 });
     expect(wallet.locked).toBe(false);
     expect(await wallet.mnemonic()).toBe(MNEMONIC);
     await new Promise((resolve) => setTimeout(resolve, 90));
@@ -239,16 +239,16 @@ describe('wallet: how long a new wallet stays unlocked', () => {
 
   it('returns it locked for a timeout of 0, and unlocked until lock() for null', async () => {
     const chain = new FakeChain();
-    const locked = await PearlWallet.create({ ...connection(chain), unlockTimeoutMs: 0 });
+    const locked = await PearlWallet.create({ ...connection(chain), unlockTimeout: 0 });
     expect(locked.locked).toBe(true);
     await locked.unlock(PASSPHRASE);
-    const open = await PearlWallet.create({ ...connection(chain), unlockTimeoutMs: null });
+    const open = await PearlWallet.create({ ...connection(chain), unlockTimeout: null });
     expect(open.locked).toBe(false);
-    await expect(PearlWallet.create({ ...connection(chain), unlockTimeoutMs: -5 })).rejects.toThrow(RangeError);
+    await expect(PearlWallet.create({ ...connection(chain), unlockTimeout: -5 })).rejects.toThrow(RangeError);
     const keystore = open.exportKeystore();
-    const restored = await PearlWallet.restore({ store: createMemoryStore(), backend: chain, transactions: chain, keystore, passphrase: PASSPHRASE, unlockTimeoutMs: 0 });
+    const restored = await PearlWallet.restore({ store: createMemoryStore(), backend: chain, transactions: chain, keystore, passphrase: PASSPHRASE, unlockTimeout: 0 });
     expect(restored.locked).toBe(true);
-    const brief = await PearlWallet.restore({ store: createMemoryStore(), backend: chain, transactions: chain, keystore, passphrase: PASSPHRASE, unlockTimeoutMs: 40 });
+    const brief = await PearlWallet.restore({ store: createMemoryStore(), backend: chain, transactions: chain, keystore, passphrase: PASSPHRASE, unlockTimeout: 40 });
     expect(brief.locked).toBe(false);
     await new Promise((resolve) => setTimeout(resolve, 90));
     expect(brief.locked).toBe(true);

@@ -126,7 +126,7 @@ describe('wallet: payments signed elsewhere', () => {
     expect(wallet.balance()).toMatchObject({ confirmed: prl('3'), locked: 0n });
     await expect(wallet.submitSigned(signElsewhere(prepared))).rejects.toMatchObject({ code: 'WALLET_NOT_PREPARED', message: expect.stringContaining('cancelled') });
 
-    const brief = await wallet.prepareSend({ ...payment, holdMs: 5_000 });
+    const brief = await wallet.prepareSend({ ...payment, hold: 5_000 });
     expect(brief.changeAddress).toBe(prepared.changeAddress);
     now += 4_999;
     expect(wallet.balance().locked).toBe(prl('3'));
@@ -201,8 +201,8 @@ describe('wallet: payments signed elsewhere', () => {
     const { chain, wallet } = await watching(['3']);
     chain.feeRate = prl('5');
     await expect(wallet.prepareSend({ recipients: payment.recipients })).rejects.toMatchObject({ code: 'FEE_TOO_HIGH' });
-    await expect(wallet.prepareSend({ ...payment, holdMs: -1 })).rejects.toThrow(RangeError);
-    const preview = await wallet.prepareSend({ ...payment, holdMs: 0 });
+    await expect(wallet.prepareSend({ ...payment, hold: -1 })).rejects.toThrow(RangeError);
+    const preview = await wallet.prepareSend({ ...payment, hold: 0 });
     expect(preview).toMatchObject({ id: null, expiresAt: null });
     expect(wallet.balance().locked).toBe(0n);
     expect(wallet.preparedSends()).toEqual([]);
@@ -269,7 +269,7 @@ describe('wallet: payments signed elsewhere', () => {
 
   it('prepares from a wallet with keys while it is locked, and a send it then signs itself is unaffected', async () => {
     const chain = new FakeChain();
-    const wallet = await PearlWallet.create({ store: createMemoryStore(), backend: chain, transactions: chain, passphrase: PASSPHRASE, mnemonic: MNEMONIC, kdf: FAST_KDF, gapLimit: 10, unlockTimeoutMs: 0 });
+    const wallet = await PearlWallet.create({ store: createMemoryStore(), backend: chain, transactions: chain, passphrase: PASSPHRASE, mnemonic: MNEMONIC, kdf: FAST_KDF, gapLimit: 10, unlockTimeout: 0 });
     chain.pay(await wallet.receiveAddress(), prl('3'));
     chain.mine();
     await wallet.sync();

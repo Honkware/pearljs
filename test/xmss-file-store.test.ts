@@ -155,7 +155,7 @@ describe('file-backed XMSS index store', () => {
     }
     expect(message).toContain('open with breakLock: true');
     expect(message).not.toMatch(/delete|remove/);
-    expect(() => createFileXmssIndexStore(path, { breakStaleLock: true, staleLockMs: 1 })).toThrow('Two signers must never share a key');
+    expect(() => createFileXmssIndexStore(path, { breakStaleLock: true, staleLockAfter: 1 })).toThrow('Two signers must never share a key');
 
     const taker = createFileXmssIndexStore(path, { breakLock: true });
     expect(() => store.reserve(keyA)).toThrow(expect.objectContaining({ code: 'XMSS_STORE_LOCKED', message: expect.stringContaining('No index was reserved') }));

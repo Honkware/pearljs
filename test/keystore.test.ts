@@ -248,11 +248,11 @@ describe('keystore', () => {
   it('refuses an unlock timeout a timer cannot hold instead of locking at once', async () => {
     const keystore = await createKeystore('pass', FAST);
     keystore.lock();
-    for (const timeoutMs of [2 ** 31, 30 * 24 * 3600 * 1000, Infinity, 0, -1, NaN]) {
-      await expect(keystore.unlock('pass', { timeoutMs })).rejects.toThrow(RangeError);
+    for (const timeout of [2 ** 31, 30 * 24 * 3600 * 1000, Infinity, 0, -1, NaN]) {
+      await expect(keystore.unlock('pass', { timeout })).rejects.toThrow(RangeError);
     }
     expect(keystore.locked).toBe(true);
-    await keystore.unlock('pass', { timeoutMs: 2 ** 31 - 1 });
+    await keystore.unlock('pass', { timeout: 2 ** 31 - 1 });
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(keystore.locked).toBe(false);
     expect(() => keystore.lockAfter(2 ** 31)).toThrow(RangeError);
@@ -268,7 +268,7 @@ describe('keystore', () => {
     keystore.lock();
     let locks = 0;
     keystore.onLock(() => (locks += 1));
-    await keystore.unlock('pass', { timeoutMs: 20 });
+    await keystore.unlock('pass', { timeout: 20 });
     expect(keystore.locked).toBe(false);
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(keystore.locked).toBe(true);

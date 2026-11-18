@@ -96,7 +96,7 @@ function xmssFileChild(path: string, rounds: number): void {
 async function takeoverChild(directory: string): Promise<void> {
   let store: FileStore | null = null;
   try {
-    store = createFileStore(directory, { breakStaleLock: true, staleLockMs: 200 });
+    store = createFileStore(directory, { breakStaleLock: true, staleLockAfter: 200 });
     say({ ok: true });
   } catch (error) {
     say(failure(error));

@@ -205,7 +205,7 @@ describe('wallet: reorgs while offline', () => {
       watchBlocks: () => () => undefined,
       notifyReceived: async () => undefined,
     } as unknown as WalletNotifier;
-    const stop = wallet.watch({ notifier, intervalMs: 3_600_000 });
+    const stop = wallet.watch({ notifier, pollInterval: 3_600_000 });
     (listeners.get('redeemingtx') as (value: PearlWsEvents['redeemingtx']) => void)({ transaction: rival.toHex(), block: { hash: block.hash, height: block.height, index: 1, time: 0 } });
     await wallet.exportState();
     expect(wallet.transaction(sent.txid)).toMatchObject({ status: 'conflicted', by: rival.getId(), block: null });

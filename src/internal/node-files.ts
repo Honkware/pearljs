@@ -32,7 +32,7 @@ export const DEFAULT_STALE_LOCK_MS = 10_000;
 export interface FileLockOptions {
   /**
    * Take over a lock that is stale: made on this host, by a process that is
-   * no longer running, and not touched for staleLockMs. Off unless given. A
+   * no longer running, and not touched for staleLockAfter. Off unless given. A
    * lock from another host, or one its holder still touches, is never stale.
    */
   breakStaleLock?: boolean;
@@ -43,7 +43,7 @@ export interface FileLockOptions {
    */
   breakLock?: boolean;
   /** How long a lock must go untouched before it can be stale, in milliseconds. DEFAULT_STALE_LOCK_MS unless given. */
-  staleLockMs?: number;
+  staleLockAfter?: number;
 }
 
 /** Who holds a lock, as its file says. */
@@ -164,8 +164,8 @@ function isRunning(pid: number): boolean {
  * it is also released when the process exits normally.
  */
 export function acquireLock(lockPath: string, options: FileLockOptions = {}): HeldLock {
-  const staleMs = options.staleLockMs ?? DEFAULT_STALE_LOCK_MS;
-  if (!Number.isFinite(staleMs) || staleMs <= 0) throw new RangeError('staleLockMs must be a positive number');
+  const staleMs = options.staleLockAfter ?? DEFAULT_STALE_LOCK_MS;
+  if (!Number.isFinite(staleMs) || staleMs <= 0) throw new RangeError('staleLockAfter must be a positive number');
   const heartbeatMs = Math.max(10, Math.floor(staleMs / 5));
   const id = randomId();
   const mine = `${JSON.stringify({ id, pid: process.pid, host: hostname(), heartbeatMs })}\n`;

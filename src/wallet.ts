@@ -40,7 +40,6 @@ import { MAX_UNLOCK_TIMEOUT_MS } from './keystore.js';
 import type { EncryptedKeystore, Keystore, KeystoreOptions, UnlockOptions } from './keystore.js';
 import { generateMnemonic, mnemonicToSeed, validateMnemonic, normalizeMnemonic } from './mnemonic.js';
 import type { PearlNetwork } from './networks.js';
-import { p2mr } from './payments.js';
 import { replacementFee, signalsReplacement } from './rbf.js';
 import { PearldRpc, OysterRpc, isUnknownTransaction } from './rpc.js';
 import { verifyInput, verifyTransaction } from './interpreter.js';
@@ -162,6 +161,15 @@ export interface WalletConnection {
   quietSyncInterval?: number;
 }
 
+/** Options for watch. */
+export interface WatchOptions {
+  /** Milliseconds between full syncs; 60 seconds unless given. */
+  pollInterval?: number;
+  /** @deprecated The earlier name of pollInterval, read when pollInterval is left out. */
+  intervalMs?: number;
+  notifier?: WalletNotifier;
+}
+
 /** Options for sync. */
 export interface SyncOptions {
   /** Scan the whole gap limit past the last used address and ask about every address, as the first sync does. */
@@ -228,6 +236,8 @@ export interface CreateWalletOptions extends WalletConnection {
    * itself after DEFAULT_CREATE_UNLOCK_MS unless this says otherwise: null
    * keeps it unlocked until lock(), 0 returns it locked.
    */
+  unlockTimeout?: number | null;
+  /** @deprecated The earlier name of unlockTimeout, read when unlockTimeout is left out. */
   unlockTimeoutMs?: number | null;
   /** Unused addresses in a row a restore scans before it stops; also the most unused receive addresses handed out in a row. OYSTER_RECOVERY_WINDOW unless given. */
   gapLimit?: number;
@@ -267,6 +277,8 @@ export interface RestoreWalletOptions extends WalletConnection {
   accounts?: number[];
   gapLimit?: number;
   /** As for create: how long the restored wallet stays unlocked. */
+  unlockTimeout?: number | null;
+  /** @deprecated The earlier name of unlockTimeout, read when unlockTimeout is left out. */
   unlockTimeoutMs?: number | null;
 }
 
@@ -322,7 +334,7 @@ export interface PrepareSendOptions extends SendOptions {
    * submitSigned, in milliseconds. DEFAULT_PREPARE_HOLD_MS unless given. 0
    * holds nothing: the result is a preview and cannot be submitted.
    */
-  holdMs?: number;
+  hold?: number;
 }
 
 /** A payment built and not signed, as prepareSend returns it. Amounts in grain. */
@@ -458,7 +470,7 @@ export interface WalletEvents {
 type Listener<T> = (value: T) => void;
 
 /** A small typed event emitter. A listener that throws does not stop the others. */
-export class WalletEmitter<E extends object> {
+class WalletEmitter<E extends object> {
   #listeners = new Map<keyof E, Set<Listener<never>>>();
 
   on<K extends keyof E>(event: K, listener: (value: E[K]) => void): () => void {
@@ -653,9 +665,10 @@ function originOf(account: PearlAccount): { masterFingerprint: string; path: str
   return account.masterFingerprint === null || account.path === null ? null : { masterFingerprint: account.masterFingerprint, path: account.path };
 }
 
-function unlockTimeout(value: number | null | undefined): number | null {
+function unlockTimeout(options: { unlockTimeout?: number | null; unlockTimeoutMs?: number | null }): number | null {
+  const value = options.unlockTimeout === undefined ? options.unlockTimeoutMs : options.unlockTimeout;
   if (value === undefined) return DEFAULT_CREATE_UNLOCK_MS;
-  if (value !== null && value !== 0) checkPositive(value, 'unlockTimeoutMs');
+  if (value !== null && value !== 0) checkPositive(value, 'unlockTimeout');
   return value;
 }
 
@@ -868,7 +881,7 @@ export class PearlWallet {
    * mnemonic (generated unless given) and its seed, and BIP86 account 0; or,
    * with watchOnly, one watch-only account and no keystore. A wallet with
    * keys is returned unlocked, so the phrase can be read, and locks itself
-   * after unlockTimeoutMs. Nothing is synced yet.
+   * after unlockTimeout. Nothing is synced yet.
    */
   static async create(options: CreateWalletOptions): Promise<PearlWallet> {
     const wallet = new PearlWallet(options);
@@ -876,7 +889,7 @@ export class PearlWallet {
     const gapLimit = checkPositive(options.gapLimit ?? OYSTER_RECOVERY_WINDOW, 'gapLimit');
     const lookahead = checkPositive(options.lookahead ?? DEFAULT_LOOKAHEAD, 'lookahead');
     const reorgDepth = checkPositive(options.reorgDepth ?? DEFAULT_REORG_DEPTH, 'reorgDepth');
-    const timeout = unlockTimeout(options.unlockTimeoutMs);
+    const timeout = unlockTimeout(options);
     wallet.#meta = {
       format: 'pearljs-wallet',
       version: WALLET_SCHEMA_VERSION,
@@ -957,7 +970,7 @@ export class PearlWallet {
    */
   static async restore(options: RestoreWalletOptions): Promise<PearlWallet> {
     if ((await options.store.list('')).length > 0) throw new WalletError('WALLET_EXISTS', 'the store is not empty; restore into an empty store');
-    const timeout = unlockTimeout(options.unlockTimeoutMs);
+    const timeout = unlockTimeout(options);
     const network = options.backend.network;
     const now = (options.now ?? Date.now)();
     const keystore = openKeystore(options.keystore);
@@ -1024,7 +1037,7 @@ export class PearlWallet {
     }
     await options.store.batch((await scratchStore.list('')).map(([key, value]) => ({ type: 'set', key, value })));
     const wallet = await PearlWallet.open(options);
-    if (timeout !== 0) await wallet.unlock(options.passphrase, timeout === null ? {} : { timeoutMs: timeout });
+    if (timeout !== 0) await wallet.unlock(options.passphrase, timeout === null ? {} : { timeout });
     return wallet;
   }
 
@@ -1040,7 +1053,7 @@ export class PearlWallet {
   }
 
   /**
-   * Unlocks the keystore; with timeoutMs it locks itself again after that
+   * Unlocks the keystore; with timeout it locks itself again after that
    * long. Before it resolves, the wallet's accounts, imported addresses and
    * XMSS keys are checked against the tag the keystore made over them, and
    * the keystore against the keys the wallet holds: KEYSTORE_TAMPERED, and
@@ -1707,15 +1720,15 @@ export class PearlWallet {
   }
 
   /**
-   * Keeps the wallet in sync: a full sync every intervalMs (60 s unless
+   * Keeps the wallet in sync: a full sync every pollInterval (60 s unless
    * given) and, with a notifier such as a PearlWsClient, a refresh on every
    * block and the transactions pearld reports for the wallet's addresses as
    * they arrive. Failures are reported as error events. Returns a function
    * that stops it.
    */
-  watch(options: { intervalMs?: number; notifier?: WalletNotifier } = {}): () => void {
+  watch(options: WatchOptions = {}): () => void {
     const report = (err: unknown): void => this.#emitter.emit('error', err instanceof Error ? err : new Error(String(err)));
-    const timer = setInterval(() => this.sync().catch(report), options.intervalMs ?? 60_000);
+    const timer = setInterval(() => this.sync().catch(report), options.pollInterval ?? options.intervalMs ?? 60_000);
     const stops: (() => void)[] = [() => clearInterval(timer)];
     const notifier = options.notifier;
     if (notifier !== undefined) {
@@ -1809,15 +1822,15 @@ export class PearlWallet {
    * change. Nothing is signed, recorded as sent or broadcast, and the
    * wallet need not be unlocked.
    *
-   * The chosen coins and the change address are held for holdMs, out of
+   * The chosen coins and the change address are held for hold, out of
    * reach of other sends, until submitSigned takes the signed transaction,
    * cancelPrepared releases them, or the hold runs out. The hold is stored,
-   * so it outlives a restart. With holdMs 0 nothing is held.
+   * so it outlives a restart. With hold 0 nothing is held.
    */
   async prepareSend(options: PrepareSendOptions): Promise<PreparedSend> {
     return this.#exclusive(async () => {
-      const holdMs = options.holdMs ?? DEFAULT_PREPARE_HOLD_MS;
-      if (!Number.isSafeInteger(holdMs) || holdMs < 0) throw new RangeError('holdMs must be a non-negative integer of milliseconds');
+      const hold = options.hold ?? DEFAULT_PREPARE_HOLD_MS;
+      if (!Number.isSafeInteger(hold) || hold < 0) throw new RangeError('hold must be a non-negative integer of milliseconds');
       const { feeRate, maxFeeRate } = await this.#feeRates(options);
       this.#prunePrepared();
       const { payment, changeAccount, changeIndex, changeAddress } = this.#build(options, feeRate, true);
@@ -1831,9 +1844,9 @@ export class PearlWallet {
       const hasChange = payment.changeIndex >= 0;
       let id: string | null = null;
       let expiresAt: number | null = null;
-      if (holdMs > 0) {
+      if (hold > 0) {
         id = toHex(crypto.getRandomValues(new Uint8Array(16)));
-        expiresAt = this.#now() + holdMs;
+        expiresAt = this.#now() + hold;
         const record: PreparedRecord = {
           id,
           tx: payment.transaction,
@@ -1850,7 +1863,7 @@ export class PearlWallet {
         this.#prepared.set(id, record);
         this.#put(`prepared:${id}`, preparedToJson(record));
         // The coins come back by themselves when the hold ends, which a UI has to hear of.
-        const timer = setTimeout(() => this.#changed(), Math.min(holdMs, MAX_UNLOCK_TIMEOUT_MS));
+        const timer = setTimeout(() => this.#changed(), Math.min(hold, MAX_UNLOCK_TIMEOUT_MS));
         (timer as { unref?: () => void }).unref?.();
       }
       const ownership = this.#ownership();
@@ -3284,9 +3297,4 @@ export class PearlWallet {
     }
     return signed;
   }
-}
-
-/** The P2MR output script of an XMSS public key alone in its tree, as the wallet's XMSS addresses use. */
-export function xmssWalletScript(publicKey: Uint8Array): Uint8Array {
-  return p2mr({ merkleRoot: assembleScriptTree([xmssLeafScript(publicKey)]).root }).output;
 }

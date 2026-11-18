@@ -29,7 +29,8 @@ import { PrlAmount, UNBOUNDED_METHODS, basicAuth, encodeJson, isErrorReply, read
 import { PearlRpcError } from './errors.js';
 import type { FeeRate } from './amount.js';
 
-export { PearlRpcError, PrlAmount };
+export { PearlRpcError };
+export type { PrlAmount };
 export type { RpcErrorKind } from './errors.js';
 
 /** pearld's default RPC port per network (node/params.go). */

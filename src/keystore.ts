@@ -96,7 +96,7 @@ export const MAX_UNLOCK_TIMEOUT_MS = 2 ** 31 - 1;
 /** Options for unlock. */
 export interface UnlockOptions {
   /** Lock again after this many milliseconds, at most MAX_UNLOCK_TIMEOUT_MS. Stays unlocked until lock() unless given. */
-  timeoutMs?: number;
+  timeout?: number;
 }
 
 const encoder = new TextEncoder();
@@ -158,11 +158,11 @@ function macAad(context: string, message: string): Uint8Array {
 const EMPTY = new Uint8Array(0);
 const TAMPERED_SET = 'the keystore set of secrets failed authentication: a secret was added, removed or replaced outside the keystore, or the keystore was damaged';
 
-function checkTimeout(timeoutMs: number | undefined): void {
-  if (timeoutMs === undefined) return;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new RangeError('timeoutMs must be a positive number');
+function checkTimeout(timeout: number | undefined): void {
+  if (timeout === undefined) return;
+  if (!Number.isFinite(timeout) || timeout <= 0) throw new RangeError('timeout must be a positive number');
   // A timer takes a 32-bit delay and runs a longer one at once.
-  if (timeoutMs > MAX_UNLOCK_TIMEOUT_MS) throw new RangeError(`timeoutMs must be at most ${MAX_UNLOCK_TIMEOUT_MS}; leave it out to stay unlocked until lock()`);
+  if (timeout > MAX_UNLOCK_TIMEOUT_MS) throw new RangeError(`timeout must be at most ${MAX_UNLOCK_TIMEOUT_MS}; leave it out to stay unlocked until lock()`);
 }
 
 async function importAesKey(raw: Uint8Array, usages: KeyUsage[]): Promise<CryptoKey> {
@@ -277,8 +277,8 @@ export class Keystore {
    * called while it was working, in which case the keystore stays locked.
    */
   async unlock(passphrase: string | Uint8Array, options: UnlockOptions = {}): Promise<void> {
-    const { timeoutMs } = options;
-    checkTimeout(timeoutMs);
+    const { timeout } = options;
+    checkTimeout(timeout);
     const generation = this.#generation;
     const data = this.#data;
     const kek = await deriveKek(passphrase, data.kdf);
@@ -292,7 +292,7 @@ export class Keystore {
     // The work above takes a second or so, in which lock() may have been called or the keystore changed: neither is undone here.
     if (generation !== this.#generation || data !== this.#data) throw new KeystoreError('KEYSTORE_LOCKED', 'the keystore was locked or changed while it was unlocking; it stays as that left it');
     this.#key = key;
-    this.#schedule(timeoutMs);
+    this.#schedule(timeout);
   }
 
   /** Forgets the data key. Secrets cannot be read or added until unlock, and an unlock still in flight fails. */
@@ -416,11 +416,11 @@ export class Keystore {
     }
   }
 
-  /** Locks after timeoutMs unless it is locked, or unlocked again, first: the timeout of unlock for a keystore that is already unlocked. */
-  lockAfter(timeoutMs: number): void {
-    checkTimeout(timeoutMs);
+  /** Locks after timeout unless it is locked, or unlocked again, first: the timeout of unlock for a keystore that is already unlocked. */
+  lockAfter(timeout: number): void {
+    checkTimeout(timeout);
     this.#unlocked();
-    this.#schedule(timeoutMs);
+    this.#schedule(timeout);
   }
 
   #change<T>(run: () => Promise<T>): Promise<T> {
@@ -434,11 +434,11 @@ export class Keystore {
     return this.#key;
   }
 
-  #schedule(timeoutMs: number | undefined): void {
+  #schedule(timeout: number | undefined): void {
     if (this.#timer !== null) clearTimeout(this.#timer);
     this.#timer = null;
-    if (timeoutMs === undefined) return;
-    this.#timer = setTimeout(() => this.lock(), timeoutMs);
+    if (timeout === undefined) return;
+    this.#timer = setTimeout(() => this.lock(), timeout);
     // A pending lock should not keep a Node process alive.
     (this.#timer as { unref?: () => void }).unref?.();
   }

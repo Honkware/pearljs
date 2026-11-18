@@ -536,7 +536,7 @@ describe('wallet: notifications', () => {
     const chain = new FakeChain();
     const wallet = await newWallet(chain);
     const { notifier, listeners, watched, block } = fakeNotifier();
-    const stop = wallet.watch({ notifier, intervalMs: 3_600_000 });
+    const stop = wallet.watch({ notifier, pollInterval: 3_600_000 });
     const address = await wallet.receiveAddress();
     expect(watched).toContain(address);
     const confirmed = new Promise<void>((resolve) => wallet.on('confirmation', () => resolve()));
@@ -557,7 +557,7 @@ describe('wallet: notifications', () => {
   it('conflicts a pending send at once when a notification shows its double spend confirmed', async () => {
     const { chain, wallet } = await funded(['10']);
     const { notifier, send } = fakeNotifier();
-    const stop = wallet.watch({ notifier, intervalMs: 3_600_000 });
+    const stop = wallet.watch({ notifier, pollInterval: 3_600_000 });
     const sent = await wallet.send({ recipients: [{ address: STRANGER, amount: prl('3') }], feeRate: 2000n });
     const rival = chain.doubleSpend(sent.txid);
     const block = chain.blocks[chain.height]!;
