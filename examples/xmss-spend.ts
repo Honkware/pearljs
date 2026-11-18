@@ -14,6 +14,7 @@ import {
   createTransaction,
   createXmssSigner,
   deriveAccountFromSeed,
+  generateXmssSeeds,
   p2mrAddress,
   mnemonicToSeed,
   networks,
@@ -23,8 +24,6 @@ import {
   toOutputScript,
   xmssLeafScript,
   XMSS_MAX_SIGNATURES,
-  XMSS_PRIVATE_SEED_LENGTH,
-  XMSS_PUBLIC_SEED_LENGTH,
 } from 'pearljs';
 
 const network = networks.regtest;
@@ -35,8 +34,7 @@ const destination = deriveAccountFromSeed(
 
 // XMSS keys come from two random seeds, not from a mnemonic. Both must be
 // kept to sign again.
-const privateSeed = crypto.getRandomValues(new Uint8Array(XMSS_PRIVATE_SEED_LENGTH));
-const publicSeed = crypto.getRandomValues(new Uint8Array(XMSS_PUBLIC_SEED_LENGTH));
+const { privateSeed, publicSeed } = generateXmssSeeds();
 const signer = createXmssSigner(privateSeed, publicSeed, createMemoryXmssIndexStore());
 
 const tree = assembleScriptTree([xmssLeafScript(signer.publicKey)]);
