@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   connectPearld,
+  customNetwork,
   PearlError,
   PearlWallet,
   UnsupportedMethodError,
@@ -26,17 +27,17 @@ import {
   type WalletStore,
 } from '../src/index.js';
 import { FakeNode, type FakeNodeOptions } from './filter-node.js';
-import { FAST_KDF, FakeChain, MNEMONIC, PASSPHRASE, STRANGER } from './wallet-chain.js';
+import { FAST_KDF, FakeChain, MNEMONIC, PASSPHRASE, STRANGER, signWithTestWallet } from './wallet-chain.js';
 
-const network = networks.regtest;
+const network = customNetwork(networks.regtest, { coinbaseMaturity: 2 });
 const account = deriveSigningAccountFromSeed(mnemonicToSeed(MNEMONIC), network);
 const [r0, r1, r2] = [0, 1, 2].map((i) => account.deriveAddress(i));
 const c0 = account.deriveAddress(0, true);
 const mine = [r0!, r1!, r2!, c0];
 
 function setup(options: FakeNodeOptions = {}) {
-  const chain = new FakeChain();
-  chain.mine(4);
+  // Heights 0 to 4, with the first coinbases already mature for the faucet.
+  const chain = new FakeChain({ network, premine: 4 });
   const node = new FakeNode(chain, options);
   return { chain, node };
 }
@@ -58,8 +59,7 @@ describe('filterBackend', () => {
     addInputByTxid(tx, before.getId(), 0);
     tx.addOutput(toOutputScript(c0, network), 100000000n);
     tx.addOutput(toOutputScript(STRANGER, network), 49990000n);
-    tx.setWitness(0, [new Uint8Array(64)]);
-    await chain.broadcast(tx.toHex());
+    await chain.broadcast(signWithTestWallet(tx, chain.prevouts(tx)!).toHex());
 
     const filters = backendFor(node);
     const indexed = pearldBackend(node, { network });
@@ -87,8 +87,7 @@ describe('filterBackend', () => {
     const spend = createTransaction(2);
     addInputByTxid(spend, payment.getId(), 0);
     spend.addOutput(toOutputScript(STRANGER, network), 8000n);
-    spend.setWitness(0, [new Uint8Array(64)]);
-    await chain.broadcast(spend.toHex());
+    await chain.broadcast(signWithTestWallet(spend, chain.prevouts(spend)!).toHex());
     chain.mine(1);
     const restarted = backendFor(new FakeNode(chain), { watch: [r0!] });
     for (const view of [backend, restarted]) {
@@ -205,8 +204,7 @@ describe('filterBackend', () => {
     const tx = createTransaction(2);
     addInputByTxid(tx, paid.getId(), 0);
     tx.addOutput(toOutputScript(STRANGER, network), 5000n);
-    tx.setWitness(0, [new Uint8Array(64)]);
-    expect(await sending.broadcast(tx.toHex())).toBe(tx.getId());
+    expect(await sending.broadcast(signWithTestWallet(tx, chain.prevouts(tx)!).toHex())).toBe(tx.getId());
     expect(chain.mempool.has(tx.getId())).toBe(true);
   });
 
@@ -314,10 +312,46 @@ describe('one object per node', () => {
     chain.pay(r0!, 8000n);
     chain.mine(1);
     const backend = await connectPearld(new FakeNode(chain, { addrIndex: false }), { network, birthday: 0, maxAge: 0 });
-    const wallet = await PearlWallet.create({ store: createMemoryStore(), backend, transactions: backend, passphrase: PASSPHRASE, mnemonic: MNEMONIC, kdf: FAST_KDF, gapLimit: 10 });
+    const wallet = await PearlWallet.create({ store: createMemoryStore(), backend, passphrase: PASSPHRASE, mnemonic: MNEMONIC, kdf: FAST_KDF, gapLimit: 10 });
     await wallet.sync();
     expect(wallet.balance()).toMatchObject({ confirmed: 8000n });
     await wallet.close();
+  });
+
+  it('answers a wallet\'s later syncs with one question for every address', async () => {
+    const { chain, node } = setup();
+    chain.pay(r0!, 8000n);
+    chain.mine(1);
+    const filters = backendFor(node, { birthday: 0 });
+    const asked = { history: 0, since: 0 };
+    const backend: FilterBackend = {
+      ...filters,
+      getHistory: (watched) => (asked.history++, filters.getHistory(watched)),
+      getActivitySince: (watched, after) => (asked.since++, filters.getActivitySince(watched, after)),
+    };
+    const wallet = await PearlWallet.create({ store: createMemoryStore(), backend, passphrase: PASSPHRASE, mnemonic: MNEMONIC, kdf: FAST_KDF, gapLimit: 10 });
+    await wallet.sync();
+    expect(asked.since).toBe(0);
+    const before = asked.history;
+    // To the address already used, so no new address comes into the window to be asked about on its own.
+    chain.pay(r0!, 9000n);
+    chain.mine(1);
+    chain.pay(r0!, 1000n);
+    await wallet.sync();
+    expect(asked).toEqual({ history: before, since: 1 });
+    expect(wallet.balance()).toMatchObject({ confirmed: 17000n, unconfirmed: 1000n });
+    await wallet.close();
+  });
+
+  it('cannot answer from a block that left the chain or lies before the birthday', async () => {
+    const { chain, node } = setup();
+    const filters = backendFor(node);
+    await filters.sync();
+    const tip = (await filters.getTip())!;
+    expect(await filters.getActivitySince([r0!], tip)).toEqual([]);
+    expect(await filters.getActivitySince([r0!], { height: 1, hash: chain.blocks[1]!.hash })).toBeNull();
+    chain.reorg(1);
+    expect(await filters.getActivitySince([r0!], tip)).toBeNull();
   });
 
 });

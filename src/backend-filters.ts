@@ -43,6 +43,7 @@ import { fromHex, toHex } from './internal/bytes.js';
 import { fetchBlockFilters, mapLimit } from './internal/filter-scan.js';
 import type { HeightFilter } from './internal/filter-scan.js';
 import { safeHeight } from './internal/rpc-wire.js';
+import type { ActivityScanner } from './wallet.js';
 
 /** Options for filterBackend. */
 export interface FilterBackendOptions {
@@ -113,7 +114,7 @@ export interface FilterBackendStatus {
  * every transaction it found, so getRawTransaction answers for them without
  * --txindex.
  */
-export interface FilterBackend extends WalletChain {
+export interface FilterBackend extends WalletChain, ActivityScanner {
   /** Scans from the cursor to the node's tip, undoing a reorganization first, then looks through the mempool. Resolves to the new cursor. */
   sync(options?: FilterSyncOptions): Promise<BlockRef>;
   /** Watches more addresses or scripts, scanning the blocks already passed for them. */
@@ -585,10 +586,42 @@ export function filterBackend(rpc: Rpc, options: FilterBackendOptions): FilterBa
     return entries;
   };
 
+  // What touched the watched scripts after `after`, from what the scan holds. A script watched for the
+  // first time here has nothing known of it yet, so its whole history comes back.
+  const getActivitySince = async (watched: readonly Watched[], after: BlockRef): Promise<{ txid: string; block: BlockRef | null }[] | null> => {
+    await loaded;
+    const before = new Set(scripts);
+    const wanted = new Set(await ensureWatched(watched));
+    if (state === null) return null;
+    const { anchor: start, cursor } = state;
+    if (after.height < start.height || after.height > cursor.height) return null;
+    const known =
+      (after.height === cursor.height && after.hash === cursor.hash) ||
+      (after.height === start.height && after.hash === start.hash) ||
+      ((await store.get(key.block(after.height))) as [string, string, string | null] | undefined)?.[0] === after.hash;
+    if (!known) return null;
+    const { owned } = outputs();
+    const touches = (item: Found | Pending, scriptsOf: (script: string) => boolean): boolean =>
+      item.tx.outs.some((out) => scriptsOf(toHex(out.script))) ||
+      item.tx.ins.some((input) => {
+        const out = owned.get(outpointOf(input));
+        return out !== undefined && scriptsOf(out.script);
+      });
+    const confirmed = [...found].sort(([, a], [, b]) => a.height - b.height || a.index - b.index);
+    const activity: { txid: string; block: BlockRef | null }[] = [];
+    for (const [txid, item] of [...confirmed, ...pending]) {
+      const late = !isFound(item) || item.height > after.height;
+      const relevant = touches(item, (script) => wanted.has(script) && (late || !before.has(script)));
+      if (relevant) activity.push({ txid, block: isFound(item) ? blockRef(item) : null });
+    }
+    return activity;
+  };
+
   return {
     network,
     sync,
     watch,
+    getActivitySince,
 
     async getTip() {
       await fresh();
