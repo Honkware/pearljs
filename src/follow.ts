@@ -403,7 +403,8 @@ export interface ResolvePrevoutsOptions {
  * pearld answers getrawtransaction for mempool transactions always and for
  * confirmed ones only with --txindex; without it this throws a
  * MissingIndexError. It throws PREVOUT_NOT_FOUND when the node has no such
- * parent or the parent has no such output.
+ * parent or the parent has no such output, and RPC_RESPONSE when the node
+ * answers with another transaction than the one asked for.
  */
 export async function resolvePrevouts(tx: Transaction, rpc: Rpc, options: ResolvePrevoutsOptions = {}): Promise<TxOutput[]> {
   if (tx.isCoinbase()) return [];
@@ -419,6 +420,7 @@ export async function resolvePrevouts(tx: Transaction, rpc: Rpc, options: Resolv
           : node.getRawTransactionHex(txid).then(
               (hex) => {
                 const fetched = parseTransaction(hex);
+                if (fetched.getId() !== txid) throw new PearlRpcError('response', 'getrawtransaction', `asked for transaction ${txid} and got ${fetched.getId()}`);
                 options.known?.set(txid, fetched);
                 return fetched;
               },

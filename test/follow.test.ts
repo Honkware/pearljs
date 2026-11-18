@@ -494,6 +494,17 @@ describe('resolvePrevouts', () => {
     expect(known.size).toBe(chain.tip.txs.length + 1);
   });
 
+  it('refuses a parent other than the one asked for, and keeps it out of what the caller has', async () => {
+    const { chain, coin, first, second } = history();
+    const rpc = {
+      call: async <T,>(method: string, params: readonly unknown[] = []): Promise<T> =>
+        chain.rpc.call<T>(method, method === 'getrawtransaction' && params[0] === first.txid ? [coin.txid, ...params.slice(1)] : params),
+    };
+    const known = new Map<string, Transaction>();
+    await expect(resolvePrevouts(second.transaction, rpc, { known })).rejects.toMatchObject({ code: 'RPC_RESPONSE', message: expect.stringContaining(first.txid) });
+    expect(known.has(first.txid)).toBe(false);
+  });
+
   it('says which parent or output is missing, and which index pearld runs without', async () => {
     const { chain, coin, first } = history();
     const orphan = payFromAccount(alice, { network: quick, utxos: [{ ...coin, txid: 'ef'.repeat(32), index: 0 }], recipients: [{ address: testAddress(0), amount: 'max' }], feeRate: 2000n });
