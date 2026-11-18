@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'vitest';
 import { PearlError, PearlWallet, createMemoryStore, deriveAccountFromSeed, mnemonicToSeed, networks, parseTransaction } from '../src/index.js';
 import type { WalletStore } from '../src/index.js';
-import { FAST_KDF, FakeChain, MNEMONIC, PASSPHRASE, STRANGER } from './wallet-chain.js';
+import { FAST_KDF, FakeChain, MNEMONIC, PASSPHRASE, STRANGER, blockOf } from './wallet-chain.js';
 import { seededRandom } from './wallet-helpers.js';
 
 const REORG_DEPTH = 3;
@@ -71,9 +71,9 @@ async function run(seed: number, steps: number): Promise<Set<string>> {
     expect(balance.confirmed + balance.immature, context()).toBe(coins.filter((coin) => coin.confirmations >= 1).reduce((sum, coin) => sum + coin.value, 0n));
     for (const coin of coins) {
       if (coin.confirmations < 1) continue;
-      const where = await chain.getTransaction(coin.txid);
-      expect(where?.block, `${context()}: confirmed coin ${key(coin)} is not in a block`).toBeTruthy();
-      expect(where!.block, context()).toEqual(wallet.transaction(coin.txid)!.block);
+      const where = await blockOf(chain, coin.txid);
+      expect(where, `${context()}: confirmed coin ${key(coin)} is not in a block`).toBeTruthy();
+      expect(where, context()).toEqual(wallet.transaction(coin.txid)!.block);
       const spent = await chain.getSpendStatus(coin);
       expect(spent.status === 'spent' && spent.confirmed, `${context()}: confirmed coin ${key(coin)} is spent on chain`).toBe(false);
     }

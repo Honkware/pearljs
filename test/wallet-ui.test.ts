@@ -334,8 +334,8 @@ describe('wallet: history, snapshots and JSON', () => {
     expect(() => coinFromJson({ ...(read.coins[0] as object), value: '1.5' })).toThrow(expect.objectContaining({ code: 'AMOUNT_INVALID' }));
     expect(() => coinFromJson({ ...(read.coins[0] as object), script: 'zz' })).toThrow(TypeError);
     expect(() => historyEntryFromJson({ ...(read.history[0] as object), amount: '0x10' })).toThrow(expect.objectContaining({ code: 'AMOUNT_INVALID' }));
-    // An incoming payment's fee is unknown, and stays null.
-    expect(historyEntryFromJson(JSON.parse(JSON.stringify(historyEntryToJson(wallet.history().at(-1)!)))).fee).toBeNull();
+    // A fee the wallet does not know, as for a payment whose inputs it cannot look up, stays null.
+    expect(historyEntryFromJson(JSON.parse(JSON.stringify(historyEntryToJson({ ...wallet.history().at(-1)!, fee: null })))).fee).toBeNull();
   });
 
   it('says what the wallet holds and could not spend when a send falls short', async () => {

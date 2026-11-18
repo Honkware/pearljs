@@ -91,7 +91,7 @@ export class FakeNode implements Rpc {
             bits: 0x207fffff,
             proofCommitment: new Uint8Array(32),
           },
-          transactions: fake.txs,
+          transactions: [...fake.txs],
         };
         const hash = blockHashHex(block.header);
         const extra = this.extraFilterItems.get(fake.height);
@@ -134,7 +134,7 @@ export class FakeNode implements Rpc {
         const index = block.block.transactions.findIndex((tx) => tx.getId() === txid);
         if (index >= 0) return { tx: block.block.transactions[index]!, block };
       }
-      const pooled = this.chain.mempool.get(txid as string);
+      const pooled = this.chain.mempool.get(txid as string)?.tx;
       return pooled === undefined ? null : { tx: pooled, block: null };
     };
     const verbose = (tx: Transaction, block: Served | null) => ({
@@ -183,7 +183,7 @@ export class FakeNode implements Rpc {
       case 'searchrawtransactions': {
         if (this.options.addrIndex === false) throw rpcError(method, -1, 'Address index must be enabled (--addrindex)');
         const address = params[0] as string;
-        const all = [...blocks.flatMap((block) => block.block.transactions.map((tx) => ({ tx, block }))), ...[...this.chain.mempool.values()].map((tx) => ({ tx, block: null }))];
+        const all = [...blocks.flatMap((block) => block.block.transactions.map((tx) => ({ tx, block }))), ...[...this.chain.mempool.values()].map(({ tx }) => ({ tx, block: null }))];
         const ownOutputs = new Set<string>();
         const list = all.filter(({ tx }) => {
           let touches = false;
@@ -208,7 +208,7 @@ export class FakeNode implements Rpc {
       }
       case 'gettxspendingprevout':
         return (params[0] as { txid: string; vout: number }[]).map(({ txid, vout }) => {
-          const spender = [...this.chain.mempool.values()].find((tx) => tx.ins.some((input) => prevTxid(input) === txid && input.index === vout));
+          const spender = [...this.chain.mempool.values()].map(({ tx }) => tx).find((tx) => tx.ins.some((input) => prevTxid(input) === txid && input.index === vout));
           return spender === undefined ? { txid, vout } : { txid, vout, spendingtxid: spender.getId() };
         });
       case 'getinfo':

@@ -44,7 +44,7 @@ async function run(seed: number, steps: number): Promise<string[]> {
       }
     } else if (roll < 0.75 && chain.height > 3) {
       const depth = 1 + Math.floor(random() * Math.min(3, chain.height - 1));
-      const payments = chain.blocks.slice(-depth).flatMap((block) => block.txs.filter((tx) => !tx.isCoinbase() && tx.ins.every((input) => input.witness[0]?.length === 64 && input.witness[0]![0] === 0)));
+      const payments = chain.blocks.slice(-depth).flatMap((block) => block.txs.filter((tx) => !tx.isCoinbase() && chain.faucet.funded(tx)));
       const replace = payments.length > 0 && random() < 0.5 ? [pick(payments).getId()] : [];
       chain.reorg(depth, { replace, keepInMempool: random() < 0.5 });
       log.push(`reorg ${depth}${replace.length > 0 ? ' replacing a payment' : ''}`);

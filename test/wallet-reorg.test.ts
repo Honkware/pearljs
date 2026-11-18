@@ -11,7 +11,7 @@ import { PearlWallet, createMemoryStore, createTransaction, addInputByTxid, netw
 import type { PearlWsEvents, WalletEvents, WalletNotifier } from '../src/index.js';
 import { computeLedger } from '../src/wallet-ledger.js';
 import type { LedgerTransaction } from '../src/wallet-ledger.js';
-import { FAST_KDF, FakeChain, MNEMONIC, PASSPHRASE, STRANGER } from './wallet-chain.js';
+import { FAST_KDF, FakeChain, MNEMONIC, PASSPHRASE, STRANGER, blockOf } from './wallet-chain.js';
 
 const prl = (text: string): bigint => parsePearl(text);
 const REORG_DEPTH = 6;
@@ -73,7 +73,7 @@ describe('wallet: reorgs while offline', () => {
     await wallet.sync();
     const after = wallet.transaction(payment)!;
     expect(after.status).toBe('confirmed');
-    expect(after.block).toEqual((await chain.getTransaction(payment))!.block);
+    expect(after.block).toEqual(await blockOf(chain, payment));
     expect(after.block!.hash).not.toBe(before.hash);
     expect(wallet.balance().confirmed).toBe(prl('8'));
   });
@@ -109,7 +109,7 @@ describe('wallet: reorgs while offline', () => {
     expect(entry).toMatchObject({ status: 'conflicted', block: null });
     const rival = wallet.transaction(entry.by!)!;
     expect(rival).toMatchObject({ status: 'confirmed', direction: 'outgoing' });
-    expect(rival.block).toEqual((await chain.getTransaction(rival.txid))!.block);
+    expect(rival.block).toEqual(await blockOf(chain, rival.txid));
     expect(wallet.balance().total).toBe(0n);
     expect(wallet.coins()).toEqual([]);
   });
@@ -134,7 +134,7 @@ describe('wallet: reorgs while offline', () => {
     expect(wallet.transaction(old)!.status).toBe('confirmed');
     expect(wallet.transaction(kept)!.status).toBe('confirmed');
     expect(wallet.transaction(replaced)!.status).toBe('conflicted');
-    expect(wallet.transaction(carried)).toMatchObject({ status: 'confirmed', block: (await chain.getTransaction(carried))!.block });
+    expect(wallet.transaction(carried)).toMatchObject({ status: 'confirmed', block: await blockOf(chain, carried) });
     expect(wallet.history().find((entry) => entry.coinbase)!.status).toBe('orphaned');
     expect(wallet.balance()).toMatchObject({ confirmed: prl('7'), immature: 0n, total: prl('7') });
   });

@@ -23,7 +23,7 @@ import {
   toOutputScript,
 } from '../src/index.js';
 import type { PreparedSend, Transaction } from '../src/index.js';
-import { FAST_KDF, FakeChain, MNEMONIC, PASSPHRASE, STRANGER, newWallet } from './wallet-chain.js';
+import { FAST_KDF, FakeChain, MNEMONIC, PASSPHRASE, STRANGER, newWallet, signWithTestWallet } from './wallet-chain.js';
 
 const network = networks.regtest;
 const prl = (text: string): bigint => parsePearl(text);
@@ -190,9 +190,7 @@ describe('wallet: payments signed elsewhere', () => {
     const spend = createTransaction(2);
     addInputByTxid(spend, coin.txid, coin.vout);
     spend.addOutput(toOutputScript(STRANGER, network), coin.value - 1000n);
-    spend.setWitness(0, [new Uint8Array(64).fill(9)]);
-    chain.mempool.set(spend.getId(), spend);
-    chain.mine();
+    chain.mine(1, { include: [signWithTestWallet(spend, chain.prevouts(spend)!)] });
     await wallet.sync();
     expect(wallet.coins()).toEqual([]);
     await expect(wallet.submitSigned(signElsewhere(prepared))).rejects.toMatchObject({ code: 'WALLET_NOT_PREPARED', message: expect.stringContaining('no longer') });

@@ -174,10 +174,10 @@ describe('wallet XMSS keys', () => {
     wallet.on('xmss', (event) => alerts.push(event));
     for (const index of [0xffffffff, 31, 30, 5, 0]) {
       const bogus = forged(index);
-      chain.mempool.set(bogus.getId(), bogus);
+      chain.shown.set(bogus.getId(), bogus);
       await wallet.sync();
       expect(wallet.xmssKeys()[0]).toMatchObject({ frozen: null, highestOnChain: -1, nextIndex: 0 });
-      chain.mempool.delete(bogus.getId());
+      chain.shown.delete(bogus.getId());
       await wallet.sync();
     }
     expect(alerts).toEqual([]);
@@ -189,8 +189,8 @@ describe('wallet XMSS keys', () => {
     const witness = altered.ins[0]!.witness.map((item) => Uint8Array.from(item));
     new DataView(witness[0]!.buffer).setUint32(0, 9);
     altered.setWitness(0, witness);
-    chain.mempool.delete(sent.txid);
-    chain.mempool.set(altered.getId(), altered);
+    // The same txid: the backend shows the altered witness in place of the real one.
+    chain.shown.set(altered.getId(), altered);
     // A wallet that knows the key and none of its history reads the altered spend from the backend.
     const fresh = await PearlWallet.open({ store: createMemoryStore(Object.entries((await wallet.exportState()).entries)), backend: chain, transactions: chain });
     await fresh.rescan();
