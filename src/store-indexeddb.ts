@@ -47,20 +47,27 @@ interface LockManager {
   request(name: string, options: { ifAvailable: boolean; mode: 'exclusive' }, callback: (lock: unknown) => Promise<void>): Promise<void>;
 }
 
-// Holds the named lock until release is called; null when another holder has it.
-async function holdLock(name: string): Promise<(() => void) | null> {
+// Holds the named lock until release is called; null when another holder has
+// it. release resolves once the lock manager has let the lock go, which Firefox
+// does a task after the callback settles: a store reopened before then would
+// find its own lock still held.
+async function holdLock(name: string): Promise<(() => Promise<void>) | null> {
   const locks = (globalThis.navigator as { locks?: LockManager } | undefined)?.locks;
-  if (locks === undefined) return () => undefined;
+  if (locks === undefined) return () => Promise.resolve();
   return new Promise((resolve, reject) => {
-    locks
-      .request(name, { ifAvailable: true, mode: 'exclusive' }, (lock) => {
-        if (lock === null) {
-          resolve(null);
-          return Promise.resolve();
-        }
-        return new Promise<void>((release) => resolve(release));
-      })
-      .catch(reject);
+    const held = locks.request(name, { ifAvailable: true, mode: 'exclusive' }, (lock) => {
+      if (lock === null) {
+        resolve(null);
+        return Promise.resolve();
+      }
+      return new Promise<void>((release) =>
+        resolve(() => {
+          release();
+          return held;
+        }),
+      );
+    });
+    held.catch(reject);
   });
 }
 
@@ -73,7 +80,7 @@ export async function openIndexedDbStore(name: string, options: IndexedDbStoreOp
   if (typeof name !== 'string' || name.length === 0) throw new TypeError('database name must be a non-empty string');
   const factory = options.indexedDB ?? globalThis.indexedDB;
   if (factory === undefined) throw new StoreError('STORE_UNAVAILABLE', 'IndexedDB is not available here; use createMemoryStore, or createFileStore under Node');
-  const release = options.unlocked === true ? () => undefined : await holdLock(`pearljs-wallet:${name}`);
+  const release = options.unlocked === true ? () => Promise.resolve() : await holdLock(`pearljs-wallet:${name}`);
   if (release === null) throw new StoreError('STORE_LOCKED', `wallet ${name} is open in another tab or worker; two writers must never share a wallet`);
 
   let db: IDBDatabase;
@@ -84,7 +91,7 @@ export async function openIndexedDbStore(name: string, options: IndexedDbStoreOp
     };
     db = await request(opening);
   } catch (error) {
-    release();
+    await release();
     throw error;
   }
   let open = true;
@@ -161,7 +168,7 @@ export async function openIndexedDbStore(name: string, options: IndexedDbStoreOp
       if (!open) return;
       open = false;
       db.close();
-      release();
+      await release();
     },
   };
   return store;
