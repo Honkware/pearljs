@@ -20,12 +20,18 @@
 // Blockbook takes from its build, host and pearld (version, gitCommit,
 // buildTime, host, about, dbSize, the backend's version and subversion) are
 // placeholders, the confirmation ETA is approximate, and fiat rates (which
-// Pearl's servers do not serve) and xpubs are left out.
+// Pearl's servers do not serve) are left out. The xpub query follows
+// api/xpub.go as a server would answer with nothing cached: an account key at
+// depth 3 or a tr() descriptor of one on chains 0 and 1, derived until `gap`
+// unused addresses past the last used, transactions of one block ordered by
+// whether they spend, and no `filter` by output.
 
 import { fromOutputScript, toOutputScript } from '../address.js';
 import { serializeBlock } from '../block.js';
 import { difficultyForBits } from '../consensus.js';
 import { toHex } from '../internal/bytes.js';
+import { importWatchOnlyAccount } from '../keys.js';
+import type { PearlAccount } from '../keys.js';
 import { classifyOutputScript } from '../script.js';
 import type { Transaction } from '../transaction.js';
 import type { SimulatedBlock, SimulatedChain, SimulatedEvent } from './chain.js';
@@ -68,6 +74,12 @@ const TXS_IN_API = 1000;
 const TXS_DETAILS_IN_API = 100;
 const MAX_PAGE_NUMBER = 1_000_000;
 const MAX_ACCOUNT_HISTORY_OFFSET = 100_000;
+const MAX_GAP = 10_000;
+// api/xpub.go
+const DEFAULT_ADDRESSES_GAP = 20;
+const MAX_XPUB_DERIVATIONS = (MAX_GAP + 1) * 2;
+// PearlParser.ParseXpub
+const XPUB_DESCRIPTOR = /^tr\((?:\[[^\]]*\])?(\w+)(?:\/(?:\{(\d+(?:,\d+)*)\}|<(\d+(?:;\d+)*)>|(\d+))\/\*)?\)(?:#[A-Za-z0-9]+)?$/;
 
 const prevTxid = (input: Transaction['ins'][number]): string => toHex(Uint8Array.from(input.hash).reverse());
 
@@ -264,6 +276,166 @@ export function simulatedBlockbook(chain: SimulatedChain): SimulatedBlockbook {
     };
   };
 
+  // Worker.GetXpubAddress with getXpubData and xpubScanAddresses: the derived addresses as tokens, their balances
+  // summed, and the history of all of them merged.
+  const xpub = (descriptor: string, query: URLSearchParams, defaults: { tokens: string }): Record<string, unknown> => {
+    const match = XPUB_DESCRIPTOR.exec(descriptor);
+    const changes = match === null ? [0, 1] : (match[2] ?? match[3] ?? match[4])?.split(/[,;]/).map(Number) ?? [0, 1];
+    let account: PearlAccount;
+    try {
+      if (changes.some((change) => change > 1)) throw new Error('only chains 0 and 1 are simulated');
+      account = importWatchOnlyAccount(match === null ? descriptor : match[1]!, network);
+    } catch {
+      throw new ApiError('Internal server error', 500);
+    }
+    const details = query.get('details') ?? 'txids';
+    const option = { basic: 0, tokens: 1, tokenBalances: 2, txids: 3, txslight: 4, txs: 5 }[details] ?? 3;
+    const max = option === 5 ? TXS_DETAILS_IN_API : TXS_IN_API;
+    const paged = accountPaging(int(query.get('page'), 0, 0, MAX_PAGE_NUMBER), int(query.get('pageSize'), max, 0, max), max);
+    let page = Math.max(paged[0] - 1, 0);
+    const pageSize = paged[1];
+    const from = int(query.get('from'), 0, 0, 10_000_000_000);
+    const to = int(query.get('to'), 0, 0, 10_000_000_000);
+    const tokensToReturn = query.get('tokens') ?? defaults.tokens;
+    let gap = int(query.get('gap'), 0, 0, MAX_GAP);
+    if (gap <= 0) gap = DEFAULT_ADDRESSES_GAP;
+    gap += 1;
+    if (changes.length * gap > MAX_XPUB_DERIVATIONS) throw new ApiError('Internal server error', 500);
+
+    type Derived = { address: string; hex: string; change: number; index: number; history: { tx: Transaction; block: SimulatedBlock }[] };
+    const chains: Derived[][] = [];
+    let minDerived = 0;
+    let derivedBefore = 0;
+    for (const change of changes) {
+      const addresses: Derived[] = [];
+      let lastUsed = 0;
+      let missing = 0;
+      while (missing < gap) {
+        const start = addresses.length;
+        let end = start + gap - missing;
+        if (end < minDerived) end = minDerived;
+        if (derivedBefore + end > MAX_XPUB_DERIVATIONS) throw new ApiError('Internal server error', 500);
+        for (let index = start; index < end; index += 1) {
+          const address = account.deriveAddress(index, change === 1);
+          const hex = toHex(toOutputScript(address, network));
+          const history = confirmedOf(hex, 0, Infinity);
+          if (history.length > 0) lastUsed = index;
+          addresses.push({ address, hex, change, index, history });
+        }
+        missing = addresses.length - lastUsed;
+      }
+      minDerived = lastUsed;
+      derivedBefore += addresses.length;
+      chains.push(addresses);
+    }
+    const all = chains.flat();
+
+    let balance = 0n;
+    let sent = 0n;
+    let estimate = 0;
+    const totals = new Map<Derived, { balance: bigint; received: bigint; sent: bigint }>();
+    for (const item of all) {
+      if (item.history.length === 0) continue;
+      let held = 0n;
+      let received = 0n;
+      let gone = 0n;
+      for (const { tx } of item.history) {
+        const flow = sums(tx, item.hex);
+        received += flow.received;
+        gone += flow.sent;
+        tx.outs.forEach((out, vout) => {
+          const spender = chain.spender(tx.getId(), vout);
+          if (toHex(out.script) === item.hex && (spender === null || !spender.confirmed)) held += out.value;
+        });
+      }
+      totals.set(item, { balance: held, received, sent: gone });
+      balance += held;
+      sent += gone;
+      estimate += item.history.length;
+    }
+
+    const filtered = from !== 0 || to !== 0;
+    const inRange = (height: number): boolean => height >= from && height <= (to === 0 ? Infinity : to);
+    const txids: string[] = [];
+    const txs: Record<string, unknown>[] = [];
+    let unconfirmedTxs = 0;
+    let unconfirmedBalance = 0n;
+    if (to === 0) {
+      const seen = new Set<string>();
+      const entries: { txid: string; tx: Transaction; time: number }[] = [];
+      for (const item of all) {
+        for (const tx of mempoolOrder().filter((candidate) => touches(candidate, item.hex))) {
+          const txid = tx.getId();
+          const found = seen.has(txid);
+          seen.add(txid);
+          if (option === 0) {
+            if (!found) unconfirmedTxs += 1;
+            continue;
+          }
+          if (!found) unconfirmedTxs += 1;
+          const { received, sent: spent } = sums(tx, item.hex);
+          unconfirmedBalance += received - spent;
+          // A mempool transaction stands at height 0 for the height filter.
+          if (page === 0 && !found && (!filtered || inRange(0))) entries.push({ txid, tx, time: chain.mempool.get(txid)!.time });
+        }
+      }
+      entries.sort((a, b) => (a.time === b.time ? (a.txid > b.txid ? -1 : a.txid < b.txid ? 1 : 0) : b.time - a.time));
+      for (const entry of entries) {
+        if (option === 3) txids.push(entry.txid);
+        else if (option >= 4) txs.push(fullTx(entry.tx, null));
+      }
+    }
+
+    let paging: Record<string, number> = {};
+    let txCount = estimate;
+    if (option >= 3) {
+      // mergeXpubTxids: each transaction once, newest block first, and within a block one that spends first.
+      const merged = new Map<string, { tx: Transaction; block: SimulatedBlock; spends: boolean }>();
+      for (const item of all) {
+        for (const { tx, block } of item.history) {
+          const txid = tx.getId();
+          if (merged.has(txid)) continue;
+          merged.set(txid, { tx, block, spends: sums(tx, item.hex).sent > 0n });
+        }
+      }
+      const ordered = [...merged.values()].sort((a, b) => (a.block.height === b.block.height ? Number(b.spends) - Number(a.spends) : b.block.height - a.block.height));
+      const txc = filtered ? ordered.filter((item) => inRange(item.block.height)) : ordered;
+      txCount = merged.size;
+      const totalResults = filtered ? -1 : txCount;
+      const computed = computePaging(txc.length, page, pageSize);
+      paging = computed.paging;
+      page = computed.page;
+      if (txc.length >= pageSize) paging = totalResults < 0 ? { ...paging, totalPages: -1 } : computePaging(totalResults, page, pageSize).paging;
+      for (const { tx, block } of txc.slice(computed.from, computed.to)) {
+        if (option === 3) txids.push(tx.getId());
+        else txs.push(option === 4 ? lightTx(tx, block) : fullTx(tx, block));
+      }
+    }
+
+    const tokens: Record<string, unknown>[] = [];
+    if (option > 0) {
+      const base = `m/86'/${network.coinType}'/${account.node.index >= 0x80000000 ? `${account.node.index - 0x80000000}'` : account.node.index}`;
+      for (const item of all) {
+        const held = totals.get(item);
+        const used = held !== undefined;
+        if (tokensToReturn === 'used' ? !used : tokensToReturn === 'derived' ? false : !used || held.balance === 0n) continue;
+        tokens.push({
+          type: 'XPUBAddress', standard: 'XPUBAddress', name: item.address, path: `${base}/${item.change}/${item.index}`,
+          transfers: held === undefined ? 0 : item.history.length, decimals: 8,
+          ...(option >= 2 && held !== undefined ? { balance: held.balance.toString(), totalReceived: held.received.toString(), totalSent: held.sent.toString() } : {}),
+        });
+      }
+    }
+    const usedTokens = totals.size;
+    return {
+      ...paging, address: descriptor, balance: balance.toString(), totalReceived: (balance + sent).toString(), totalSent: sent.toString(),
+      ...(option > 0 ? { unconfirmedBalance: unconfirmedBalance.toString() } : {}), unconfirmedTxs, txs: txCount,
+      ...(estimate === 0 ? {} : { addrTxCount: estimate }),
+      ...(txs.length > 0 ? { transactions: txs } : {}), ...(txids.length > 0 ? { txids } : {}),
+      ...(usedTokens === 0 ? {} : { usedTokens }), ...(tokens.length > 0 ? { tokens } : {}),
+    };
+  };
+
   // Worker.getAddrDescUtxo.
   const utxos = (addressParam: string, query: URLSearchParams): Record<string, unknown>[] => {
     const hex = toHex(scriptOfAddress(addressParam));
@@ -377,6 +549,7 @@ export function simulatedBlockbook(chain: SimulatedChain): SimulatedBlockbook {
       return fullTx(found.tx, found.block);
     }
     if ((arg = tail('api/v2/address/')) !== null) return address(arg, query);
+    if ((arg = tail('api/v2/xpub/')) !== null) return xpub(arg, query, { tokens: 'nonzero' });
     if ((arg = tail('api/v2/utxo/')) !== null) return utxos(arg, query);
     if ((arg = tail('api/v2/balancehistory/')) !== null) return balanceHistory(arg, query);
     if ((arg = tail('api/v2/rawblock/')) !== null) return { hex: toHex(serializeBlock(blockOf(arg).block)) };
@@ -432,7 +605,7 @@ export function simulatedBlockbook(chain: SimulatedChain): SimulatedBlockbook {
     }
   };
 
-  return { url: 'http://127.0.0.1:9131/', fetch: fetcher as typeof fetch, WebSocket: socketClass(chain, { fullTx, touches, utxos, address, estimateFee, route }), requests };
+  return { url: 'http://127.0.0.1:9131/', fetch: fetcher as typeof fetch, WebSocket: socketClass(chain, { fullTx, touches, utxos, address, xpub, estimateFee, route }), requests };
 }
 
 interface Server {
@@ -440,6 +613,7 @@ interface Server {
   touches(tx: Transaction, hex: string): boolean;
   utxos(address: string, query: URLSearchParams): Record<string, unknown>[];
   address(address: string, query: URLSearchParams): Record<string, unknown>;
+  xpub(descriptor: string, query: URLSearchParams, defaults: { tokens: string }): Record<string, unknown>;
   estimateFee(): string;
   route(method: string, path: string, query: URLSearchParams, body: string): unknown;
 }
@@ -535,9 +709,15 @@ function socketClass(chain: SimulatedChain, server: Server): SimulatedBlockbookW
           // An unknown height is an empty hash, not an error.
           return { hash: chain.blocks[Number(params.height)]?.hash ?? '' };
         case 'getAccountInfo': {
-          const { descriptor, details, page, pageSize, from, to } = params;
-          // The websocket defaults to details "basic" and 25 to a page (txsOnPage).
-          return server.address(String(descriptor), new URLSearchParams(Object.entries({ details: details ?? 'basic', page, pageSize: pageSize ?? 25, from, to }).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])));
+          const { descriptor, details, page, pageSize, from, to, tokens, gap } = params;
+          // The websocket defaults to details "basic", 25 to a page (txsOnPage) and every derived address; it asks
+          // for the descriptor as an xpub first and as an address when that fails.
+          const query = new URLSearchParams(Object.entries({ details: details ?? 'basic', page, pageSize: pageSize ?? 25, from, to, tokens, gap }).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)]));
+          try {
+            return server.xpub(String(descriptor), query, { tokens: 'derived' });
+          } catch {
+            return server.address(String(descriptor), query);
+          }
         }
         case 'getAccountUtxo':
           return server.utxos(String(params.descriptor), new URLSearchParams());

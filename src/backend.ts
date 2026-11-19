@@ -108,8 +108,21 @@ export interface WalletBackend extends ChainClient {
    * or unknown to the backend.
    */
   getSpendStatus(outpoint: OutPointParam): Promise<SpendStatus>;
-  /** Which of these addresses have ever been paid, when the backend can answer for many at once. Discovery falls back to getAddressActivity. */
-  findUsed?(addresses: readonly string[]): Promise<string[]>;
+  /**
+   * Which of these addresses have ever been paid, when the backend can answer for many at once. Discovery falls back to getAddressActivity.
+   * `accounts` says which of them are BIP86 account addresses and where they sit, for a backend that can ask about an account as a whole.
+   */
+  findUsed?(addresses: readonly string[], accounts?: readonly AccountAddresses[]): Promise<string[]>;
+}
+
+/** Addresses of one BIP86 account and where each sits, given to a backend that can ask about the account by its key. */
+export interface AccountAddresses {
+  /** The account's extended public key. */
+  readonly xpub: string;
+  /** The account's addresses among those asked about: whether each is on the change chain, and its index. */
+  readonly children: ReadonlyMap<string, { readonly change: boolean; readonly index: number }>;
+  /** Unused addresses in a row past the last used one that the caller scans. */
+  readonly gap: number;
 }
 
 /**

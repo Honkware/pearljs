@@ -227,6 +227,13 @@ describe('the simulated Blockbook', () => {
     expect(keys(real('api/v2/mempool/?pageSize=3'))).toEqual(keys((await get('api/v2/mempool/?pageSize=3')).value));
   });
 
+  it('answers an unused account key\'s xpub query as the real one did', async () => {
+    const real = simulatedBlockbook(new SimulatedChain({ network: networks.mainnet }));
+    const path = `api/v2/xpub/${XPUB}?details=tokens&tokens=derived&gap=1`;
+    const reply = await real.fetch(`${real.url}${path}`);
+    expect(await reply.text()).toBe(JSON.stringify(body(mainnet, path)));
+  });
+
   it('words its errors as the real one does', async () => {
     chain.feeRate = null;
     for (const path of ['api/v2/block/99999999', 'api/v2/rawblock/99999999', `api/v2/tx/${'0'.repeat(64)}`, 'api/v2/estimatefee/0']) {

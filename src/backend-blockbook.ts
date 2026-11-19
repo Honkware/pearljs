@@ -20,6 +20,16 @@
 // transactions up to the tip with `to`, which leaves the mempool out, and
 // everything after the tip with `from`, which is the mempool and any block
 // the tip query raced.
+//
+// With useXpub, an account's addresses are asked about together, by its key,
+// with Blockbook's xpub query: the server derives the addresses (BIP86 P2TR
+// key path on chains 0 and 1, api/xpub.go and PearlParser.ParseXpub) until
+// `gap` unused ones past the last used, and lists each with its path and
+// confirmed transaction count. The reply is a hint and nothing more: an index
+// counts only where the server's address is the one the account derives
+// there, the wallet still reads the history of every address the hint calls
+// used, and what the server derived no further than is asked address by
+// address.
 
 /**
  * A wallet backend over a Blockbook server that checks what the server
@@ -33,7 +43,7 @@ import type { FeeRate } from './amount.js';
 import { checkCertificateBinding, checkMerkleRoot, checkWitnessCommitment, parseBlock } from './block.js';
 import { blockHashHex } from './blockheader.js';
 import { BLOCKBOOK_MAX_HISTORY_OFFSET, BLOCKBOOK_MAX_PAGE_SIZE, isBlockbookNotFound } from './blockbook.js';
-import type { BlockbookClient, BlockbookTx } from './blockbook.js';
+import type { BlockbookAddress, BlockbookClient, BlockbookTx, BlockbookXpubQuery } from './blockbook.js';
 import type { AddressPayment, BlockRef, ChainTransaction } from './client.js';
 import { bitsToTarget, checkCertificateRules } from './consensus.js';
 import { PearlError, PearlRpcError } from './errors.js';
@@ -44,7 +54,7 @@ import type { OutPointParam } from './rpc.js';
 import { parseTransaction, transactionId } from './transaction.js';
 import type { Transaction } from './transaction.js';
 import { sumBalance } from './backend.js';
-import type { AddressHistoryEntry, SpendStatus, WalletChain, WalletUtxo, Watched } from './backend.js';
+import type { AccountAddresses, AddressHistoryEntry, SpendStatus, WalletChain, WalletUtxo, Watched } from './backend.js';
 import type { ActivityScanner } from './wallet.js';
 
 /** Options for blockbookBackend. */
@@ -78,13 +88,20 @@ export interface BlockbookBackendOptions {
    * DEFAULT_RELAY_FEE_RATE, pearld's own default.
    */
   minFeeRate?: FeeRate;
+  /**
+   * Ask about the wallet's BIP86 accounts by their extended public keys,
+   * one xpub query an account in place of a query an address, in discovery
+   * and in later syncs. The server then knows every address of the account,
+   * those it will use too. Default false.
+   */
+  useXpub?: boolean;
 }
 
 /** blockbookBackend's result: a WalletChain that also answers the wallet's per-sync question. */
 export interface BlockbookChain extends WalletChain, ActivityScanner {
   readonly client: BlockbookClient;
   /** Which of these addresses have been paid or spent from, by the servers' counts. */
-  findUsed(addresses: readonly string[]): Promise<string[]>;
+  findUsed(addresses: readonly string[], accounts?: readonly AccountAddresses[]): Promise<string[]>;
 }
 
 // A transaction a server listed for an address, with where it says it is.
@@ -106,6 +123,19 @@ interface Touch {
 const prevTxid = (input: Transaction['ins'][number]): string => toHex(Uint8Array.from(input.hash).reverse());
 const outpointOf = (input: Transaction['ins'][number]): string => `${prevTxid(input)}:${input.index}`;
 const TXID_RE = /^[0-9a-f]{64}$/;
+// server/public.go maxGapValue, and api/xpub.go maxAddressesGap.
+const XPUB_MAX_GAP = 10_000;
+// Transactions to a page of an account's history since a block.
+const XPUB_PAGE_SIZE = 100;
+
+// What an xpub reply says of the account's addresses: on each chain, the
+// address and confirmed transaction count the server gives each index, and
+// how many indices from 0 it derived without a hole.
+interface XpubHint {
+  chains: [Map<number, { name: string; path: string; transfers: number }>, Map<number, { name: string; path: string; transfers: number }>];
+  derived: [number, number];
+  unconfirmed: number;
+}
 
 /**
  * A wallet backend over a Blockbook serving Pearl (BlockbookClient). It
@@ -121,7 +151,7 @@ const TXID_RE = /^[0-9a-f]{64}$/;
  * or say an output is spent by a transaction that does not spend it.
  */
 export function blockbookBackend(client: BlockbookClient, options: BlockbookBackendOptions = {}): BlockbookChain {
-  const { verifyBlocks = true, crossCheckLag = 6, concurrency = 8, minFeeRate = DEFAULT_RELAY_FEE_RATE } = options;
+  const { verifyBlocks = true, crossCheckLag = 6, concurrency = 8, minFeeRate = DEFAULT_RELAY_FEE_RATE, useXpub = false } = options;
   const others = options.crossCheck ?? [];
   if (!Number.isSafeInteger(crossCheckLag) || crossCheckLag < 0) throw new RangeError('crossCheckLag must be a number of blocks');
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new RangeError('concurrency must be a positive integer');
@@ -151,22 +181,22 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   };
 
   // The transaction, from its serialization, or null when the server has none.
-  const fetchTx = async (txid: string, spending = false): Promise<{ tx: Transaction; reply: BlockbookTx } | null> => {
+  const fetchTx = async (txid: string, spending = false, source = client): Promise<{ tx: Transaction; reply: BlockbookTx } | null> => {
     let reply: BlockbookTx;
     try {
-      reply = await client.getTransaction(txid, { spending });
+      reply = await source.getTransaction(txid, { spending });
     } catch (err) {
       if (isBlockbookNotFound(err)) return null;
       throw err;
     }
-    if (typeof reply.hex !== 'string') throw bad(`sent transaction ${txid} without its serialization`);
+    if (typeof reply.hex !== 'string') throw badAt(source, `sent transaction ${txid} without its serialization`);
     let tx: Transaction;
     try {
       tx = parseTransaction(reply.hex);
     } catch (err) {
       throw new PearlError('BACKEND_RESPONSE', `the Blockbook sent transaction ${txid} in a form that does not parse: ${(err as Error).message}`, { cause: err });
     }
-    if (transactionId(tx) !== txid) throw bad(`returned transaction ${transactionId(tx)} for ${txid}`);
+    if (transactionId(tx) !== txid) throw badAt(source, `returned transaction ${transactionId(tx)} for ${txid}`);
     transactions.set(txid, { tx, hex: reply.hex });
     return { tx, reply };
   };
@@ -180,7 +210,10 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   };
 
   // The height read to and its block: the server's best, or with crossCheck the lowest server's, which all must share.
-  const tip = async (): Promise<BlockRef> => {
+  // Calls made while one is under way share its answer.
+  let reading: Promise<BlockRef> | null = null;
+  const tip = (): Promise<BlockRef> => (reading ??= readTip().finally(() => (reading = null)));
+  const readTip = async (): Promise<BlockRef> => {
     const status = await client.getStatus();
     if (status.blockbook?.initialSync === true) throw bad('is still on its initial sync, so its index is not complete');
     let height = safe(status.blockbook?.bestHeight, 'a best height');
@@ -281,15 +314,9 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
     return listed;
   };
 
-  // What the server lists for an address after `after`, mempool included, each txid once.
-  const listedOf = async (address: string, upTo: BlockRef, after: number): Promise<Listed[]> => {
-    const [chained, later] = await Promise.all([
-      confirmedOf(client, address, after + 1, upTo.height),
-      client.getAddress(address, { details: 'txids', pageSize: BLOCKBOOK_MAX_PAGE_SIZE, from: upTo.height + 1 }),
-    ]);
-    const pending = later.txids ?? [];
-    if (!Array.isArray(pending)) throw bad(`sent mempool txids of ${address} that are not a list`);
-    if (pending.length >= BLOCKBOOK_MAX_PAGE_SIZE) throw new PearlError('BACKEND_UNSUPPORTED', `${address} has ${BLOCKBOOK_MAX_PAGE_SIZE} or more mempool transactions, more than Blockbook lists`);
+  // An address's confirmed transactions from `after` + 1 to the height read to, held to the cross-check servers.
+  const checkedConfirmed = async (address: string, upTo: BlockRef, after: number): Promise<Listed[]> => {
+    const chained = await confirmedOf(client, address, after + 1, upTo.height);
     if (others.length > 0) {
       const ours = new Set(chained.map((item) => item.txid));
       await Promise.all(others.map(async (_, i) => {
@@ -299,6 +326,38 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
         if (missing > 0 || extra > 0) throw disagree(i, `lists ${theirs.length} confirmed transactions for ${address} from height ${after + 1} to ${upTo.height}, where the server lists ${ours.size}`);
       }));
     }
+    return chained;
+  };
+
+  // Whole confirmed histories up to the block read to, by address, for as long as that block is the one read to: a
+  // sync reads an address's history for its transactions and again for its coins, and asking twice about the same
+  // blocks only gives the server a second chance to answer differently.
+  let historiesAt = '';
+  const histories = new Map<string, Promise<Listed[]>>();
+  const confirmedHistory = (address: string, upTo: BlockRef): Promise<Listed[]> => {
+    const at = `${upTo.height}:${upTo.hash}`;
+    if (historiesAt !== at) {
+      histories.clear();
+      historiesAt = at;
+    }
+    let listing = histories.get(address);
+    if (listing === undefined) {
+      const fresh = checkedConfirmed(address, upTo, -1);
+      fresh.catch(() => histories.get(address) === fresh && histories.delete(address));
+      histories.set(address, (listing = fresh));
+    }
+    return listing;
+  };
+
+  // What the server lists for an address after `after`, mempool included, each txid once.
+  const listedOf = async (address: string, upTo: BlockRef, after: number): Promise<Listed[]> => {
+    const [chained, later] = await Promise.all([
+      after === -1 ? confirmedHistory(address, upTo) : checkedConfirmed(address, upTo, after),
+      client.getAddress(address, { details: 'txids', pageSize: BLOCKBOOK_MAX_PAGE_SIZE, from: upTo.height + 1 }),
+    ]);
+    const pending = later.txids ?? [];
+    if (!Array.isArray(pending)) throw bad(`sent mempool txids of ${address} that are not a list`);
+    if (pending.length >= BLOCKBOOK_MAX_PAGE_SIZE) throw new PearlError('BACKEND_UNSUPPORTED', `${address} has ${BLOCKBOOK_MAX_PAGE_SIZE} or more mempool transactions, more than Blockbook lists`);
     const seen = new Set<string>();
     const result: Listed[] = [];
     for (const item of [...chained, ...pending.map((txid): Listed => ({ txid, at: null }))]) {
@@ -400,6 +459,212 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
     return new Set(addresses.filter((_, i) => (counts[i]!.txs ?? 0) > 0 || (counts[i]!.unconfirmedTxs ?? 0) > 0));
   };
 
+  const badAt = (source: BlockbookClient, message: string): PearlError => new PearlError('BACKEND_RESPONSE', `the Blockbook at ${new URL(source.url).host} ${message}`);
+  const scriptOf = (address: string): string => toHex(toOutputScript(address, network));
+  const accountGap = (account: AccountAddresses, least = 1): number => {
+    if (!Number.isSafeInteger(account.gap) || account.gap < 1) throw new RangeError('an account\'s gap must be a positive integer');
+    return Math.min(Math.max(account.gap, least), XPUB_MAX_GAP);
+  };
+
+  // An xpub query, or null when the server will not answer it, as one without xpub support or past its derivation limit does.
+  const xpubQuery = async (source: BlockbookClient, xpub: string, query: BlockbookXpubQuery): Promise<BlockbookAddress | null> => {
+    try {
+      return await source.getXpub(xpub, query);
+    } catch (err) {
+      if (err instanceof PearlRpcError && err.kind === 'rpc') return null;
+      throw err;
+    }
+  };
+
+  const readHint = (source: BlockbookClient, reply: BlockbookAddress): XpubHint => {
+    const chains: XpubHint['chains'] = [new Map(), new Map()];
+    const tokens = reply.tokens ?? [];
+    if (!Array.isArray(tokens)) throw badAt(source, 'sent the derived addresses of an xpub as something other than a list');
+    for (const token of tokens) {
+      const path = typeof token?.path === 'string' ? token.path : '';
+      const match = /\/([01])\/(0|[1-9]\d{0,9})$/.exec(path);
+      if (match === null || typeof token.name !== 'string' || !Number.isSafeInteger(token.transfers) || token.transfers < 0) {
+        throw badAt(source, `sent a derived address at ${JSON.stringify(path)}, which is not an index of chain 0 or 1 with a transaction count`);
+      }
+      const chain = chains[match[1] === '1' ? 1 : 0];
+      const index = Number(match[2]);
+      if (chain.has(index)) throw badAt(source, `lists two addresses at ${path}`);
+      chain.set(index, { name: token.name, path, transfers: token.transfers });
+    }
+    const derived = chains.map((chain) => {
+      let count = 0;
+      while (chain.has(count)) count += 1;
+      return count;
+    }) as [number, number];
+    if (!Number.isSafeInteger(reply.unconfirmedTxs) || reply.unconfirmedTxs < 0) throw badAt(source, `sent ${JSON.stringify(reply.unconfirmedTxs)} as an xpub's mempool transaction count`);
+    return { chains, derived, unconfirmed: reply.unconfirmedTxs };
+  };
+
+  // The server's word on a child, where it derived that far without a hole; null past that. Its address must be the one the account derives there.
+  const tokenFor = (source: BlockbookClient, hint: XpubHint, address: string, child: { change: boolean; index: number }): { transfers: number } | null => {
+    const chain = child.change ? 1 : 0;
+    if (child.index >= hint.derived[chain]) return null;
+    const token = hint.chains[chain].get(child.index)!;
+    if (token.name !== address) throw badAt(source, `derives ${token.name} at ${token.path}, where the account has ${address}`);
+    return token;
+  };
+
+  // The account's mempool transactions, each read and hash-checked. Blockbook puts them in front of the first page
+  // and counts them in unconfirmedTxs of the same reply, which the page of one confirmed transaction then follows.
+  const pendingOf = async (source: BlockbookClient, xpub: string, gap: number): Promise<{ txid: string; tx: Transaction }[] | null> => {
+    const reply = await xpubQuery(source, xpub, { details: 'txids', pageSize: 1, tokens: 'used', gap });
+    if (reply === null) return null;
+    const txids = reply.txids ?? [];
+    if (!Array.isArray(txids)) throw badAt(source, 'sent the txids of an xpub as something other than a list');
+    if (!Number.isSafeInteger(reply.unconfirmedTxs) || reply.unconfirmedTxs < 0) throw badAt(source, `sent ${JSON.stringify(reply.unconfirmedTxs)} as an xpub's mempool transaction count`);
+    const pending = [...new Set(txids.slice(0, reply.unconfirmedTxs))];
+    for (const txid of pending) if (typeof txid !== 'string' || !TXID_RE.test(txid)) throw badAt(source, 'listed something other than a txid for an xpub');
+    const fetched = await mapLimit(pending, concurrency, async (txid) => ({ txid, tx: transactions.get(txid)?.tx ?? (await fetchTx(txid, false, source))?.tx }));
+    // One that left the mempool between the queries is no longer the account's news.
+    return fetched.flatMap(({ txid, tx }) => (tx === undefined ? [] : [{ txid, tx }]));
+  };
+
+  // An account's hint for a scan: its derived addresses, and the scripts its mempool transactions pay.
+  const scanHintOf = async (source: BlockbookClient, xpub: string, gap: number): Promise<{ hint: XpubHint; paid: Set<string> } | null> => {
+    const reply = await xpubQuery(source, xpub, { details: 'tokens', tokens: 'derived', gap });
+    if (reply === null) return null;
+    const hint = readHint(source, reply);
+    const paid = new Set<string>();
+    if (hint.unconfirmed > 0) {
+      const pending = await pendingOf(source, xpub, gap);
+      if (pending === null) return null;
+      for (const { tx } of pending) for (const out of tx.outs) paid.add(toHex(out.script));
+    }
+    return { hint, paid };
+  };
+
+  // Each account's hint from each server for the scan under way, and the indices that scan has asked about. A scan asks
+  // about each index once, so an index asked again is a new scan, which asks the server again.
+  const scans = new Map<string, { gap: number; asked: Set<string>; hint: Promise<{ hint: XpubHint; paid: Set<string> } | null> }>();
+  const scanHint = (i: number, source: BlockbookClient, account: AccountAddresses, children: readonly (readonly [string, { change: boolean; index: number }])[]) => {
+    const gap = accountGap(account);
+    const key = `${i}:${account.xpub}`;
+    const marks = children.map(([, child]) => `${child.change ? 1 : 0}/${child.index}`);
+    let scan = scans.get(key);
+    if (scan === undefined || scan.gap !== gap || marks.some((mark) => scan!.asked.has(mark))) {
+      const fresh = { gap, asked: new Set<string>(), hint: scanHintOf(source, account.xpub, gap) };
+      fresh.hint.catch(() => scans.get(key) === fresh && scans.delete(key));
+      scans.set(key, (scan = fresh));
+    }
+    for (const mark of marks) scan.asked.add(mark);
+    return scan.hint;
+  };
+
+  // Which addresses one server calls used: account addresses it derived by its xpub hint, the rest one query each.
+  const usedVia = async (i: number, source: BlockbookClient, addresses: readonly string[], accounts: readonly AccountAddresses[]): Promise<Set<string>> => {
+    const used = new Set<string>();
+    const rest = new Set(addresses);
+    if (useXpub) {
+      for (const account of accounts) {
+        const children = [...rest].flatMap((address) => {
+          const child = account.children.get(address);
+          return child === undefined ? [] : [[address, child] as const];
+        });
+        if (children.length === 0) continue;
+        const found = await scanHint(i, source, account, children);
+        if (found === null) continue;
+        for (const [address, child] of children) {
+          const token = tokenFor(source, found.hint, address, child);
+          if (token === null) continue;
+          rest.delete(address);
+          if (token.transfers > 0 || found.paid.has(scriptOf(address))) used.add(address);
+        }
+      }
+    }
+    for (const address of await usedBy(source, [...rest])) used.add(address);
+    return used;
+  };
+
+  // The account's confirmed transactions after `after` as one server lists them, with its hint. Blockbook leaves the
+  // mempool out of a listing with `from` and still counts it in unconfirmedTxs.
+  const listSince = async (source: BlockbookClient, xpub: string, gap: number, after: number): Promise<{ hint: XpubHint; listed: Listed[] } | null> => {
+    const listed: Listed[] = [];
+    let hint: XpubHint | null = null;
+    for (let page = 1; ; page++) {
+      const reply = await xpubQuery(source, xpub, { details: 'txslight', tokens: 'derived', gap, from: after + 1, page, pageSize: XPUB_PAGE_SIZE });
+      if (reply === null) {
+        if (hint === null) return null;
+        throw badAt(source, `answered page ${page - 1} of an xpub's history and refused page ${page}`);
+      }
+      hint ??= readHint(source, reply);
+      if (reply.page !== undefined && reply.page !== page) break;
+      const items = reply.transactions ?? [];
+      if (!Array.isArray(items)) throw badAt(source, 'sent the history of an xpub as something other than a list');
+      for (const item of items) {
+        const { txid, blockHeight, blockHash, blockTime } = item ?? ({} as BlockbookTx);
+        if (typeof txid !== 'string' || !TXID_RE.test(txid)) throw badAt(source, 'listed something other than a txid for an xpub');
+        if (!Number.isSafeInteger(blockHeight) || blockHeight <= after || typeof blockHash !== 'string' || !TXID_RE.test(blockHash)) {
+          throw badAt(source, `places ${txid} at height ${String(blockHeight)} in block ${String(blockHash)}, outside the heights from ${after + 1} asked for`);
+        }
+        listed.push({ txid, at: { height: blockHeight, hash: blockHash, time: Number.isSafeInteger(blockTime) && blockTime > 0 ? blockTime : 0 } });
+      }
+      if (items.length < XPUB_PAGE_SIZE) break;
+      if (page * XPUB_PAGE_SIZE >= BLOCKBOOK_MAX_HISTORY_OFFSET) throw new PearlError('BACKEND_UNSUPPORTED', `an account has more than ${BLOCKBOOK_MAX_HISTORY_OFFSET} transactions since height ${after}, past which Blockbook does not page`);
+    }
+    return { hint: hint!, listed };
+  };
+
+  // What touched the account's watched addresses after `after`, by the xpub query: the watched addresses every server
+  // derived (the rest are left to the per-address queries) and the transactions that pay or spend from them. Null
+  // when the server will not answer for the key.
+  const accountSince = async (account: AccountAddresses, watched: ReadonlySet<string>, upTo: BlockRef, after: number): Promise<{ covered: string[]; activity: Map<string, BlockRef | null> } | null> => {
+    let children = [...account.children].filter(([address]) => watched.has(address));
+    if (children.length === 0) return null;
+    // Wide enough that the server derives every watched index.
+    const gap = accountGap(account, Math.max(...children.map(([, child]) => child.index + 1)));
+    const ours = await listSince(client, account.xpub, gap, after);
+    if (ours === null) return null;
+    children = children.filter(([address, child]) => tokenFor(client, ours.hint, address, child) !== null);
+    const atOrBelow = (listed: Listed[]): Set<string> => new Set(listed.flatMap((item) => (item.at !== null && item.at.height <= upTo.height ? [item.txid] : [])));
+    const confirmedHere = atOrBelow(ours.listed);
+    const theirs = await Promise.all(others.map((_, i) => ask(i, async (other) => {
+      const listing = await listSince(other, account.xpub, gap, after);
+      if (listing !== null) children = children.filter(([address, child]) => tokenFor(other, listing.hint, address, child) !== null);
+      return listing;
+    })));
+    theirs.forEach((listing, i) => {
+      // One that will not answer for the key covers nothing, and the per-address queries are held to it instead.
+      if (listing === null) return void (children = []);
+      const listed = atOrBelow(listing.listed);
+      const missing = [...listed].filter((txid) => !confirmedHere.has(txid)).length;
+      if (missing > 0 || listed.size - missing !== confirmedHere.size) {
+        throw disagree(i, `lists ${listed.size} confirmed transactions for an account from height ${after + 1} to ${upTo.height}, where the server lists ${confirmedHere.size}`);
+      }
+    });
+    if (children.length === 0) return null;
+    // A block past the height read to counts as not yet confirmed.
+    const candidates = new Map(ours.listed.map((item) => [item.txid, item.at !== null && item.at.height <= upTo.height ? item.at : null]));
+    if (ours.hint.unconfirmed > 0) {
+      const pending = await pendingOf(client, account.xpub, gap);
+      if (pending === null) return null;
+      for (const { txid } of pending) if (!candidates.has(txid)) candidates.set(txid, null);
+    }
+    const scripts = new Set(children.map(([address]) => scriptOf(address)));
+    const listed = [...candidates];
+    const txs = await mapLimit(listed, concurrency, ([txid]) => txOf(txid));
+    const owned = new Set<string>();
+    txs.forEach((tx, i) => tx.outs.forEach((out, vout) => scripts.has(toHex(out.script)) && owned.add(`${listed[i]![0]}:${vout}`)));
+    const found = await mapLimit(listed, concurrency, async ([txid, at]): Promise<[string, BlockRef | null] | null> => {
+      const tx = transactions.get(txid)!.tx;
+      let touched = tx.outs.some((out) => scripts.has(toHex(out.script)));
+      for (const input of tx.isCoinbase() ? [] : tx.ins) {
+        if (touched) break;
+        if (owned.has(outpointOf(input))) touched = true;
+        else touched = scripts.has(toHex((await txOf(prevTxid(input))).outs[input.index]?.script ?? new Uint8Array(0)));
+      }
+      // One for an address of the account that is not watched, which the server derives further than the wallet
+      // watches, is left out as the per-address queries would leave it out.
+      if (!touched) return null;
+      return [txid, at === null ? null : await place(txid, at, upTo)];
+    });
+    return { covered: children.map(([address]) => address), activity: new Map(found.filter((item) => item !== null)) };
+  };
+
   return {
     network,
     client,
@@ -480,22 +745,30 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
       return { status: 'unspent', confirmations: confirmations(block, upTo) };
     },
 
-    async findUsed(addresses) {
+    async findUsed(addresses, accounts = []) {
       for (const address of addresses) addressOf(address);
       // Any server's word that an address was used is taken: a wrong yes only widens a scan.
-      const sets = await Promise.all([usedBy(client, addresses), ...others.map((_, i) => ask(i, (other) => usedBy(other, addresses)))]);
+      const sets = await Promise.all([usedVia(0, client, addresses, accounts), ...others.map((_, i) => ask(i, (other) => usedVia(i + 1, other, addresses, accounts)))]);
       return addresses.filter((address) => sets.some((set) => set.has(address)));
     },
 
-    async getActivitySince(watched, after) {
+    async getActivitySince(watched, after, accounts = []) {
       const upTo = await tip();
       if (after.height > upTo.height) return null;
       const hash = after.height === upTo.height ? upTo.hash : await client.getBlockHash(after.height);
       if (hash !== after.hash) return null;
       await confirmAt(after.height, after.hash);
-      const addresses = [...new Set(watched.map(addressOf))];
-      const lists = await mapLimit(addresses, concurrency, (address) => touches(address, upTo, after.height));
+      const rest = new Set(watched.map(addressOf));
       const activity = new Map<string, BlockRef | null>();
+      if (useXpub) {
+        for (const account of accounts) {
+          const found = await accountSince(account, rest, upTo, after.height);
+          if (found === null) continue;
+          for (const address of found.covered) rest.delete(address);
+          for (const [txid, block] of found.activity) activity.set(txid, block);
+        }
+      }
+      const lists = await mapLimit([...rest], concurrency, (address) => touches(address, upTo, after.height));
       for (const list of lists) for (const { txid, block } of list) activity.set(txid, block);
       return [...activity].map(([txid, block]) => ({ txid, block }));
     },

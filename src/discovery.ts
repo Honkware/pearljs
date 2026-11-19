@@ -67,7 +67,7 @@ export interface AccountDiscovery {
  * pearldBackend without --addrindex, and with the signal's reason when aborted.
  */
 export async function discoverAccount(
-  account: Pick<PearlAccount, 'deriveAddress'>,
+  account: Pick<PearlAccount, 'deriveAddress'> & Partial<Pick<PearlAccount, 'extendedPublicKey'>>,
   backend: Pick<WalletBackend, 'getAddressActivity' | 'getUtxos' | 'network' | 'findUsed'>,
   options: DiscoveryOptions = {},
 ): Promise<AccountDiscovery> {
@@ -75,8 +75,13 @@ export async function discoverAccount(
   if (!Number.isInteger(gap) || gap < 1) throw new RangeError('gap must be a positive integer');
   if (!Number.isInteger(batchSize) || batchSize < 1) throw new RangeError('batchSize must be a positive integer');
 
-  const usedAmong = async (addresses: string[]): Promise<Set<string>> => {
-    if (backend.findUsed !== undefined) return new Set(await backend.findUsed(addresses));
+  const xpub = account.extendedPublicKey?.();
+  const usedAmong = async (batch: DiscoveredAddress[]): Promise<Set<string>> => {
+    const addresses = batch.map((child) => child.address);
+    if (backend.findUsed !== undefined) {
+      const accounts = xpub === undefined ? [] : [{ xpub, children: new Map(batch.map(({ address, index, change }) => [address, { change, index }])), gap }];
+      return new Set(await backend.findUsed(addresses, accounts));
+    }
     const activity = await Promise.all(addresses.map((address) => backend.getAddressActivity(address)));
     return new Set(addresses.filter((_, i) => activity[i]!.length > 0));
   };
@@ -88,7 +93,7 @@ export async function discoverAccount(
       signal?.throwIfAborted();
       const count = Math.min(batchSize, nextIndex + gap - start);
       const batch = Array.from({ length: count }, (_, i) => ({ address: account.deriveAddress(start + i, change), index: start + i, change }));
-      const paid = await usedAmong(batch.map((child) => child.address));
+      const paid = await usedAmong(batch);
       for (const child of batch) {
         if (!paid.has(child.address)) continue;
         used.push(child);

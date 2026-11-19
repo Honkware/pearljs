@@ -23,7 +23,7 @@
 
 import * as ecc from 'tiny-secp256k1';
 import { encodeAddress, fromOutputScript, toOutputScript } from './address.js';
-import type { WalletBackend, Watched } from './backend.js';
+import type { AccountAddresses, WalletBackend, Watched } from './backend.js';
 import { buildPayment, finalizePayment } from './builder.js';
 import type { Payment, Recipient } from './builder.js';
 import type { FeeRate } from './amount.js';
@@ -140,9 +140,10 @@ export interface ActivityScanner {
    * and is in a block after `after` on the best chain, or in the mempool.
    * Null when it cannot answer from that block: `after` is not on its chain
    * any more, or lies before what it keeps. The wallet then asks address by
-   * address.
+   * address. `accounts` says which of the watched addresses are BIP86
+   * account addresses and where they sit.
    */
-  getActivitySince(watched: readonly Watched[], after: BlockRef): Promise<{ txid: string; block: BlockRef | null }[] | null>;
+  getActivitySince(watched: readonly Watched[], after: BlockRef, accounts?: readonly AccountAddresses[]): Promise<{ txid: string; block: BlockRef | null }[] | null>;
 }
 
 /** What every wallet is opened with. */
@@ -788,10 +789,12 @@ function memoized(backend: WalletBackend, source: TransactionSource): { backend:
     getSpendStatus: (outpoint) => once(`spend:${outpoint.txid}:${outpoint.vout}`, () => backend.getSpendStatus(outpoint)),
   };
   const findUsed = backend.findUsed?.bind(backend);
-  if (findUsed !== undefined) view.findUsed = (addresses) => once(`used:${addresses.join(',')}`, () => findUsed(addresses));
+  const accountsKey = (accounts: readonly AccountAddresses[] = []): string => accounts.map((account) => `${account.xpub}/${account.gap}`).join(',');
+  if (findUsed !== undefined) view.findUsed = (addresses, accounts) => once(`used:${accountsKey(accounts)}:${addresses.join(',')}`, () => findUsed(addresses, accounts));
   const since = (backend as Partial<ActivityScanner>).getActivitySince?.bind(backend);
   if (since !== undefined) {
-    (view as WalletBackend & ActivityScanner).getActivitySince = (watched, after) => once(`since:${after.hash}:${watched.map(watchedKey).join(',')}`, () => since(watched, after));
+    (view as WalletBackend & ActivityScanner).getActivitySince = (watched, after, accounts) =>
+      once(`since:${after.hash}:${accountsKey(accounts)}:${watched.map(watchedKey).join(',')}`, () => since(watched, after, accounts));
   }
   return { backend: view, source: { getRawTransaction: (txid) => once(`raw:${txid}`, () => source.getRawTransaction(txid)) } };
 }
@@ -1578,7 +1581,7 @@ export class PearlWallet {
       for (const address of fresh) asked.add(address);
       if (round === 0) {
         this.#signal?.throwIfAborted();
-        const activity = await scanner.getActivitySince(fresh, previous);
+        const activity = await scanner.getActivitySince(fresh, previous, this.#accountAddresses(fresh, this.#meta.lookahead));
         if (activity === null) return false;
         for (const item of activity) seen.set(item.txid, item.block);
         this.#progress.addresses += fresh.length;
@@ -1592,6 +1595,19 @@ export class PearlWallet {
         else await this.#fetchAndIngest(txid, block, events);
       }
     }
+  }
+
+  // The account addresses among these, by account, for a backend that can ask about an account by its key.
+  #accountAddresses(addresses: readonly string[], gap: number): AccountAddresses[] {
+    const byAccount = new Map<string, Map<string, { change: boolean; index: number }>>();
+    for (const address of addresses) {
+      const owner = this.#ownerOf(toOutputScript(address, this.network))?.owner;
+      if (owner?.type !== 'account') continue;
+      let children = byAccount.get(owner.account);
+      if (children === undefined) byAccount.set(owner.account, (children = new Map()));
+      children.set(address, { change: owner.change, index: owner.index });
+    }
+    return [...byAccount].map(([id, children]) => ({ xpub: this.#accounts.get(id)!.xpub, children, gap }));
   }
 
   // Addresses that have been paid, hold nothing now and have nothing pending: the ones a sync may leave for their turn.
@@ -3024,7 +3040,8 @@ export class PearlWallet {
         if (quiet !== null && index < known - this.#meta.lookahead && quiet.has(address) && (index + this.#rounds) % this.#quietInterval !== 0) continue;
         batch.set(address, index);
       }
-      const candidates = this.#backend.findUsed === undefined || batch.size === 0 ? [...batch.keys()] : await this.#backend.findUsed([...batch.keys()]);
+      const children = new Map([...batch].map(([address, index]) => [address, { change, index }]));
+      const candidates = this.#backend.findUsed === undefined || batch.size === 0 ? [...batch.keys()] : await this.#backend.findUsed([...batch.keys()], [{ xpub: record.xpub, children, gap: window }]);
       for (const address of await this.#collect(candidates, seen)) lastUsed = Math.max(lastUsed, batch.get(address) ?? -1);
       start += count;
     }
