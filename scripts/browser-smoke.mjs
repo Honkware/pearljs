@@ -1,27 +1,21 @@
-// Bundles the packed package with Vite and runs it in headless Chrome against Pearl's
-// vectors. Needs Chrome, so it is not part of `npm run check`. Set CHROME to use another binary.
-import { spawn } from 'node:child_process';
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+// Bundles the packed package with Vite and runs it against Pearl's vectors in
+// headless browsers. Needs a browser, so it is not part of `npm run check`.
+//
+//   BROWSERS=chrome,firefox,safari npm run test:browser   (default: chrome)
+//   npm run test:browser -- --serve                        builds, serves and prints the URL to open by hand
+//
+// CHROME and FIREFOX override the binaries. A browser that is not installed,
+// or Safari before `safaridriver --enable`, is reported as skipped.
+import { copyFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { setTimeout as sleep } from 'node:timers/promises';
-import { WebSocket } from 'undici';
 import { build, preview } from 'vite';
 import wasm from 'vite-plugin-wasm';
+import { binaries, launchers, waitFor } from './browser/drivers.mjs';
 import { installTarball, pack, root } from './lib/pack.mjs';
 
-const candidates = [
-  process.env.CHROME,
-  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-  '/usr/bin/google-chrome',
-  '/usr/bin/google-chrome-stable',
-  '/usr/bin/chromium',
-].filter(Boolean);
-const chrome = candidates.find((c) => existsSync(c));
-if (!chrome) {
-  console.log('skipped: Chrome not found (set CHROME to its path)');
-  process.exit(0);
-}
+const wanted = (process.env.BROWSERS ?? 'chrome').split(',').map((b) => b.trim()).filter(Boolean);
+for (const name of wanted) if (!launchers[name]) throw new Error(`unknown browser ${name}; use chrome, firefox or safari`);
+const serveOnly = process.argv.includes('--serve');
 
 const { tarball } = pack();
 const dir = installTarball(tarball, 'browser');
@@ -41,74 +35,51 @@ const config = {
   build: { target: 'esnext' },
 };
 await build(config);
-// [::1] because that is where vite preview listens on this setup.
-const server = await preview({ ...config, preview: { host: '::1', port: 0, strictPort: false } });
-const url = server.resolvedUrls?.local[0] ?? `http://[::1]:${server.config.preview.port}/`;
-
-// The page reports through window.__pearljs, read over the DevTools protocol once it is set:
-// proof verification runs for seconds of real time, which --dump-dom's virtual clock does not wait for.
-const profile = mkdtempSync(join(tmpdir(), 'pearljs-chrome-'));
-const browser = spawn(chrome, ['--headless=new', '--disable-gpu', '--no-first-run', '--remote-debugging-port=0', `--user-data-dir=${profile}`, url], { stdio: 'ignore' });
-let results;
-try {
-  results = await pageResults();
-} finally {
-  const exited = new Promise((resolve) => browser.once('exit', resolve));
-  browser.kill();
-  await exited;
-  await server.close();
-  rmSync(profile, { recursive: true, force: true, maxRetries: 5 });
-}
-
-async function pageResults() {
-  const deadline = Date.now() + 120_000;
-  let port;
-  while (!port) {
-    if (Date.now() > deadline) throw new Error('Chrome did not open its DevTools port');
-    await sleep(200);
-    try {
-      port = readFileSync(join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0];
-    } catch {
-      // Not written yet.
-    }
-  }
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  const page = targets.find((t) => t.type === 'page');
-  const socket = new WebSocket(page.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => {
-    socket.onopen = resolve;
-    socket.onerror = reject;
-  });
-  let id = 0;
-  const evaluate = (expression) =>
-    new Promise((resolve) => {
-      const mine = ++id;
-      socket.onmessage = (event) => {
-        const reply = JSON.parse(event.data);
-        if (reply.id === mine) resolve(reply.result?.result?.value);
-      };
-      socket.send(JSON.stringify({ id: mine, method: 'Runtime.evaluate', params: { expression, returnByValue: true } }));
-    });
-  try {
-    while (Date.now() < deadline) {
-      const value = await evaluate('window.__pearljs === undefined ? null : JSON.stringify(window.__pearljs)');
-      if (value) return JSON.parse(value);
-      await sleep(250);
-    }
-    console.error(`no results in page, got: ${String(await evaluate('document.body.innerText')).slice(0, 300)}`);
-    process.exit(1);
-  } finally {
-    socket.close();
-  }
+const server = await preview({ ...config, preview: { host: '127.0.0.1', port: 0, strictPort: false } });
+const url = server.resolvedUrls?.local[0] ?? `http://127.0.0.1:${server.config.preview.port}/`;
+if (serveOnly) {
+  console.log(`open ${url} in the browser to check; the page lists every check and its result. Ctrl-C stops the server.`);
+  await new Promise(() => undefined);
 }
 
 let bad = 0;
-for (const [name, outcome] of Object.entries(results)) {
-  console.log(`${outcome === 'pass' ? 'ok  ' : 'FAIL'} ${name}${outcome === 'pass' ? '' : `: ${outcome}`}`);
-  if (outcome !== 'pass') bad++;
+let ran = 0;
+try {
+  for (const name of wanted) {
+    if (!binaries[name]()) {
+      console.log(`skipped ${name}: not installed`);
+      continue;
+    }
+    let browser;
+    try {
+      browser = await launchers[name]();
+    } catch (error) {
+      console.log(`skipped ${name}: ${error.message}`);
+      continue;
+    }
+    ran++;
+    try {
+      // Proof verification runs for seconds of real time; the page sets globalThis.__pearljs when it is done.
+      await browser.open(url);
+      const results = JSON.parse(await waitFor(browser, 'globalThis.__pearljs === undefined ? null : JSON.stringify(globalThis.__pearljs)'));
+      console.log(`${browser.version}`);
+      for (const [check, outcome] of Object.entries(results)) {
+        console.log(`  ${outcome === 'pass' ? 'ok  ' : 'FAIL'} ${check}${outcome === 'pass' ? '' : `: ${outcome}`}`);
+        if (outcome !== 'pass') bad++;
+      }
+      if (Object.keys(results).length === 0) bad++;
+    } catch (error) {
+      console.log(`FAIL ${name}: ${error.message}`);
+      bad++;
+    } finally {
+      await browser.close();
+    }
+  }
+} finally {
+  await server.close();
 }
-if (bad || Object.keys(results).length === 0) {
-  console.error(`${bad} browser check(s) failed`);
+if (bad || ran === 0) {
+  console.error(ran === 0 ? 'no browser ran' : `${bad} browser check(s) failed`);
   process.exit(1);
 }
-console.log(`browser smoke passed (${Object.keys(results).length} checks)`);
+console.log(`browser smoke passed in ${ran} browser(s)`);

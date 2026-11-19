@@ -1,5 +1,6 @@
-// Runs in headless Chrome against Pearl's vectors; scripts/browser-smoke.mjs reads the result.
+// Runs in each browser against Pearl's vectors; scripts/browser-smoke.mjs reads the result.
 import * as p from 'pearljs';
+import { SimulatedChain, testAddress } from 'pearljs/testing';
 import { verifyProof } from 'pearljs/verify-proof';
 import v from 'pearl-vectors';
 import proofs from 'pearl-proof-vectors';
@@ -73,10 +74,43 @@ const checkAsync = async (name, fn) => {
     results[name] = `ERROR ${error.message}`;
   }
 };
-// IndexedDB and Web Locks requests never complete under --virtual-time-budget,
-// so the IndexedDB store is only checked to bundle here; it runs against
-// fake-indexeddb in test/store-indexeddb.test.ts.
-check('indexeddb store bundles', () => typeof p.openIndexedDbStore === 'function' && typeof p.createMemoryStore === 'function');
+const fresh = (label) => `pearljs-smoke-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+await checkAsync('indexeddb store keeps data, holds the tab lock and compares', async () => {
+  const name = fresh('store');
+  const store = await p.openIndexedDbStore(name);
+  await store.set('xmss:k', { next: 1 });
+  const second = await p.openIndexedDbStore(name).then(
+    () => 'opened',
+    (error) => error.code,
+  );
+  const stale = await store.compareAndSet([{ key: 'xmss:k', value: { next: 0 } }], [{ type: 'set', key: 'xmss:k', value: { next: 9 } }]);
+  const won = await store.compareAndSet([{ key: 'xmss:k', value: { next: 1 } }], [{ type: 'set', key: 'xmss:k', value: { next: 2 } }]);
+  await store.close();
+  const again = await p.openIndexedDbStore(name);
+  const kept = await again.get('xmss:k');
+  await again.close();
+  globalThis.indexedDB.deleteDatabase(name);
+  return second === (globalThis.navigator.locks ? 'STORE_LOCKED' : 'opened') && !stale && won && kept.next === 2;
+});
+await checkAsync('wallet on indexeddb survives a reopen', async () => {
+  const name = fresh('wallet');
+  const chain = new SimulatedChain();
+  const store = await p.openIndexedDbStore(name);
+  const wallet = await p.PearlWallet.create({ store, backend: chain, passphrase: 'smoke', kdf: { N: 1024 } });
+  chain.pay(await wallet.receiveAddress(), p.parsePearl('3'));
+  chain.mine();
+  await wallet.sync();
+  const sent = await wallet.send({ recipients: [{ address: testAddress(1), amount: p.parsePearl('1') }] });
+  const before = wallet.balance().total;
+  // close also closes the store and releases its tab lock.
+  await wallet.close();
+  const reopenedStore = await p.openIndexedDbStore(name);
+  const reopened = await p.PearlWallet.open({ store: reopenedStore, backend: chain });
+  const ok = reopened.locked && reopened.balance().total === before && reopened.transaction(sent.txid) !== null;
+  await reopened.close();
+  globalThis.indexedDB.deleteDatabase(name);
+  return ok;
+});
 await checkAsync('keystore under WebCrypto', async () => {
   const keystore = await p.createKeystore('pass', { kdf: { N: 1024 } });
   await keystore.addSecret('seed', 'seed', new Uint8Array(32).fill(7));
@@ -98,5 +132,5 @@ for (const name of ['V3 dense', 'V4 H100', 'V4 B200 with proof byte 22 flipped']
   });
 }
 
-window.__pearljs = results;
+globalThis.__pearljs = results;
 document.getElementById('out').textContent = JSON.stringify(results, null, 2);
