@@ -551,8 +551,15 @@ export class JsonRpcClient implements Rpc {
       const cause = new DOMException('The operation was aborted', 'AbortError');
       return new PearlRpcError('network', info.method, networkMessage(cause, origin), { cause });
     });
+    const waited = Date.now() - started;
     try {
-      return await run(limit === undefined || limit === 0 ? info : { ...info, timeout: Math.max(1, limit - (Date.now() - started)) });
+      return await run(limit === undefined || limit === 0 || waited === 0 ? info : { ...info, timeout: Math.max(1, limit - waited) });
+    } catch (err) {
+      // The transport timed out on what was left of the limit; the caller set the whole of it.
+      if (waited > 0 && limit !== undefined && limit > 0 && err instanceof PearlRpcError && err.kind === 'network' && Date.now() - started >= limit) {
+        throw new PearlRpcError('network', info.method, `no reply from ${origin} within ${limit} ms`, { cause: err });
+      }
+      throw err;
     } finally {
       release();
     }
