@@ -616,7 +616,9 @@ export interface BlockbookWsClientOptions {
   /**
    * Sends Blockbook's `ping` this often, in ms, while connected; 0 for
    * never. Pearl's servers sit behind a proxy that closes a websocket after
-   * 30 seconds without a frame from the client. Default 20,000.
+   * 30 seconds without a frame from the client. A ping with no reply within
+   * `timeout` drops the session, which reconnecting then replaces. Default
+   * 20,000.
    */
   readonly keepAlive?: number;
 }
@@ -875,7 +877,16 @@ export class BlockbookWsClient {
     this.#attempt = 0;
     this.#stopPinging();
     if (this.#keepAlive > 0) {
-      this.#pinger = setInterval(() => this.#request('ping', {}).catch(() => {}), this.#keepAlive);
+      const ping = (): void => {
+        this.#request('ping', {}).catch((err: unknown) => {
+          // A ping with no reply in time means a dead session, which a half-open socket may never report: drop it, so reconnecting resubscribes.
+          if (this.#socket !== socket || !(err instanceof PearlRpcError) || err.kind !== 'network') return;
+          this.#onError?.(new PearlRpcError('network', 'ping', `${this.#origin} did not answer a ping, so the session is dropped`, { cause: err }));
+          socket.close(1000);
+          this.#dropped(socket);
+        });
+      };
+      this.#pinger = setInterval(ping, this.#keepAlive);
       (this.#pinger as { unref?: () => void }).unref?.();
     }
   }

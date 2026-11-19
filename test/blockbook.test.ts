@@ -279,6 +279,37 @@ describe('BlockbookWsClient', () => {
     await ws.close();
   });
 
+  it('drops a session that stops answering pings, and connects again', async () => {
+    const chain = new SimulatedChain({ network, premine: 4 });
+    const server = simulatedBlockbook(chain);
+    let silent = false;
+    let opened = 0;
+    const Silent = class extends server.WebSocket {
+      constructor(url: string, init?: object) {
+        super(url, init);
+        opened += 1;
+      }
+      override send(data: string): void {
+        if (silent && (JSON.parse(data) as { method: string }).method === 'ping') return;
+        super.send(data);
+      }
+    };
+    const errors: Error[] = [];
+    const ws = new BlockbookWsClient({ url: server.url, network, WebSocket: Silent, keepAlive: 20, timeout: 50, reconnect: { initialDelay: 1 }, onError: (err) => errors.push(err) });
+    const blocks: number[] = [];
+    await ws.subscribeNewBlock((block) => blocks.push(block.height));
+    silent = true;
+    await until(() => opened === 2);
+    silent = false;
+    expect(opened).toBe(2);
+    expect(errors[0]).toMatchObject({ kind: 'network', message: expect.stringContaining('ping') });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    chain.mine(1);
+    await until(() => blocks.length === 1);
+    expect(blocks).toEqual([chain.height]);
+    await ws.close();
+  });
+
   it('refuses a server whose block 0 is another network\'s', async () => {
     const chain = new SimulatedChain({ network: networks.testnet2, premine: 1 });
     const server = simulatedBlockbook(chain);
