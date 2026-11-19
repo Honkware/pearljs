@@ -96,6 +96,15 @@ export interface PearlWsClientOptions {
    * drop. Default DEFAULT_MAX_REPLY_SIZE.
    */
   readonly maxReplySize?: number;
+  /**
+   * Sends pearld's `session` command this often, in ms, while connected; 0
+   * (the default) for never. A ping still unanswered when the next is due
+   * drops the session, which reconnecting replaces, so a dead connection
+   * that never reports its close is found within twice this. The traffic
+   * also keeps an extension's service worker running, which costs battery.
+   * pearld only: Oyster has no `session` command.
+   */
+  readonly keepAlive?: number;
 }
 
 /** The websocket client takes the same per-call options as the fetch clients. */
@@ -246,8 +255,12 @@ export class JsonRpcWsClient implements Rpc {
   readonly #timeout: number | undefined;
   readonly #oyster: boolean;
   readonly #maxReplySize: number;
+  readonly #keepAlive: number;
 
   #socket: Socket | null = null;
+  // Drops the given socket as if it had closed, for a session that stopped answering.
+  #lose: ((socket: Socket) => void) | null = null;
+  #pinger: ReturnType<typeof setInterval> | undefined;
   #live = false;
   #authenticating = false;
   #ready: Promise<void> | null = null;
@@ -302,6 +315,9 @@ export class JsonRpcWsClient implements Rpc {
     this.#oyster = options.notifications === false;
     this.#maxReplySize = options.maxReplySize ?? DEFAULT_MAX_REPLY_SIZE;
     if (!Number.isSafeInteger(this.#maxReplySize) || this.#maxReplySize < 1) throw new RangeError('maxReplySize must be a positive integer');
+    this.#keepAlive = options.keepAlive ?? 0;
+    if (!Number.isSafeInteger(this.#keepAlive) || this.#keepAlive < 0) throw new RangeError('keepAlive must be a whole number of ms, 0 for never');
+    if (this.#keepAlive > 0 && this.#oyster) throw new TypeError('keepAlive pings with pearld\'s session command, which Oyster does not have');
   }
 
   /** Calls sent and still waiting for their reply. */
@@ -601,6 +617,15 @@ export class JsonRpcWsClient implements Rpc {
       this.#dropped(opened, { kind: 'network', message });
     };
     socket.onclose = lost;
+    this.#lose = (dead) => {
+      if (dead !== socket) return;
+      lost(undefined);
+      try {
+        socket.close(1000);
+      } catch {
+        // Already closing.
+      }
+    };
     // Once open, a close event follows any error. Node 22's WebSocket sends
     // no close after a refused upgrade, so an error before open ends it here.
     socket.onerror = () => {
@@ -639,7 +664,38 @@ export class JsonRpcWsClient implements Rpc {
     this.#attempt = 0;
     this.#settle?.resolve();
     this.#settle = null;
+    this.#ping(socket);
     this.#emit('connect', { reconnect });
+  }
+
+  #ping(socket: Socket): void {
+    this.#stopPinging();
+    if (this.#keepAlive === 0) return;
+    let waiting = false;
+    this.#pinger = setInterval(() => {
+      if (this.#socket !== socket || !this.#live) {
+        this.#stopPinging();
+        return;
+      }
+      if (waiting) {
+        // A half-open connection may never report its close; this is how it is found.
+        this.#stopPinging();
+        this.#emit('error', new PearlRpcError('network', 'session', `${this.#origin} did not answer a ping within ${this.#keepAlive} ms, so the session is dropped`));
+        this.#lose?.(socket);
+        return;
+      }
+      waiting = true;
+      this.#request(socket, 'session', [], () => null).then(
+        () => (waiting = false),
+        () => undefined,
+      );
+    }, this.#keepAlive);
+    (this.#pinger as { unref?: () => void }).unref?.();
+  }
+
+  #stopPinging(): void {
+    clearInterval(this.#pinger);
+    this.#pinger = undefined;
   }
 
   async #resubscribe(socket: Socket): Promise<void> {
@@ -660,6 +716,7 @@ export class JsonRpcWsClient implements Rpc {
   }
 
   #dropped(opened: boolean, failure: Failure): void {
+    this.#stopPinging();
     const authenticating = this.#authenticating;
     this.#authenticating = false;
     this.#abandoned.clear();
@@ -708,6 +765,7 @@ export class JsonRpcWsClient implements Rpc {
   #stop(reason: Failure, error: Error | undefined): void {
     if (this.#closed !== null) return;
     this.#closed = reason;
+    this.#stopPinging();
     clearTimeout(this.#timer);
     this.#settle?.reject(reason);
     this.#settle = null;

@@ -792,3 +792,54 @@ describe('pearld websocket client', () => {
     }
   });
 });
+
+describe('pearld websocket keep-alive', () => {
+  it('sends nothing of its own unless keepAlive is set', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    const ws = client();
+    const connecting = ws.connect();
+    await serve();
+    await connecting;
+    vi.advanceTimersByTime(120_000);
+    expect(last().methods()).toEqual(['authenticate']);
+    await ws.close();
+  });
+
+  it('pings with session while connected, and drops and replaces a session that stops answering', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'setTimeout', 'clearTimeout'] });
+    const ws = client({ keepAlive: 10_000, reconnect: { initialDelay: 1 } });
+    const errors = collect(ws, 'error');
+    const disconnects = collect(ws, 'disconnect');
+    const connects = collect(ws, 'connect');
+    const connecting = ws.connect();
+    const first = await serve();
+    await connecting;
+    vi.advanceTimersByTime(10_000);
+    expect(first.methods()).toEqual(['authenticate', 'session']);
+    first.push(replyFrame('reply-session', first.sent[1]!.id));
+    await flush();
+    vi.advanceTimersByTime(10_000);
+    expect(first.methods()).toEqual(['authenticate', 'session', 'session']);
+    // The second ping goes unanswered: when the third is due the session is dropped.
+    vi.advanceTimersByTime(10_000);
+    await flush();
+    expect(first.readyState).toBe(3);
+    expect(first.methods()).toEqual(['authenticate', 'session', 'session']);
+    expect(errors.map((e) => e.message)).toEqual([expect.stringContaining('did not answer a ping within 10000 ms')]);
+    expect(disconnects).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    const second = await serve(last());
+    expect(second).not.toBe(first);
+    expect(connects).toEqual([{ reconnect: false }, { reconnect: true }]);
+    vi.advanceTimersByTime(10_000);
+    expect(second.methods()).toEqual(['authenticate', 'session']);
+    await ws.close();
+    vi.advanceTimersByTime(60_000);
+    expect(second.methods()).toEqual(['authenticate', 'session']);
+  });
+
+  it('refuses keepAlive for Oyster and a bad interval', () => {
+    expect(() => new OysterWsClient({ url: 'wss://127.0.0.1:18332', username: 'u', password: 'p', WebSocket: FakeSocket, keepAlive: 1000 })).toThrow(TypeError);
+    expect(() => client({ keepAlive: -1 })).toThrow(RangeError);
+  });
+});
