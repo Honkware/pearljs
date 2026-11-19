@@ -32,6 +32,7 @@ import {
 } from '../src/index.js';
 import { expected, fakeFetch, fixture, rejection, type Route } from './rpc-helpers.js';
 import { decimalToGrain, parseJson } from '../src/internal/rpc-wire.js';
+import { Limiter } from '../src/internal/limiter.js';
 
 function pearld(routes: Record<string, Route>) {
   const fake = fakeFetch(routes);
@@ -1142,6 +1143,72 @@ describe('transport options', () => {
     expect(await peak({ maxConcurrentRequests: 1 })).toBe(1);
     expect(await peak({ maxConcurrentRequests: 0 })).toBe(12);
     expect(() => new PearldClient({ url: 'https://127.0.0.1:18334', maxConcurrentRequests: -1 })).toThrow(RangeError);
+  });
+
+  it('gives up a call waiting for a slot at its own timeout or abort, and never sends it', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const sent: string[] = [];
+    const fetch = (async (_url: string, init: RequestInit) => {
+      const { method, id } = JSON.parse(String(init.body)) as { method: string; id: number };
+      sent.push(method);
+      if (method === 'getblockhash') await held;
+      return new Response(JSON.stringify({ result: 7, error: null, id }));
+    }) as unknown as typeof globalThis.fetch;
+    const client = new PearldClient({ url: 'http://127.0.0.1:44107', fetch, maxConcurrentRequests: 1 });
+    const holder = client.call('getblockhash', [1], { timeout: 60_000 });
+    const started = Date.now();
+    const timed = client.call('getblockcount', [], { timeout: 100 }).catch((err: unknown) => [err, Date.now() - started]);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 100);
+    const aborted = client.call('getbestblockhash', [], { signal: controller.signal }).catch((err: unknown) => [err, Date.now() - started]);
+    const settled = await Promise.race([Promise.all([timed, aborted]), new Promise((resolve) => setTimeout(() => resolve('still waiting'), 2000))]);
+    expect(settled).not.toBe('still waiting');
+    const [[timeout, timeoutAt], [abort, abortAt]] = settled as [[unknown, number], [unknown, number]];
+    expect(timeout).toMatchObject({ kind: 'network', method: 'getblockcount', message: expect.stringContaining('within 100 ms') });
+    expect(abort).toMatchObject({ kind: 'network', method: 'getbestblockhash', message: expect.stringContaining('aborted') });
+    expect(Math.max(timeoutAt, abortAt)).toBeLessThan(1000);
+    release();
+    expect(await holder).toBe(7);
+    expect(await client.getBlockCount()).toBe(7);
+    expect(sent).toEqual(['getblockhash', 'getblockcount']);
+  });
+
+  it('frees a slot once however often its release is called, and none a waiter gave up', async () => {
+    const slots = new Limiter(1);
+    const fail = (reason: string) => new Error(reason);
+    const first = await slots.acquire({}, fail);
+    await expect(slots.acquire({ timeout: 20 }, fail)).rejects.toThrow('timeout');
+    const second = slots.acquire({}, fail);
+    first();
+    first();
+    const release = await second;
+    const third = slots.acquire({}, fail).then(() => 'granted');
+    expect(await Promise.race([third, new Promise((resolve) => setTimeout(() => resolve('waiting'), 50))])).toBe('waiting');
+    release();
+    expect(await third).toBe('granted');
+  });
+
+  it('keeps long polls and other calls without a time limit from holding up the rest', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let inFlight = 0;
+    let most = 0;
+    const fetch = (async (_url: string, init: RequestInit) => {
+      const { method, id } = JSON.parse(String(init.body)) as { method: string; id: number };
+      inFlight++;
+      most = Math.max(most, inFlight);
+      if (method !== 'getblockcount') await held;
+      inFlight--;
+      return new Response(JSON.stringify({ result: method === 'getblockcount' ? 7 : {}, error: null, id }));
+    }) as unknown as typeof globalThis.fetch;
+    const client = new PearldClient({ url: 'http://127.0.0.1:44107', fetch, maxConcurrentRequests: 2 });
+    const polls = [client.call('getblocktemplate', [{}]), client.call('generate', [1]), client.call('getblocktemplate', [{}])];
+    expect(await Promise.race([Promise.all([client.getBlockCount(), client.getBlockCount(), client.getBlockCount()]), new Promise((resolve) => setTimeout(() => resolve('held up'), 1000))])).toEqual([7, 7, 7]);
+    // The calls without a limit take turns among themselves, as many at once as the others.
+    expect(most).toBe(3);
+    release();
+    await Promise.all(polls);
   });
 
   it('does not retry an RPC error or a refused password', async () => {

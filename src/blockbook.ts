@@ -24,6 +24,7 @@ import { decodeAddress } from './address.js';
 import type { FeeRate } from './amount.js';
 import { PearlError, PearlRpcError } from './errors.js';
 import { toHex } from './internal/bytes.js';
+import { Limiter } from './internal/limiter.js';
 import { decimalToGrain, isLoopback, parseJson, readBounded } from './internal/rpc-wire.js';
 import type { PearlNetwork } from './networks.js';
 import { DEFAULT_MAX_CONCURRENT_REQUESTS, DEFAULT_MAX_REPLY_SIZE, DEFAULT_RPC_TIMEOUT } from './rpc.js';
@@ -275,7 +276,7 @@ export interface BlockbookClientOptions {
   readonly fetch?: typeof fetch;
   /** Merged into every request. */
   readonly init?: RequestInit & Record<string, unknown>;
-  /** Limit per request in ms, 0 for none. Default DEFAULT_RPC_TIMEOUT. */
+  /** Limit per request in ms, its wait for a slot included; 0 for none. Default DEFAULT_RPC_TIMEOUT. */
   readonly timeout?: number;
   /** Retry reads after a network failure or an HTTP 429 or 5xx, as the RPC clients do. Off by default; broadcasts are never retried. */
   readonly retry?: boolean | number | RetryOptions;
@@ -333,10 +334,8 @@ export class BlockbookClient {
   readonly #init: RequestInit & Record<string, unknown>;
   readonly #timeout: number;
   readonly #retry: Required<RetryOptions> | null;
-  readonly #maxConcurrent: number;
+  readonly #slots: Limiter;
   readonly #maxReplySize: number;
-  #inFlight = 0;
-  readonly #waiting: (() => void)[] = [];
   #checked: Promise<void> | null = null;
 
   constructor(options: BlockbookClientOptions) {
@@ -352,7 +351,7 @@ export class BlockbookClient {
     const { retry = false, maxConcurrentRequests = DEFAULT_MAX_CONCURRENT_REQUESTS, maxReplySize = DEFAULT_MAX_REPLY_SIZE } = options;
     if (!Number.isSafeInteger(maxConcurrentRequests) || maxConcurrentRequests < 0) throw new RangeError('maxConcurrentRequests must be a whole number, 0 for no limit');
     if (!Number.isSafeInteger(maxReplySize) || maxReplySize < 1) throw new RangeError('maxReplySize must be a positive integer');
-    this.#maxConcurrent = maxConcurrentRequests;
+    this.#slots = new Limiter(maxConcurrentRequests);
     this.#maxReplySize = maxReplySize;
     this.#retry = retry === false ? null : { retries: 2, delay: 250, maxDelay: 5000, ...(typeof retry === 'number' ? { retries: retry } : retry === true ? {} : retry) };
   }
@@ -508,7 +507,7 @@ export class BlockbookClient {
     const url = new URL(target, this.url).href;
     for (let attempt = 0; ; attempt++) {
       try {
-        const text = await this.#limited(() => this.#send(name, url, init));
+        const text = await this.#limited(name, (timeout) => this.#send(name, url, init, timeout));
         let value: unknown;
         try {
           value = parse(text);
@@ -525,7 +524,7 @@ export class BlockbookClient {
     }
   }
 
-  async #send(name: string, url: string, request: RequestInit): Promise<string> {
+  async #send(name: string, url: string, request: RequestInit, timeout: number): Promise<string> {
     const origin = this.#origin;
     const controller = new AbortController();
     const signal = this.#init.signal;
@@ -535,7 +534,7 @@ export class BlockbookClient {
       else signal.addEventListener('abort', onAbort, { once: true });
     }
     let timedOut = false;
-    const timer = this.#timeout > 0 ? setTimeout(() => ((timedOut = true), controller.abort()), this.#timeout) : undefined;
+    const timer = timeout > 0 ? setTimeout(() => ((timedOut = true), controller.abort()), timeout) : undefined;
     const aborted = new Promise<never>((_, reject) => {
       const fail = () => reject(new DOMException('The operation was aborted', 'AbortError'));
       if (controller.signal.aborted) fail();
@@ -574,15 +573,18 @@ export class BlockbookClient {
     }
   }
 
-  async #limited<T>(run: () => Promise<T>): Promise<T> {
-    if (this.#maxConcurrent > 0 && this.#inFlight >= this.#maxConcurrent) await new Promise<void>((resolve) => this.#waiting.push(resolve));
-    else this.#inFlight++;
+  // A request waits for a slot within the client's timeout and signal, and is sent with what is left of the timeout.
+  async #limited<T>(name: string, run: (timeout: number) => Promise<T>): Promise<T> {
+    const started = Date.now();
+    const release = await this.#slots.acquire({ signal: this.#init.signal, timeout: this.#timeout }, (reason) => {
+      if (reason === 'timeout') return new PearlRpcError('network', name, `no reply from ${this.#origin} within ${this.#timeout} ms`);
+      const cause = new DOMException('The operation was aborted', 'AbortError');
+      return new PearlRpcError('network', name, unreachable(cause, this.#origin), { cause });
+    });
     try {
-      return await run();
+      return await run(this.#timeout === 0 ? 0 : Math.max(1, this.#timeout - (Date.now() - started)));
     } finally {
-      const next = this.#waiting.shift();
-      if (next === undefined) this.#inFlight--;
-      else next();
+      release();
     }
   }
 

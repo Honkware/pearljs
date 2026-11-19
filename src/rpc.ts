@@ -25,6 +25,7 @@ import { BASIC_FILTER_TYPE, checkFilterHeaders, decodeFilter, filterKey } from '
 import type { BlockFilter } from './gcs.js';
 import type { PearlNetworkName } from './networks.js';
 import { fromHex, toHex as bytesToHex } from './internal/bytes.js';
+import { Limiter } from './internal/limiter.js';
 import { PrlAmount, UNBOUNDED_METHODS, basicAuth, encodeJson, isErrorReply, readBounded, readReply, rpcEndpoint, safeHeight } from './internal/rpc-wire.js';
 import { PearlRpcError } from './errors.js';
 import type { FeeRate } from './amount.js';
@@ -136,8 +137,10 @@ export interface RpcClientOptions extends Omit<HttpTransportOptions, 'url'> {
    */
   readonly retry?: boolean | number | RetryOptions;
   /**
-   * Requests in flight at once; the rest wait their turn. Default
-   * DEFAULT_MAX_CONCURRENT_REQUESTS, 0 for no limit.
+   * Requests in flight at once; the rest wait their turn, within their own
+   * timeout and signal. Default DEFAULT_MAX_CONCURRENT_REQUESTS, 0 for no
+   * limit. Calls with no time limit, such as getblocktemplate long polls,
+   * have as many slots again of their own.
    */
   readonly maxConcurrentRequests?: number;
   /**
@@ -477,9 +480,10 @@ export class JsonRpcClient implements Rpc {
   readonly #transport: RpcTransport;
   readonly #retry: Required<RetryOptions> | null;
   readonly #batch: Required<BatchOptions> | null;
-  readonly #maxConcurrent: number;
-  #inFlight = 0;
-  readonly #waiting: (() => void)[] = [];
+  readonly #slots: Limiter;
+  readonly #unbounded: Limiter;
+  // The default limit of the transport the client made from `url`, or null for a transport given to it.
+  readonly #timeout: number | undefined | null;
   #queue: Queued[] = [];
   #flushTimer: ReturnType<typeof setTimeout> | undefined;
   #id = 0;
@@ -487,8 +491,10 @@ export class JsonRpcClient implements Rpc {
   constructor(options: RpcClientOptions) {
     const { url, transport, retry = false, batch = false, maxConcurrentRequests = DEFAULT_MAX_CONCURRENT_REQUESTS, ...http } = options;
     if (!Number.isSafeInteger(maxConcurrentRequests) || maxConcurrentRequests < 0) throw new RangeError('maxConcurrentRequests must be a whole number, 0 for no limit');
-    this.#maxConcurrent = maxConcurrentRequests;
+    this.#slots = new Limiter(maxConcurrentRequests);
+    this.#unbounded = new Limiter(maxConcurrentRequests);
     if ((url === undefined) === (transport === undefined)) throw new TypeError('give either url or transport');
+    this.#timeout = transport === undefined ? http.timeout : null;
     this.#transport = transport ?? httpTransport({ ...http, url: url! });
     this.#retry =
       retry === false
@@ -522,7 +528,7 @@ export class JsonRpcClient implements Rpc {
   async #send(body: string, info: RpcRequestInfo, idempotent: boolean): Promise<string> {
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.#limited(() => this.#transport.send(body, info));
+        return await this.#limited(info, (sent) => this.#transport.send(body, sent));
       } catch (err) {
         // A 503 is pearld's --rpcmaxclients turning the request away unread, so a read is retried even without `retry`.
         const retry = !idempotent ? null : this.#retry ?? (isBusy(err) ? BUSY_RETRY : null);
@@ -532,19 +538,23 @@ export class JsonRpcClient implements Rpc {
     }
   }
 
-  async #limited(run: () => Promise<string>): Promise<string> {
-    if (this.#maxConcurrent > 0 && this.#inFlight >= this.#maxConcurrent) {
-      await new Promise<void>((resolve) => this.#waiting.push(resolve));
-    } else {
-      this.#inFlight++;
-    }
+  // A call waits for a slot within its own time limit and signal, and is sent with what is left of the limit. One
+  // with no limit, such as a getblocktemplate long poll, waits among its own kind, so it never holds a slot that a
+  // bounded call is waiting for.
+  async #limited(info: RpcRequestInfo, run: (info: RpcRequestInfo) => Promise<string>): Promise<string> {
+    const limit = info.timeout ?? (this.#timeout === null ? undefined : (this.#timeout ?? (UNBOUNDED_METHODS.has(info.method) ? 0 : DEFAULT_RPC_TIMEOUT)));
+    const slots = limit === 0 || (limit === undefined && UNBOUNDED_METHODS.has(info.method)) ? this.#unbounded : this.#slots;
+    const origin = this.#transport.origin;
+    const started = Date.now();
+    const release = await slots.acquire({ signal: info.signal, timeout: limit }, (reason) => {
+      if (reason === 'timeout') return new PearlRpcError('network', info.method, `no reply from ${origin} within ${limit} ms`);
+      const cause = new DOMException('The operation was aborted', 'AbortError');
+      return new PearlRpcError('network', info.method, networkMessage(cause, origin), { cause });
+    });
     try {
-      return await run();
+      return await run(limit === undefined || limit === 0 ? info : { ...info, timeout: Math.max(1, limit - (Date.now() - started)) });
     } finally {
-      // The slot passes straight to the next waiter, so the count stays put.
-      const next = this.#waiting.shift();
-      if (next === undefined) this.#inFlight--;
-      else next();
+      release();
     }
   }
 

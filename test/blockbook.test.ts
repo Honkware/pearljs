@@ -157,6 +157,24 @@ describe('BlockbookClient', () => {
     expect(most).toBe(2);
   });
 
+  it('counts each request\'s timeout from when it is made, its wait for a slot included', async () => {
+    const { server } = setup();
+    let stall = false;
+    // Requests made while stall is set never answer; the client gives up on each at its timeout.
+    const stuck = (async (input: string | URL | Request, init?: RequestInit) => (stall ? new Promise<never>(() => {}) : server.fetch(input, init))) as typeof fetch;
+    const client = new BlockbookClient({ url: server.url, network, fetch: stuck, maxConcurrentRequests: 1, timeout: 400 });
+    await client.checkNetwork();
+    stall = true;
+    const first = client.getBlockHash(0).catch((err: unknown) => err);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const started = Date.now();
+    const second = await client.getBlockHash(0).catch((err: unknown) => err);
+    // It waited 200 ms for the slot, then had the rest of its 400, not 400 more.
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(second).toMatchObject({ kind: 'network', message: expect.stringContaining('within 400 ms') });
+    expect(await first).toMatchObject({ kind: 'network', message: expect.stringContaining('within 400 ms') });
+  });
+
   it('reads an xpub reply with its derived addresses, as api.Address and api.Token write them', () => {
     // Fields as Worker.GetXpubAddress fills them for a Bitcoin-type xpub with tokens=used.
     const reply = parseBlockbookJson(
