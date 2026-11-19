@@ -4,10 +4,11 @@
 // for V2 to V4, zkpow.VerifyCertificate for V1, on Pearl's fp8-scheme
 // branch), without its "proof rejected: " prefix.
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import vectors from '../vectors/mining/proofs.json';
 import type { CertificateVersion, PearlCertificate } from '../src/block.js';
-import { certificateProofCommitment, certificateStatement, checkCertificateBinding } from '../src/block.js';
+import { certificateProofCommitment, certificateStatement, checkCertificateBinding, parseBlock } from '../src/block.js';
 import type { PearlBlockHeader } from '../src/blockheader.js';
 import { blockHash, parseBlockHeader } from '../src/blockheader.js';
 import { fromHex } from '../src/internal/bytes.js';
@@ -69,6 +70,16 @@ describe('checkJackpot and checkBlockWork on V1', () => {
       });
       expect(() => checkJackpot(certificate, header.bits)).toThrow(expect.objectContaining({ code: 'CERTIFICATE_MALFORMED', message: 'Reserved field must be all zeros' }));
     }
+  });
+
+  it('passes mainnet block 200, which the network accepted with a V1 certificate, and refuses its jackpot raised', () => {
+    const block = parseBlock(fromHex(readFileSync(new URL('./fixtures/mainnet-block-200.hex', import.meta.url), 'utf8').trim()));
+    expect(block.certificate!.version).toBe(1);
+    expect(() => checkBlockWork(block, networks.mainnet, 200)).not.toThrow();
+    const raised = { ...block, certificate: { ...block.certificate!, publicData: Uint8Array.from(block.certificate!.publicData).fill(0xff, 116, 148) } };
+    expect(() => checkBlockWork(raised, networks.mainnet, 200)).toThrow(
+      expect.objectContaining({ code: 'JACKPOT_ABOVE_TARGET', message: 'Jackpot condition not satisfied: hash does not meet difficulty target' }),
+    );
   });
 
   it('refuses V1 public data that is not 164 bytes', () => {
