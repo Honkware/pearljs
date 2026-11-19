@@ -307,6 +307,7 @@ type Vectors struct {
 	CustomLeaves     []CustomLeafVector      `json:"customLeaves"`
 	ChangeOutputs    []ChangeOutputVector    `json:"changeOutputs"`
 	Recovery         RecoveryVectors         `json:"recovery"`
+	HTLCs            []HTLCSpendVector       `json:"htlcs"`
 }
 
 // RecoveryWalletVector is a wallet Oyster's own code created from Input, as
@@ -350,6 +351,40 @@ type RecoveryVectors struct {
 	RecoveryWindow uint32                 `json:"recoveryWindow"`
 	Wallets        []RecoveryWalletVector `json:"wallets"`
 	PQAddresses    []PQAddressVector      `json:"pqAddresses"`
+}
+
+// HTLCSpendVector is one spend of a two-leaf hash timelock tree, the claim
+// leaf OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 (or OP_HASH160) <hash>
+// OP_EQUALVERIFY <claim key> OP_CHECKSIG and the refund leaf <lock>
+// OP_CHECKLOCKTIMEVERIFY (or OP_CHECKSEQUENCEVERIFY) OP_DROP <refund key>
+// OP_CHECKSIG, in a P2TR output (with InternalPubKey) or a P2MR output.
+// Stack is the witness items before the leaf script, signatures included;
+// Error is what Pearl's script engine says of the spend, empty when it
+// accepts it. Keys are account/0/ClaimKey and account/0/RefundKey.
+type HTLCSpendVector struct {
+	Name           string   `json:"name"`
+	Container      string   `json:"container"`
+	Lock           string   `json:"lock"`
+	LockValue      int64    `json:"lockValue"`
+	HashType       string   `json:"hashType"`
+	Preimage       string   `json:"preimage"`
+	Hash           string   `json:"hash"`
+	ClaimKey       uint32   `json:"claimKey"`
+	RefundKey      uint32   `json:"refundKey"`
+	ClaimLeaf      string   `json:"claimLeaf"`
+	RefundLeaf     string   `json:"refundLeaf"`
+	InternalPubKey string   `json:"internalPubKey"`
+	Root           string   `json:"root"`
+	Address        string   `json:"address"`
+	PrevScript     string   `json:"prevScript"`
+	Value          int64    `json:"value"`
+	LeafIndex      int      `json:"leafIndex"`
+	ControlBlock   string   `json:"controlBlock"`
+	UnsignedTxHex  string   `json:"unsignedTxHex"`
+	Sighash        string   `json:"sighash"`
+	Stack          []string `json:"stack"`
+	SpendTxHex     string   `json:"spendTxHex"`
+	Error          string   `json:"error"`
 }
 
 // CoinVector is an unspent output offered to coin selection.
@@ -2163,6 +2198,7 @@ func main() {
 	}
 
 	vectors.Leaves = leafBuilderVectors(account, internalPub)
+	vectors.HTLCs = htlcVectors(account, internalPub)
 	vectors.Mempool = mempoolVectors()
 	vectors.Consensus = consensusVectors(nets)
 
@@ -2696,6 +2732,140 @@ func leafBuilderVectors(account *hdkeychain.ExtendedKey, internalPub *btcec.Publ
 		InternalPubKey: hex.EncodeToString(schnorr.SerializePubKey(internalPub)), UnsignedTxHex: unsignedHex,
 		Prevouts:   []PrevoutVector{{Script: hex.EncodeToString(prevScript), Value: amount}},
 		FinalTxHex: serializeTx(finalTx, true), WitnessLengths: lengths,
+	}
+	return out
+}
+
+func htlcVectors(account *hdkeychain.ExtendedKey, internalPub *btcec.PublicKey) []HTLCSpendVector {
+	const claimIndex, refundIndex = 70, 71
+	const amount int64 = 100_000_000
+	claimPriv, err := derive(account, 0, claimIndex).ECPrivKey()
+	check(err)
+	refundPriv, err := derive(account, 0, refundIndex).ECPrivKey()
+	check(err)
+	preimage := patternBytes(32, 0x5a)
+	var out []HTLCSpendVector
+	type spend struct {
+		name     string
+		leaf     int
+		signer   *btcec.PrivateKey
+		preimage []byte
+		lockTime uint32
+		sequence uint32
+		fails    bool
+	}
+	for _, container := range []string{"p2tr", "p2mr"} {
+		for _, lock := range []string{"cltv", "csv"} {
+			for _, hashType := range []string{"sha256", "hash160"} {
+				if hashType == "hash160" && (lock != "cltv") {
+					continue
+				}
+				hashOp, hash := byte(txscript.OP_SHA256), chainhash.HashB(preimage)
+				if hashType == "hash160" {
+					hashOp, hash = txscript.OP_HASH160, btcutil.Hash160(preimage)
+				}
+				claimLeaf, err := txscript.NewScriptBuilder().AddOp(txscript.OP_SIZE).AddInt64(32).AddOp(txscript.OP_EQUALVERIFY).
+					AddOp(hashOp).AddData(hash).AddOp(txscript.OP_EQUALVERIFY).
+					AddData(schnorr.SerializePubKey(claimPriv.PubKey())).AddOp(txscript.OP_CHECKSIG).Script()
+				check(err)
+				lockOp, lockValue := byte(txscript.OP_CHECKLOCKTIMEVERIFY), int64(500)
+				if lock == "csv" {
+					lockOp, lockValue = txscript.OP_CHECKSEQUENCEVERIFY, 10
+				}
+				refundLeaf, err := txscript.NewScriptBuilder().AddInt64(lockValue).AddOp(lockOp).AddOp(txscript.OP_DROP).
+					AddData(schnorr.SerializePubKey(refundPriv.PubKey())).AddOp(txscript.OP_CHECKSIG).Script()
+				check(err)
+				leaves := []txscript.TapLeaf{txscript.NewBaseTapLeaf(claimLeaf), txscript.NewBaseTapLeaf(refundLeaf)}
+				tree := txscript.AssembleTaprootScriptTree(leaves...)
+				root := tree.RootNode.TapHash()
+				var prevScript []byte
+				var address string
+				if container == "p2tr" {
+					prevScript, err = txscript.PayToTaprootScript(txscript.ComputeTaprootOutputKey(internalPub, root[:]))
+					check(err)
+					addr, err := btcutil.NewAddressTaproot(prevScript[2:], &chaincfg.MainNetParams)
+					check(err)
+					address = addr.EncodeAddress()
+				} else {
+					addr, err := btcutil.NewAddressMerkleRoot(root[:], &chaincfg.MainNetParams)
+					check(err)
+					prevScript, err = txscript.PayToAddrScript(addr)
+					check(err)
+					address = addr.EncodeAddress()
+				}
+				refundLock, refundSeq := uint32(0), uint32(wire.MaxTxInSequenceNum)
+				earlyLock, earlySeq := uint32(0), uint32(wire.MaxTxInSequenceNum)
+				if lock == "cltv" {
+					refundLock, refundSeq, earlyLock, earlySeq = 500, 0xfffffffe, 499, 0xfffffffe
+				} else {
+					refundSeq, earlySeq = 10, 9
+				}
+				wrong := append([]byte(nil), preimage...)
+				wrong[0] ^= 1
+				spends := []spend{
+					{"claim", 0, claimPriv, preimage, 0, wire.MaxTxInSequenceNum, false},
+					{"refund", 1, refundPriv, nil, refundLock, refundSeq, false},
+				}
+				if hashType == "sha256" {
+					spends = append(spends,
+						spend{"claim-wrong-preimage", 0, claimPriv, wrong, 0, wire.MaxTxInSequenceNum, true},
+						spend{"claim-long-preimage", 0, claimPriv, append(append([]byte(nil), preimage...), 0), 0, wire.MaxTxInSequenceNum, true},
+						spend{"claim-signed-by-refund-key", 0, refundPriv, preimage, 0, wire.MaxTxInSequenceNum, true},
+						spend{"refund-early", 1, refundPriv, nil, earlyLock, earlySeq, true},
+						spend{"refund-signed-by-claim-key", 1, claimPriv, nil, refundLock, refundSeq, true},
+					)
+				}
+				for _, item := range spends {
+					leaf := leaves[item.leaf]
+					proof := tree.LeafMerkleProofs[item.leaf]
+					var controlBlock []byte
+					if container == "p2tr" {
+						block := proof.ToControlBlock(internalPub)
+						controlBlock, err = block.ToBytes()
+					} else {
+						block := txscript.MerkleRootControlBlock{LeafVersion: txscript.BaseLeafVersion, InclusionProof: proof.InclusionProof}
+						controlBlock, err = block.ToBytes()
+					}
+					check(err)
+					tx := wire.NewMsgTx(2)
+					tx.LockTime = item.lockTime
+					txIn := wire.NewTxIn(wire.NewOutPoint(&chainhash.Hash{0x4c}, 0), nil, nil)
+					txIn.Sequence = item.sequence
+					tx.AddTxIn(txIn)
+					tx.AddTxOut(wire.NewTxOut(amount-10_000, prevScript))
+					unsigned := serializeTx(tx, false)
+					fetcher := txscript.NewCannedPrevOutputFetcher(prevScript, amount)
+					sigHashes := txscript.NewTxSigHashes(tx, fetcher)
+					sighash, err := txscript.CalcTapscriptSignaturehash(sigHashes, txscript.SigHashDefault, tx, 0, fetcher, leaf)
+					check(err)
+					sig, err := txscript.RawTxInTapscriptSignature(tx, sigHashes, 0, amount, prevScript, leaf, txscript.SigHashDefault, item.signer)
+					check(err)
+					stack := wire.TxWitness{sig}
+					if item.leaf == 0 {
+						stack = append(stack, item.preimage)
+					}
+					tx.TxIn[0].SetWitness(append(append(wire.TxWitness{}, stack...), leaf.Script, controlBlock))
+					errText := scriptError(tx, []*wire.TxOut{wire.NewTxOut(amount, prevScript)})
+					if (errText != "") != item.fails {
+						panic(fmt.Sprintf("htlc %s %s %s: unexpected script result %q", container, lock, item.name, errText))
+					}
+					var stackHex []string
+					for _, part := range stack {
+						stackHex = append(stackHex, hex.EncodeToString(part))
+					}
+					out = append(out, HTLCSpendVector{
+						Name: fmt.Sprintf("%s-%s-%s-%s", container, lock, hashType, item.name), Container: container, Lock: lock,
+						LockValue: lockValue, HashType: hashType, Preimage: hex.EncodeToString(preimage), Hash: hex.EncodeToString(hash),
+						ClaimKey: claimIndex, RefundKey: refundIndex,
+						ClaimLeaf: hex.EncodeToString(claimLeaf), RefundLeaf: hex.EncodeToString(refundLeaf),
+						InternalPubKey: hex.EncodeToString(schnorr.SerializePubKey(internalPub)), Root: hex.EncodeToString(root[:]),
+						Address: address, PrevScript: hex.EncodeToString(prevScript), Value: amount, LeafIndex: item.leaf,
+						ControlBlock: hex.EncodeToString(controlBlock), UnsignedTxHex: unsigned, Sighash: hex.EncodeToString(sighash),
+						Stack: stackHex, SpendTxHex: serializeTx(tx, true), Error: errText,
+					})
+				}
+			}
+		}
 	}
 	return out
 }
