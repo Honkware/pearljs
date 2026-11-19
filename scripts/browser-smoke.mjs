@@ -1,7 +1,7 @@
 // Bundles the packed package with Vite and runs it against Pearl's vectors in
 // headless browsers. Needs a browser, so it is not part of `npm run check`.
 //
-//   BROWSERS=chrome,firefox,safari npm run test:browser   (default: chrome)
+//   BROWSERS=chrome,firefox,safari npm run test:browser   (default: chrome; also firefox-private)
 //   npm run test:browser -- --serve                        builds, serves and prints the URL to open by hand
 //
 // CHROME and FIREFOX override the binaries. A browser that is not installed,
@@ -14,7 +14,7 @@ import { binaries, launchers, waitFor } from './browser/drivers.mjs';
 import { installTarball, pack, root } from './lib/pack.mjs';
 
 const wanted = (process.env.BROWSERS ?? 'chrome').split(',').map((b) => b.trim()).filter(Boolean);
-for (const name of wanted) if (!launchers[name]) throw new Error(`unknown browser ${name}; use chrome, firefox or safari`);
+for (const name of wanted) if (!launchers[name]) throw new Error(`unknown browser ${name}; use chrome, firefox, firefox-private or safari`);
 const serveOnly = process.argv.includes('--serve');
 
 const { tarball } = pack();

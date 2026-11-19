@@ -14,6 +14,7 @@ const first = (paths) => paths.filter(Boolean).find((p) => existsSync(p));
 export const binaries = {
   chrome: () => first([process.env.CHROME, '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']),
   firefox: () => first([process.env.FIREFOX, '/Applications/Firefox.app/Contents/MacOS/firefox', '/usr/bin/firefox']),
+  'firefox-private': () => binaries.firefox(),
   safari: () => first(['/usr/bin/safaridriver']),
 };
 
@@ -188,7 +189,13 @@ export async function launchSafari() {
   };
 }
 
-export const launchers = { chrome: launchChrome, firefox: launchFirefox, safari: launchSafari };
+export const launchers = {
+  chrome: launchChrome,
+  firefox: launchFirefox,
+  // Every window private, where Firefox keeps IndexedDB in memory for the session.
+  'firefox-private': () => launchFirefox({ prefs: { 'browser.privatebrowsing.autostart': true } }),
+  safari: launchSafari,
+};
 
 /** Polls expression in the browser's page until it yields something other than null or undefined. */
 export async function waitFor(browser, expression, timeout = 120_000) {
