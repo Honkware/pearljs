@@ -8,9 +8,9 @@ import { fromOutputScript, toOutputScript } from '../address.js';
 import type { FeeRate } from '../amount.js';
 import { sumBalance } from '../backend.js';
 import type { AddressHistoryEntry, SpendStatus, WalletBackend, WalletBalance, WalletUtxo, Watched } from '../backend.js';
-import { blockVsize, calculateMerkleRoot, certificateProofCommitment, parseBlock, PUBLIC_DATA_MIN_SIZE_V4 } from '../block.js';
+import { blockVsize, calculateMerkleRoot, certificateProofCommitment, parseBlock } from '../block.js';
 import type { PearlBlock, PearlCertificate } from '../block.js';
-import { BLOCK_HEADER_SIZE, blockHash, blockHashHex, serializeBlockHeader } from '../blockheader.js';
+import { blockHash, blockHashHex, serializeBlockHeader } from '../blockheader.js';
 import type { PearlBlockHeader } from '../blockheader.js';
 import type { AddressPayment, BlockRef, ChainTransaction } from '../client.js';
 import { blockSubsidy, requiredCertVersion } from '../consensus.js';
@@ -19,7 +19,7 @@ import { PearlError, PearlRpcError, PolicyError } from '../errors.js';
 import { buildBasicFilter, filterHeader } from '../gcs.js';
 import type { CompactFilter } from '../gcs.js';
 import { verifyTransaction } from '../interpreter.js';
-import { concat, fromHex, toHex } from '../internal/bytes.js';
+import { concat, fromHex, toHex, uint32le } from '../internal/bytes.js';
 import { rpcError } from '../internal/rpc-wire.js';
 import type { PearlSigningAccount } from '../keys.js';
 import { deriveSigningAccountFromSeed } from '../keys.js';
@@ -211,6 +211,19 @@ interface Block extends SimulatedBlock {
   undo: Map<string, SimulatedCoin>;
   /** Set once the block has been asked for its filter. */
   filter?: { filter: CompactFilter; header: Uint8Array };
+}
+
+// A dense V4 statement, 240 bytes as pearld's miner writes, keyed by the parent: zk-pow's minimum-envelope
+// job (sample_dense_statement: k 1024, rank 32, 32 rows a side in tiles of 16) on H100, digests from `filler`.
+function simulatedStatement(parent: PearlBlockHeader, filler: Uint8Array): Uint8Array {
+  const u16 = (value: number) => Uint8Array.of(value & 0xff, value >> 8);
+  const operand = concat([uint32le(32), Uint8Array.of(0), uint32le(16)]);
+  return concat([
+    serializeBlockHeader(parent),
+    uint32le(1024), u16(32), Uint8Array.of(0, 0), operand, u16(0), filler.subarray(0, 32),
+    operand, filler.subarray(32, 64),
+    uint32le(0), uint32le(0), filler.subarray(64, 96),
+  ]);
 }
 
 function invalid(message: string): PearlError {
@@ -981,9 +994,7 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
     // A V4 one starts with the parent's header, the ancestor pearld's miner keys its proofs by.
     const seed = sha256(concat([fromHex(parent.hash), new TextEncoder().encode(`pearljs simulated block ${height}`)]));
     const filler = concat(Array.from({ length: 6 }, (_, i) => sha256(concat([seed, Uint8Array.of(i)]))));
-    const publicData = version === 4
-      ? concat([serializeBlockHeader(parent.block.header), filler.slice(0, PUBLIC_DATA_MIN_SIZE_V4 - BLOCK_HEADER_SIZE)])
-      : filler.slice(0, 164);
+    const publicData = version === 4 ? simulatedStatement(parent.block.header, filler) : filler.slice(0, 164);
     const header: PearlBlockHeader = {
       version: 0x20000000,
       prevBlock: Uint8Array.from(fromHex(parent.hash)).reverse(),

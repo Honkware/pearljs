@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  certificateStatement,
   PearlError,
   PearlRpcError,
   addInputByTxid,
@@ -103,6 +104,7 @@ describe('the blocks of a simulated chain', () => {
       checkMerkleRoot(parsed);
       checkWitnessCommitment(parsed);
       checkCertificateBinding(parsed);
+      if (parsed.certificate!.version === 4) expect(certificateStatement(parsed.certificate!)).toMatchObject({ k: 1024, r: 32, device: 0, experts: 0 });
       checkCertificateRules(parsed.certificate, forked, height);
       const coinbase = inspectTransaction(parsed.transactions[0]!, [], forked, { blockFees: block.fees }).coinbase!;
       expect(coinbase).toMatchObject({ height, subsidy: blockSubsidy(forked, height), unclaimed: 0n });

@@ -14,6 +14,7 @@ import {
   calculateMerkleRoot,
   certificateAncestorHeader,
   certificateProofCommitment,
+  certificateStatement,
   CERTIFICATE_MAX_SIZE,
   checkCertificateBinding,
   checkCertificateRules,
@@ -32,11 +33,13 @@ import {
   serializeBlock,
   serializeBlockHeader,
   serializeCertificate,
+  V4_DEVICE_NAMES,
 } from '../src/index.js';
 import type { CertificateVersion, PearlCertificate } from '../src/index.js';
 import vectors from '../vectors/fp8.json' with { type: 'json' };
 import fp8Fixtures from './fixtures/rpc-responses-fp8.json' with { type: 'json' };
 import testnet2 from './fixtures/testnet2-fp8-blocks.json' with { type: 'json' };
+import statements from '../vectors/fp8-statements.json' with { type: 'json' };
 import { fakeFetch, type Fixture } from './rpc-helpers.js';
 import { bytesToHex, hexToBytes, networkNamed } from './vector-helpers.js';
 
@@ -282,5 +285,73 @@ describe('testnet2 blocks around its FP8 fork', () => {
     expect(blockHashHex(third!.certificate!.ancestorHeaders![1]!)).toBe(blockHashHex(first!.header));
     // A decoder without the fork refuses the chain from here on.
     expect(() => parseBlock(hexToBytes(testnet2.blocks[1]!.hex), { fp8: false })).toThrow('unsupported certificate version: 4');
+  });
+});
+
+describe('V4 statements', () => {
+  // What PublicParams::from_bytes refuses for the encoding's shape; the rest of what it refuses is bounds and layout.
+  const STRUCTURAL = /^(truncated fp8 public_data|trailing bytes in fp8 public_data|unknown (HashId|Quant) discriminant: \d+|unsupported Device discriminant: \d+)$/;
+  const HASH_IDS = ['Blake3Chunk128', 'Blake3Chunk256', 'Blake3Chunk512', 'Blake3Chunk1024'];
+  const v4 = (hex: string): PearlCertificate => ({ version: 4, hash: new Uint8Array(32), publicData: hexToBytes(hex), proof: Uint8Array.of(1), ancestorHeaders: [] });
+  const list = (bytes: Uint8Array): string => `[${Array.from(bytes).join(', ')}]`;
+
+  it('come from the pinned commit', () => {
+    expect(statements.commit).toBe(vectors.commit);
+  });
+
+  for (const expected of statements.statements) {
+    it(`read ${expected.name} as zk-pow does`, () => {
+      const read = () => certificateStatement(v4(expected.hex))!;
+      if (STRUCTURAL.test(expected.error)) {
+        expect(read).toThrow(expected.error);
+        return;
+      }
+      const statement = read();
+      if (expected.debug === '') return; // Refused for its bounds or layout, which pearljs leaves to the node.
+      const operand = (side: 'a' | 'b') => {
+        const { numRows, hashId, tileSize } = statement[side];
+        return `${side}: OperandParams { num_rows: ${numRows}, hash_id: ${HASH_IDS[hashId]}, tile_size: ${tileSize} }`;
+      };
+      for (const part of [
+        `common: CommonParams { k: ${statement.k}, r: ${statement.r}, quant: Fp8E4M3Prequant, device: ${V4_DEVICE_NAMES[statement.device]} }`,
+        `operands: Sides { ${operand('a')}, ${operand('b')} }`,
+        statement.moe === null ? 'moe: None' : `experts: ${statement.experts}`,
+        `tile_bases: Sides { a: ${statement.tileBases.a}, b: ${statement.tileBases.b} }`,
+        `hash_jackpot: ${list(statement.hashJackpot)}, hash_a: ${list(statement.hashA)}, hash_b: ${list(statement.hashB)}`,
+        `proof_commitment: ${list(statement.ancestorHeader.proofCommitment)} }`,
+        `timestamp: ${statement.ancestorHeader.timestamp}, nbits: ${statement.ancestorHeader.bits} }`,
+      ]) {
+        expect(expected.debug).toContain(part);
+      }
+    });
+  }
+
+  it('keep the values zk-pow refuses for their bounds, as written', () => {
+    const named = (name: string) => certificateStatement(v4(statements.statements.find((item) => item.name === name)!.hex))!;
+    expect(named('k-zero').k).toBe(0);
+    expect(named('rank-16').r).toBe(16);
+    expect(named('tile-bases-moved').tileBases.a).toBe(32);
+    const moe = named('moe-tail-whole');
+    expect(moe.experts).toBe(2);
+    expect(moe.moe!.iA).toHaveLength(moe.a.tileSize);
+  });
+
+  it('name the device of Pearl\'s two mined fixtures', () => {
+    for (const device of ['h100', 'b200']) {
+      const block = parseBlock(hexToBytes(vectors.blocks.find((item) => item.name === `fixture-${device}-mined`)!.hex));
+      expect(V4_DEVICE_NAMES[certificateStatement(block.certificate!)!.device]).toBe(device.toUpperCase());
+    }
+    expect(certificateStatement({ version: 3, hash: new Uint8Array(32), publicData: new Uint8Array(164), proof: Uint8Array.of(1) })).toBeNull();
+  });
+
+  it('read the statements of real testnet2 blocks, keyed by the header their ancestry names', () => {
+    for (const expected of testnet2.blocks.filter((item) => item.height >= 150283)) {
+      const certificate = parseBlock(hexToBytes(expected.hex)).certificate!;
+      const statement = certificateStatement(certificate)!;
+      expect(statement.ancestorHeader).toEqual(certificateAncestorHeader(certificate));
+      // Both fixture blocks were proved on the H100 datapath; testnet2 also carries B200 blocks, such as 150300.
+      expect(V4_DEVICE_NAMES[statement.device]).toBe('H100');
+      expect(statement.moe).toBeNull();
+    }
   });
 });

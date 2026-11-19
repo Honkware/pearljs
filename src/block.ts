@@ -335,6 +335,118 @@ export function certificateAncestorHeader(certificate: PearlCertificate): PearlB
   return parseBlockHeader(certificate.publicData.subarray(0, BLOCK_HEADER_SIZE));
 }
 
+/** Names of zk-pow's V4 Device discriminants, by value: the GPU whose matmul datapath a proof reproduces. */
+export const V4_DEVICE_NAMES: readonly string[] = ['H100', 'B200'];
+
+/** One operand of a V4 statement: A has `m` rows in tiles of `h`, B `n` rows in tiles of `w`. */
+export interface V4Operand {
+  numRows: number;
+  /** HashId discriminant: the keyed BLAKE3 chunk size, 0 to 3 for 128 to 1024 bytes. */
+  hashId: number;
+  tileSize: number;
+}
+
+/** The MoE part of a V4 statement, present when `experts` is not 0. */
+export interface V4MoeStatement {
+  hashIdR: number;
+  hashIdO: number;
+  /** The winner expert. */
+  w: number;
+  oWPrev: number;
+  oW: number;
+  oLast: number;
+  hashRouting: Uint8Array;
+  hashOffsets: Uint8Array;
+  /** I_A, one row index per row of A's tile. */
+  iA: number[];
+}
+
+/**
+ * A V4 certificate's public data read field by field as zk-pow's
+ * PublicParams::from_bytes reads it, with its names. Values are as written;
+ * the bounds and cross-field rules Pearl's verifier also applies are not
+ * checked.
+ */
+export interface V4Statement {
+  /** σ_d, the ancestor the proof is keyed by. */
+  ancestorHeader: PearlBlockHeader;
+  /** The common matmul dimension. */
+  k: number;
+  /** The noise rank. */
+  r: number;
+  /** Quant discriminant; 0 is Fp8E4M3Prequant, the only one defined. */
+  quant: number;
+  /** Device discriminant, 0 or 1; its name is V4_DEVICE_NAMES[device]. */
+  device: number;
+  a: V4Operand;
+  b: V4Operand;
+  /** Expert count, 0 for a dense job. */
+  experts: number;
+  hashA: Uint8Array;
+  hashB: Uint8Array;
+  tileBases: { a: number; b: number };
+  hashJackpot: Uint8Array;
+  moe: V4MoeStatement | null;
+}
+
+/**
+ * Reads a V4 certificate's public data into its statement, refusing what
+ * zk-pow's decoder refuses for its shape, in its words: a short or long
+ * encoding and a Quant, Device or HashId value it does not define. Null for
+ * a certificate of another version.
+ */
+export function certificateStatement(certificate: PearlCertificate): V4Statement | null {
+  if (certificate.version !== 4) return null;
+  const data = certificate.publicData;
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  let at = 0;
+  const fail = (message: string): never => {
+    throw new PearlError('CERTIFICATE_MALFORMED', message);
+  };
+  const take = (n: number): number => {
+    if (data.length - at < n) fail('truncated fp8 public_data');
+    at += n;
+    return at - n;
+  };
+  const u8 = (): number => data[take(1)]!;
+  const u16 = (): number => view.getUint16(take(2), true);
+  const u32 = (): number => view.getUint32(take(4), true);
+  const hash = (): Uint8Array => data.slice(take(32), at);
+  const hashId = (): number => {
+    const value = u8();
+    return value <= 3 ? value : fail(`unknown HashId discriminant: ${value}`);
+  };
+  const operand = (): V4Operand => ({ numRows: u32(), hashId: hashId(), tileSize: u32() });
+
+  const ancestorHeader = parseBlockHeader(data.slice(take(BLOCK_HEADER_SIZE), at));
+  const k = u32();
+  const r = u16();
+  const quant = u8();
+  if (quant !== 0) fail(`unknown Quant discriminant: ${quant}`);
+  const device = u8();
+  if (device >= V4_DEVICE_NAMES.length) fail(`unsupported Device discriminant: ${device}`);
+  const b = operand();
+  const experts = u16();
+  const hashB = hash();
+  const a = operand();
+  const moeHashIds = experts === 0 ? null : [hashId(), hashId()] as const;
+  const hashA = hash();
+  const tileBases = { a: u32(), b: u32() };
+  const hashJackpot = hash();
+  let moe: V4MoeStatement | null = null;
+  if (moeHashIds !== null) {
+    const w = u16();
+    const [oWPrev, oW, oLast] = [u32(), u32(), u32()];
+    const [hashRouting, hashOffsets] = [hash(), hash()];
+    // I_A has no length of its own: it holds one index per row of A's tile.
+    if (data.length - at < a.tileSize * 4) fail('truncated fp8 public_data');
+    const iA = Array.from({ length: a.tileSize }, () => u32());
+    moe = { hashIdR: moeHashIds[0], hashIdO: moeHashIds[1], w, oWPrev, oW, oLast, hashRouting, hashOffsets, iA };
+  }
+  if (at !== data.length) fail('trailing bytes in fp8 public_data');
+  return { ancestorHeader, k, r, quant, device, a, b, experts, hashA, hashB, tileBases, hashJackpot, moe };
+}
+
 // The checks verify_zk_proof_v4 and JobParams::check_ancestry make before
 // they decode the statement or verify the proof, in their order and words.
 function checkV4Ancestry(certificate: PearlCertificate, header: PearlBlockHeader): void {
