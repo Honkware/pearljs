@@ -1,12 +1,22 @@
-// Message signing compatible with Pearl's wallet (Oyster's signmessage and
-// verifymessage, wallet/rpc/jsonrpc/bip322.go).
+// Message signing in the three formats a Pearl key signs in.
 //
-// Oyster calls this BIP-322 but uses its own layout: the message goes into an
-// OP_RETURN output of the to_sign transaction instead of a tagged hash in
-// to_spend, both transactions are version 2, and sequences are 0xffffffff.
-// Signatures are therefore not interchangeable with standard BIP-322 tools.
-// Messages are limited to 80 bytes (the OP_RETURN data limit) and only P2TR
-// addresses sign, through a BIP86 key-path spend.
+// 'oyster' is Oyster's signmessage and verifymessage
+// (wallet/rpc/jsonrpc/bip322.go), which pools ask for. Oyster calls it BIP-322
+// but uses its own layout: the message goes into an OP_RETURN output of the
+// to_sign transaction instead of a tagged hash in to_spend, both transactions
+// are version 2, and sequences are 0xffffffff. Messages are limited to 80
+// bytes, the OP_RETURN data limit.
+//
+// 'bip322' is BIP-322's simple variant as the BIP specifies it: version 0
+// transactions, sequence 0, OP_0 PUSH32[tagged message hash] in to_spend and a
+// bare OP_RETURN in to_sign. Generic BIP-322 tools sign and verify this one.
+//
+// 'legacy' is pearld's signmessagewithprivkey (node/rpcserver.go): an ECDSA
+// compact signature over the double SHA-256 of "Pearl Signed Message:\n" and
+// the message. It names no address; a verifier recovers the key and compares
+// its BIP86 key-path address.
+//
+// Only P2TR addresses sign, through a BIP86 key-path spend.
 //
 // A message is signed as its UTF-8 bytes. A JS string with a lone surrogate
 // has no UTF-8 form: TextEncoder writes U+FFFD in its place, and so does the
@@ -16,8 +26,8 @@
 // message.toWellFormed().
 
 /**
- * Message signing and verification in the format of Pearl's wallet (Oyster's
- * signmessage and verifymessage).
+ * Message signing and verification in Oyster's format, BIP-322's simple
+ * variant and pearld's legacy compact format.
  *
  * @module
  */
@@ -29,16 +39,31 @@ import type { PearlNetwork } from './networks.js';
 import { OP_CODES, scriptPush, taggedHash, TAPROOT_ANNEX_TAG } from './script.js';
 import { assertTaprootSighashType } from './internal/sighash.js';
 import { serializeWitness } from './transaction.js';
-import { fromBase64 } from './internal/bytes.js';
+import { hash256 } from './crypto.js';
+import { concat, equalBytes, fromBase64, varInt } from './internal/bytes.js';
 import { PearlError, SigningError } from './errors.js';
 
 /** txscript.MaxDataCarrierSize: the most message bytes Oyster can sign. */
 export const MAX_MESSAGE_LENGTH = 80;
+
+/** A message signature format: Oyster's, BIP-322 simple, or pearld's legacy compact one. */
+export type MessageFormat = 'oyster' | 'bip322' | 'legacy';
+
+/** Every MessageFormat, in the order messageSignatureFormat tries them. */
+export const MESSAGE_FORMATS: readonly MessageFormat[] = ['oyster', 'bip322', 'legacy'];
+
+/** The header pearld's signmessagewithprivkey hashes in front of a message. */
+export const LEGACY_MESSAGE_HEADER = 'Pearl Signed Message:\n';
+
+const BIP322_TAG = 'BIP0322-signed-message';
+// The prefix the current BIP-322 text puts in front of a simple signature.
+// Signatures without it are what deployed tools write, and both are read.
+const BIP322_SIMPLE_PREFIX = 'smp';
 // wire.MaxWitnessItemsPerInput and txscript.MaxScriptSize bound the parse.
 const MAX_WITNESS_ITEMS = 1003;
 const MAX_WITNESS_ITEM_SIZE = 10000;
 
-function messageBytes(message: string): Uint8Array {
+function messageBytes(message: string, limit = true): Uint8Array {
   if (typeof message !== 'string') {
     throw new TypeError('message must be a string');
   }
@@ -47,14 +72,47 @@ function messageBytes(message: string): Uint8Array {
     throw new PearlError('MESSAGE_INVALID', 'message has a lone surrogate, which has no UTF-8 encoding');
   }
   const bytes = new TextEncoder().encode(message);
-  if (bytes.length > MAX_MESSAGE_LENGTH) {
+  if (limit && bytes.length > MAX_MESSAGE_LENGTH) {
     throw new PearlError('MESSAGE_INVALID', `message is ${bytes.length} bytes, more than the ${MAX_MESSAGE_LENGTH} Oyster can sign`);
   }
   return bytes;
 }
 
-/** The to_sign transaction for a P2TR output script and a message. */
-function toSignTransaction(scriptPubKey: Uint8Array, message: Uint8Array): Transaction {
+/** BIP-322's tagged hash of a message's UTF-8 bytes. */
+export function bip322MessageHash(message: string): Uint8Array {
+  return taggedHash(BIP322_TAG, messageBytes(message, false));
+}
+
+/** The double SHA-256 pearld's signmessagewithprivkey signs for a message. */
+export function legacyMessageHash(message: string): Uint8Array {
+  const header = new TextEncoder().encode(LEGACY_MESSAGE_HEADER);
+  const bytes = messageBytes(message, false);
+  return hash256(concat([varInt(header.length), header, varInt(bytes.length), bytes]));
+}
+
+/** BIP-322's to_spend and unsigned to_sign for an output script and a message. */
+export function bip322Transactions(
+  scriptPubKey: Uint8Array,
+  message: string,
+): { toSpend: Transaction; toSign: Transaction } {
+  const toSpend = new Transaction();
+  toSpend.version = 0;
+  toSpend.addInput(new Uint8Array(32), 0xffffffff, 0, Uint8Array.from([OP_CODES.OP_0, 32, ...bip322MessageHash(message)]));
+  toSpend.addOutput(Uint8Array.from(scriptPubKey), 0n);
+  const toSign = new Transaction();
+  toSign.version = 0;
+  toSign.addInput(toSpend.getHash(), 0, 0);
+  toSign.addOutput(Uint8Array.from([OP_CODES.OP_RETURN]), 0n);
+  return { toSpend, toSign };
+}
+
+/** The to_sign transaction for a P2TR output script and a message, in the given format. */
+function toSignTransaction(scriptPubKey: Uint8Array, message: string, format: 'oyster' | 'bip322'): Transaction {
+  if (format === 'bip322') return bip322Transactions(scriptPubKey, message).toSign;
+  return oysterToSign(scriptPubKey, messageBytes(message));
+}
+
+function oysterToSign(scriptPubKey: Uint8Array, message: Uint8Array): Transaction {
   const toSpend = new Transaction();
   toSpend.version = 2;
   toSpend.addInput(new Uint8Array(32), 0xffffffff, 0xffffffff);
@@ -121,9 +179,18 @@ export interface SignMessageOptions {
   /**
    * The 32 bytes of auxiliary randomness BIP340 mixes into the nonce. Fresh
    * random bytes are used when it is left out; pass a fixed value only to
-   * get reproducible signatures in tests.
+   * get reproducible signatures in tests. Legacy signatures are
+   * deterministic (RFC 6979) and do not use it.
    */
   auxRand?: Uint8Array;
+  /** The format to sign in. Default 'oyster', the one Oyster's verifymessage and the pools that use it accept. */
+  format?: MessageFormat;
+}
+
+/** Options for verifyMessage. */
+export interface VerifyMessageOptions {
+  /** The format the signature must be in, or 'any' for any of them. Default 'oyster'. */
+  format?: MessageFormat | 'any';
 }
 
 // BIP340 recommends fresh auxiliary randomness for every signature, as a
@@ -137,22 +204,48 @@ function auxRandOf(options: SignMessageOptions): Uint8Array {
   return options.auxRand;
 }
 
-/**
- * Signs a message for the BIP86 P2TR address of privateKey, as Oyster's
- * signmessage does, and returns the base64 signature. Signatures differ from
- * call to call unless auxRand is fixed; every one verifies.
- *
- * Throws for a message over MAX_MESSAGE_LENGTH bytes of UTF-8, a string with a
- * lone surrogate, and an invalid private key.
- */
-export function signMessage(privateKey: Uint8Array, message: string, options: SignMessageOptions = {}): string {
-  const bytes = messageBytes(message);
+function formatOf(format: unknown, allowAny: boolean): MessageFormat | 'any' {
+  if (format === undefined) return 'oyster';
+  if ((MESSAGE_FORMATS as readonly unknown[]).includes(format) || (allowAny && format === 'any')) {
+    return format as MessageFormat | 'any';
+  }
+  throw new TypeError(`unknown message format: ${String(format)}`);
+}
+
+function publicKeyOf(privateKey: Uint8Array): Uint8Array {
   if (!(privateKey instanceof Uint8Array)) {
     throw new PearlError('KEY_INVALID', 'invalid private key');
   }
   const publicKey = ecc.isPrivate(privateKey) ? ecc.pointFromScalar(privateKey, true) : null;
   if (publicKey === null) {
     throw new PearlError('KEY_INVALID', 'invalid private key');
+  }
+  return publicKey;
+}
+
+function toBase64(bytes: Uint8Array): string {
+  return btoa(String.fromCharCode(...bytes));
+}
+
+/**
+ * Signs a message for the BIP86 P2TR address of privateKey and returns the
+ * base64 signature. The default format is Oyster's signmessage; `format`
+ * picks BIP-322's simple variant or pearld's legacy compact signature.
+ * Schnorr signatures differ from call to call unless auxRand is fixed; every
+ * one verifies.
+ *
+ * Throws for an Oyster-format message over MAX_MESSAGE_LENGTH bytes of UTF-8,
+ * a string with a lone surrogate, and an invalid private key.
+ */
+export function signMessage(privateKey: Uint8Array, message: string, options: SignMessageOptions = {}): string {
+  const format = formatOf(options.format, false);
+  messageBytes(message, format === 'oyster');
+  const publicKey = publicKeyOf(privateKey);
+  if (format === 'legacy') {
+    const hash = legacyMessageHash(message);
+    const { signature, recoveryId } = ecc.signRecoverable(hash, privateKey);
+    // 27 plus the recovery id, plus 4 for a compressed key, as ecdsa.SignCompact writes it.
+    return toBase64(Uint8Array.from([27 + 4 + recoveryId, ...signature]));
   }
   const internalKey = publicKey.slice(1);
   const tweak = taggedHash('TapTweak', internalKey);
@@ -163,7 +256,7 @@ export function signMessage(privateKey: Uint8Array, message: string, options: Si
     throw new PearlError('KEY_INVALID', 'taproot tweak produced an invalid key');
   }
   const scriptPubKey = Uint8Array.from([OP_CODES.OP_1, 32, ...outputKey.xOnlyPubkey]);
-  const hash = toSignTransaction(scriptPubKey, bytes).hashForWitnessV1(
+  const hash = toSignTransaction(scriptPubKey, message, format as 'oyster' | 'bip322').hashForWitnessV1(
     0,
     [scriptPubKey],
     [0n],
@@ -180,43 +273,15 @@ export function signMessage(privateKey: Uint8Array, message: string, options: Si
   if (!ecc.verifySchnorr(hash, outputKey.xOnlyPubkey, signature)) {
     throw new SigningError('SIGNATURE_INVALID', 'message signature failed verification');
   }
-  return btoa(String.fromCharCode(...serializeWitness([signature])));
+  return toBase64(serializeWitness([signature]));
 }
 
-/**
- * Verifies a message signature against a P2TR address, as Oyster's
- * verifymessage does for key-path signatures.
- *
- * The rule: the answer is false for anything that is not a valid key-path
- * signature of that message for that address on that network, whatever the
- * reason. That covers an address that does not decode, is for another network
- * or is P2MR, a signature that is not base64 or not a witness stack, a message
- * that could not have been signed (over 80 bytes, a lone surrogate), an
- * address whose program is not a point on the curve, and a script-path
- * signature, which Oyster's script engine could accept and pearljs does not
- * evaluate. It throws only for a mistake in the calling code: a TypeError
- * when address, signature or message is not a string, or network is not a
- * PearlNetwork.
- */
-export function verifyMessage(
-  address: string,
-  signature: string,
-  message: string,
-  network: PearlNetwork,
-): boolean {
-  if (typeof address !== 'string') throw new TypeError('address must be a string');
-  if (network === null || typeof network !== 'object' || typeof network.bech32Hrp !== 'string') {
-    throw new TypeError('a valid PearlNetwork is required');
-  }
-  let program: Uint8Array;
-  let bytes: Uint8Array;
+function verifyWitness(program: Uint8Array, signature: string, message: string, format: 'oyster' | 'bip322'): boolean {
   let witness: Uint8Array[];
   try {
-    const decoded = decodeAddress(address, network);
-    if (decoded.version !== 1) return false;
-    program = decoded.program;
-    bytes = messageBytes(message);
-    witness = parseWitness(decodeBase64(signature));
+    messageBytes(message, format === 'oyster');
+    const text = format === 'bip322' && signature.startsWith(BIP322_SIMPLE_PREFIX) ? signature.slice(3) : signature;
+    witness = parseWitness(decodeBase64(text));
   } catch (err) {
     if (err instanceof PearlError) return false;
     throw err;
@@ -243,7 +308,97 @@ export function verifyMessage(
     return false;
   }
   const scriptPubKey = Uint8Array.from([OP_CODES.OP_1, 32, ...program]);
-  const hash = toSignTransaction(scriptPubKey, bytes).hashForWitnessV1(0, [scriptPubKey], [0n], hashType, undefined, annex);
+  const hash = toSignTransaction(scriptPubKey, message, format).hashForWitnessV1(0, [scriptPubKey], [0n], hashType, undefined, annex);
   if (!ecc.isXOnlyPoint(program)) return false;
   return ecc.verifySchnorr(hash, program, sig.subarray(0, 64));
+}
+
+// Mirrors ecdsa.RecoverCompact: a 65-byte signature whose first byte is 27
+// to 34, the recovery id in its low two bits and 4 added for a compressed key.
+// The key is compared by its BIP86 key-path output key, which does not
+// depend on how the key was serialized.
+function verifyLegacy(program: Uint8Array, signature: string, message: string): boolean {
+  let bytes: Uint8Array;
+  let hash: Uint8Array;
+  try {
+    bytes = decodeBase64(signature);
+    hash = legacyMessageHash(message);
+  } catch (err) {
+    if (err instanceof PearlError) return false;
+    throw err;
+  }
+  if (bytes.length !== 65 || bytes[0]! < 27 || bytes[0]! > 34) return false;
+  const recoveryId = (bytes[0]! - 27) & 3;
+  let publicKey: Uint8Array | null;
+  try {
+    publicKey = ecc.recover(hash, bytes.subarray(1), recoveryId as 0 | 1 | 2 | 3, true);
+  } catch {
+    return false;
+  }
+  if (publicKey === null) return false;
+  const internalKey = publicKey.subarray(1);
+  const outputKey = ecc.xOnlyPointAddTweak(internalKey, taggedHash('TapTweak', internalKey));
+  return outputKey !== null && equalBytes(outputKey.xOnlyPubkey, program);
+}
+
+/**
+ * Verifies a message signature against a P2TR address. The default format is
+ * Oyster's, as its verifymessage checks key-path signatures; `format` picks
+ * another, or 'any' accepts a signature valid in any of them.
+ *
+ * The rule: the answer is false for anything that is not a valid signature
+ * of that message for that address on that network in the format asked for,
+ * whatever the reason. That covers an address that does not decode, is for
+ * another network or is P2MR, a signature that is not base64 or not a
+ * witness stack, a message that could not have been signed (an Oyster
+ * message over 80 bytes, a lone surrogate), an address whose program is not
+ * a point on the curve, and a script-path signature, which Oyster's script
+ * engine could accept and pearljs does not evaluate. It throws only for a
+ * mistake in the calling code: a TypeError when address, signature or
+ * message is not a string, network is not a PearlNetwork, or the format is
+ * unknown.
+ */
+export function verifyMessage(
+  address: string,
+  signature: string,
+  message: string,
+  network: PearlNetwork,
+  options: VerifyMessageOptions = {},
+): boolean {
+  const format = formatOf(options.format, true);
+  if (format === 'any') return messageSignatureFormat(address, signature, message, network) !== undefined;
+  return verifyIn(format, address, signature, message, network);
+}
+
+function verifyIn(format: MessageFormat, address: string, signature: string, message: string, network: PearlNetwork): boolean {
+  if (typeof address !== 'string') throw new TypeError('address must be a string');
+  if (typeof signature !== 'string') throw new TypeError('signature must be a base64 string');
+  if (typeof message !== 'string') throw new TypeError('message must be a string');
+  if (network === null || typeof network !== 'object' || typeof network.bech32Hrp !== 'string') {
+    throw new TypeError('a valid PearlNetwork is required');
+  }
+  let program: Uint8Array;
+  try {
+    const decoded = decodeAddress(address, network);
+    if (decoded.version !== 1) return false;
+    program = decoded.program;
+  } catch (err) {
+    if (err instanceof PearlError) return false;
+    throw err;
+  }
+  return format === 'legacy' ? verifyLegacy(program, signature, message) : verifyWitness(program, signature, message, format);
+}
+
+/**
+ * The format in which signature is a valid signature of message for the P2TR
+ * address, or undefined when it is valid in none. No signature is valid in
+ * two formats: each signs a different hash.
+ */
+export function messageSignatureFormat(
+  address: string,
+  signature: string,
+  message: string,
+  network: PearlNetwork,
+): MessageFormat | undefined {
+  return MESSAGE_FORMATS.find((format) => verifyIn(format, address, signature, message, network));
 }

@@ -26,6 +26,7 @@ import { MAX_GRAIN } from './amount.js';
 import { fromOutputScript } from './address.js';
 import type { PearlNetwork } from './networks.js';
 import { signMessage } from './message.js';
+import type { MessageFormat } from './message.js';
 import { p2tr } from './payments.js';
 import { classifyOutputScript } from './script.js';
 import { assertTaprootSighashType as assertSighashType, psbtSighashType } from './internal/sighash.js';
@@ -186,6 +187,12 @@ export interface PearlSignOptions {
   auxRand?: Uint8Array;
 }
 
+/** Which child signs a message, and in which format; see signMessage. */
+export interface PearlMessageSignOptions extends PearlSignOptions {
+  /** Default 'oyster'. */
+  format?: MessageFormat;
+}
+
 /**
  * Which child a key-path PSBT input belongs to. Leave out `index` to have the
  * child read from the input's tapBip32Derivation, which prepareInput writes.
@@ -263,7 +270,7 @@ export interface PearlSigningAccount {
   /** Signs a P2MR input and sets its witness; see signP2mrInput. */
   signP2mrInput(tx: Transaction, inputIndex: number, options: PearlP2mrSignOptions): void;
   /** Signs a message for the child's P2TR address; see signMessage. */
-  signMessage(message: string, options: PearlSignOptions): string;
+  signMessage(message: string, options: PearlMessageSignOptions): string;
   /**
    * A signer for the child's untweaked key, the one derivePublicKey returns,
    * for the standalone script-path signers and signTapscriptUnchecked. It
@@ -687,9 +694,12 @@ export function deriveSigningAccountFromSeed(
         signP2mrInput(tx, inputIndex, schnorrSigner(child.privateKey!, child.publicKey, options.auxRand), options),
       );
     },
-    signMessage(message: string, options: PearlSignOptions): string {
+    signMessage(message: string, options: PearlMessageSignOptions): string {
       return withChild(options.index, options.change ?? false, (child) =>
-        signMessage(child.privateKey!, message, options.auxRand === undefined ? {} : { auxRand: options.auxRand }),
+        signMessage(child.privateKey!, message, {
+          ...(options.auxRand === undefined ? {} : { auxRand: options.auxRand }),
+          ...(options.format === undefined ? {} : { format: options.format }),
+        }),
       );
     },
     tapscriptSigner(options: PearlSignOptions): TapscriptSigner {

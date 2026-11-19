@@ -20,6 +20,7 @@ import (
 
 	"github.com/pearl-research-labs/pearl/node/blockchain"
 	"github.com/pearl-research-labs/pearl/node/btcec"
+	"github.com/pearl-research-labs/pearl/node/btcec/ecdsa"
 	"github.com/pearl-research-labs/pearl/node/btcec/schnorr"
 	"github.com/pearl-research-labs/pearl/node/btcutil"
 	"github.com/pearl-research-labs/pearl/node/btcutil/base58"
@@ -283,6 +284,7 @@ type Vectors struct {
 	Blocks           []BlockVector           `json:"blocks"`
 	XMSS             XMSSVectors             `json:"xmss"`
 	Messages         []MessageVector         `json:"messages"`
+	MessageFormats   []MessageFormatVector   `json:"messageFormats"`
 	MultiASpends     []MultiASpendVector     `json:"multiASpends"`
 	ScriptToolkit    ScriptToolkitVectors    `json:"scriptToolkit"`
 	WIF              []WIFVector             `json:"wif"`
@@ -492,6 +494,37 @@ type MessageVector struct {
 	Signature string `json:"signature"`
 	SignError string `json:"signError"`
 	Valid     bool   `json:"valid"`
+}
+
+// MessageFormatVector is one message in the two other formats a Pearl key
+// signs messages in. The BIP322 fields follow BIP-322's simple variant for
+// the P2TR address of Path: the tagged message hash, both virtual
+// transactions, the key-path sighash Pearl's txscript computes for to_sign,
+// a signature TaprootWitnessSignature made over it, and whether Pearl's
+// script engine accepts that signature. OysterAccepts is what Oyster's
+// BIP322VerifyMessageSimple answers for the same signature. The Legacy fields
+// are pearld's signmessagewithprivkey (node/rpcserver.go): ecdsa.SignCompact
+// over the double SHA-256 of "Pearl Signed Message:\n" and the message, each
+// written as a var string, for the same key as a compressed and an
+// uncompressed WIF.
+type MessageFormatVector struct {
+	Name                 string `json:"name"`
+	Path                 string `json:"path"`
+	Address              string `json:"address"`
+	Message              string `json:"message"`
+	BIP322MessageHash    string `json:"bip322MessageHash"`
+	BIP322ToSpendTxID    string `json:"bip322ToSpendTxid"`
+	BIP322ToSignHex      string `json:"bip322ToSignHex"`
+	BIP322Sighash        string `json:"bip322Sighash"`
+	BIP322Signature      string `json:"bip322Signature"`
+	BIP322Valid          bool   `json:"bip322Valid"`
+	OysterAccepts        bool   `json:"oysterAccepts"`
+	LegacyHash           string `json:"legacyHash"`
+	LegacyWIF            string `json:"legacyWif"`
+	LegacySignature      string `json:"legacySignature"`
+	LegacyUncompressed   string `json:"legacyUncompressedSignature"`
+	LegacyRecoveredKey   string `json:"legacyRecoveredKey"`
+	LegacyRecoveredFlags bool   `json:"legacyRecoveredCompressed"`
 }
 
 type XMSSKeyVector struct {
@@ -1800,6 +1833,8 @@ func main() {
 		})
 	}
 
+	vectors.MessageFormats = messageFormatVectors(privM0, addrM0, accountPath+"/0/0")
+
 	// XMSS: keys from fixed seeds (key "a" uses the seeds published in
 	// pearl-research-labs/pearl#111), signatures across the index range, and
 	// P2MR spends checked by the script engine with OP_CHECKXMSSSIG.
@@ -2084,6 +2119,85 @@ func main() {
 	check(err)
 	data = append(data, '\n')
 	check(os.WriteFile(*out, data, 0o644))
+}
+
+// bip322Transactions builds BIP-322's to_spend and to_sign for a message
+// and an output script, with to_sign's witness left empty.
+func bip322Transactions(message []byte, pkScript []byte) (chainhash.Hash, *wire.MsgTx, *wire.MsgTx) {
+	hash := chainhash.TaggedHash([]byte("BIP0322-signed-message"), message)
+	sigScript, err := txscript.NewScriptBuilder().AddOp(txscript.OP_0).AddData(hash[:]).Script()
+	check(err)
+	toSpend := wire.NewMsgTx(0)
+	toSpend.AddTxIn(&wire.TxIn{
+		PreviousOutPoint: wire.OutPoint{Index: 0xffffffff}, SignatureScript: sigScript, Sequence: 0,
+	})
+	toSpend.AddTxOut(wire.NewTxOut(0, pkScript))
+	toSign := wire.NewMsgTx(0)
+	toSpendHash := toSpend.TxHash()
+	toSign.AddTxIn(&wire.TxIn{PreviousOutPoint: *wire.NewOutPoint(&toSpendHash, 0), Sequence: 0})
+	toSign.AddTxOut(wire.NewTxOut(0, []byte{txscript.OP_RETURN}))
+	return *hash, toSpend, toSign
+}
+
+func messageFormatVectors(priv *btcec.PrivateKey, addr *btcutil.AddressTaproot, path string) []MessageFormatVector {
+	pkScript, err := txscript.PayToAddrScript(addr)
+	check(err)
+	var out []MessageFormatVector
+	for _, item := range []struct {
+		name    string
+		message string
+	}{
+		{"empty", ""},
+		{"hello", "Hello World"},
+		{"utf8", "h\u00e9llo w\u00f6rld \u2713"},
+		{"payout-registration", "I set mdl1qexampleexampleexampleexampleexample"},
+		{"three-hundred-bytes", strings.Repeat("0123456789", 30)},
+	} {
+		message := []byte(item.message)
+		hash, toSpend, toSign := bip322Transactions(message, pkScript)
+		fetcher := txscript.NewCannedPrevOutputFetcher(pkScript, 0)
+		sigHashes := txscript.NewTxSigHashes(toSign, fetcher)
+		sighash, err := txscript.CalcTaprootSignatureHash(sigHashes, txscript.SigHashDefault, toSign, 0, fetcher)
+		check(err)
+		witness, err := txscript.TaprootWitnessSignature(toSign, sigHashes, 0, 0, pkScript, txscript.SigHashDefault, priv)
+		check(err)
+		unsigned := serializeTx(toSign, false)
+		toSign.TxIn[0].SetWitness(witness)
+		engine, err := txscript.NewEngine(pkScript, toSign, 0, txscript.StandardVerifyFlags, nil, sigHashes, 0, fetcher)
+		check(err)
+		valid := engine.Execute() == nil
+		encoded, err := jsonrpc.SerializeWitnessStack(witness)
+		check(err)
+		signature := base64.StdEncoding.EncodeToString(encoded)
+		oysterAccepts := false
+		if len(message) <= txscript.MaxDataCarrierSize {
+			oysterAccepts, err = jsonrpc.BIP322VerifyMessageSimple(addr, signature, item.message)
+			check(err)
+		}
+
+		var buf bytes.Buffer
+		check(wire.WriteVarString(&buf, 0, "Pearl Signed Message:\n"))
+		check(wire.WriteVarString(&buf, 0, item.message))
+		legacyHash := chainhash.DoubleHashB(buf.Bytes())
+		wif, err := btcutil.NewWIF(priv, &chaincfg.MainNetParams, true)
+		check(err)
+		compact := ecdsa.SignCompact(wif.PrivKey, legacyHash, wif.CompressPubKey)
+		uncompressed := ecdsa.SignCompact(priv, legacyHash, false)
+		recovered, compressed, err := ecdsa.RecoverCompact(compact, legacyHash)
+		check(err)
+
+		out = append(out, MessageFormatVector{
+			Name: item.name, Path: path, Address: addr.String(), Message: item.message,
+			BIP322MessageHash: hex.EncodeToString(hash[:]), BIP322ToSpendTxID: toSpend.TxHash().String(),
+			BIP322ToSignHex: unsigned, BIP322Sighash: hex.EncodeToString(sighash),
+			BIP322Signature: signature, BIP322Valid: valid, OysterAccepts: oysterAccepts,
+			LegacyHash: hex.EncodeToString(legacyHash), LegacyWIF: wif.String(),
+			LegacySignature:    base64.StdEncoding.EncodeToString(compact),
+			LegacyUncompressed: base64.StdEncoding.EncodeToString(uncompressed),
+			LegacyRecoveredKey: hex.EncodeToString(recovered.SerializeCompressed()), LegacyRecoveredFlags: compressed,
+		})
+	}
+	return out
 }
 
 func mustHex(s string) []byte {

@@ -1444,8 +1444,8 @@ export abstract class PearldMethods implements Rpc {
   /**
    * Signs a message with a WIF key in the node, the legacy ECDSA compact
    * signature over the double SHA-256 of the message with pearld's header,
-   * base64. This is not Oyster's signMessage, and verifyMessage in
-   * pearljs/message does not check it. The key travels to the node.
+   * base64. This is not Oyster's signMessage; verifyMessage in
+   * pearljs/message checks it with format 'legacy'. The key travels to the node.
    */
   signMessageWithPrivKey(wif: string, message: string): Promise<string> {
     return this.call('signmessagewithprivkey', [wif, message]);
