@@ -1,4 +1,4 @@
-pearljs uses bitcoinjs-lib, bip32, @scure/bip39, bech32, tiny-secp256k1, and @noble/hashes as npm dependencies. It does not contain copied source files from those projects. Their copyright notices and licenses are included in their installed packages.
+pearljs uses bitcoinjs-lib, bip32, @scure/bip39, bech32, tiny-secp256k1, and @noble/hashes as npm dependencies. Apart from the worker build of tiny-secp256k1 described below, it does not contain copied source files from those projects. Their copyright notices and licenses are included in their installed packages.
 
 Pearl protocol constants and compatibility behavior were derived from the Pearl Research Labs source tree. No affiliation or endorsement is implied.
 
@@ -26,6 +26,10 @@ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+secp256k1 for workers
+
+dist/secp256k1-worker.js, which the `worker` resolution condition selects, is built by scripts/build.mjs from tiny-secp256k1 2.2.5 (Copyright (c) 2018 bitcoinjs contributors) and the uint8array-tools 0.0.7 it depends on (Copyright (c) 2021 Jonathan Underwood), with tiny-secp256k1's WebAssembly module inlined. Both are under the MIT License, and the file opens with the full text of each licence.
 
 Proof verifier
 
