@@ -5,7 +5,9 @@
 // walk.mjs built from the node's blocks. Then a watch-only PearlWallet over
 // each backend for one account, and the backends' fee estimates.
 //
-//   PEARL_RPC_INFLIGHT=1 scripts/mainnet/run.sh backends.mjs
+//   PEARL_RPC_INFLIGHT=1 scripts/mainnet/run.sh backends.mjs [--node-only]
+//
+// --node-only leaves Blockbook out, for a second run once its cap is spent.
 //
 // Run walk.mjs to the tip first; this script brings it up to date if the
 // node has moved on. Blockbook requests count against the 300-request cap in
@@ -33,7 +35,7 @@ const { mnemonicToSeed } = await load('mnemonic');
 const { deriveAccountFromSeed } = await load('keys');
 const { DEFAULT_RELAY_FEE_RATE, feeForVsize, minRelayFee } = await load('policy');
 
-const REPORT = join(OUT, 'backends.json');
+const REPORT = join(OUT, process.argv.includes('--node-only') ? 'backends-node.json' : 'backends.json');
 const LOG = join(OUT, 'backends.log');
 const log = (line) => {
   const text = `${new Date().toISOString()} ${line}`;
@@ -45,7 +47,8 @@ const finding = (what) => {
   report.findings.push(what);
   log(`FINDING ${JSON.stringify(what, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)).slice(0, 400)}`);
 };
-const BB_BUDGET = 290;
+const NODE_ONLY = process.argv.includes('--node-only');
+const BB_BUDGET = NODE_ONLY ? 0 : 290;
 
 // 1. The walk's UTXO set at the node's tip.
 let tip = await rpc('getblockcount');
@@ -81,7 +84,7 @@ for (const [s] of [pool, ...spread(oneCoinbase, 15), ...spread(small, 40), ...sp
 log(`candidates: pool ${candidates.get(pool[0])} with ${pool[1].length} coins, ${oneCoinbase.length} one-coinbase scripts, ${small.length} small, ${p2mr.length} P2MR`);
 
 // 3. filterBackend over the node, from genesis, for every candidate.
-const client = new PearldClient({ url: RPC_URL, username: RPC_USER, password: password(), fetch: gatedFetch, batch: true, maxConcurrentRequests: 2 });
+const client = new PearldClient({ url: RPC_URL, username: RPC_USER, password: password(), fetch: gatedFetch, batch: true, maxConcurrentRequests: 2, timeout: 600_000 });
 const filters = filterBackend(client, { network: mainnet, birthday: 0, watch: [...candidates.values()], concurrency: 8, batchSize: 500 });
 let t0 = Date.now();
 await filters.sync({ onProgress: (p) => (p.height % 10000 < 500 ? log(`filters at ${p.height}/${p.tip}, ${p.blocksFetched} blocks fetched`) : undefined) });
@@ -160,7 +163,7 @@ for (const script of chosen) {
     // Blockbook's backend reads every transaction of an address and the block
     // it is in; the pool's thousands would take the whole cap. One balance
     // query instead.
-    if (blockbookUsed() < BB_BUDGET) {
+    if (blockbookUsed() < BB_BUDGET && !NODE_ONLY) {
       const info = await bbClient.getAddress(address, { details: 'basic' });
       row.blockbookRaw = { balance: String(info.balance), txs: info.txs };
       if (BigInt(info.balance) !== truthBalance.confirmed + truthBalance.immature) finding({ item: 'Blockbook balance of the pool address differs from the chain', address, blockbook: String(info.balance), chain: String(truthBalance.confirmed + truthBalance.immature), blockbookHeight: info.blockbook?.bestHeight });
