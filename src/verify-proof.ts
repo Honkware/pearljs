@@ -17,7 +17,15 @@
  */
 
 import type { PearlBlock, PearlCertificate } from './block.js';
-import { certificateProofCommitment, PUBLIC_DATA_MAX_SIZE_V2 } from './block.js';
+import {
+  certificateProofCommitment,
+  MAX_CERTIFICATE_V4_ANCESTOR_HEADERS,
+  MAX_ZK_PROOF_SIZE,
+  PUBLIC_DATA_MAX_SIZE_V2,
+  PUBLIC_DATA_MAX_SIZE_V4,
+  PUBLIC_DATA_MIN_SIZE_V4,
+  PUBLIC_DATA_SIZE_DENSE_V2,
+} from './block.js';
 import type { PearlBlockHeader } from './blockheader.js';
 import { blockHash, serializeBlockHeader } from './blockheader.js';
 import { PearlError } from './errors.js';
@@ -229,6 +237,20 @@ export async function verifyProof(header: PearlBlockHeader, certificate: PearlCe
   if (proof.length === 0) return rejected('empty proof data');
   if (version !== 2 && version !== 3 && version !== 4) return rejected(`unsupported certificate version ${version} for FFI verification`);
 
+  // The module's own first checks, made here so that nothing it would refuse is copied into its memory, which never shrinks.
+  const ancestors = certificate.ancestorHeaders?.length ?? 0;
+  if (version === 4) {
+    if (ancestors > MAX_CERTIFICATE_V4_ANCESTOR_HEADERS) return rejected(`invalid v4 headers length ${108 * (1 + ancestors)}`);
+    if (proof.length > MAX_ZK_PROOF_SIZE) return rejected('FP8 proof too large');
+    if (publicData.length < PUBLIC_DATA_MIN_SIZE_V4 || publicData.length > PUBLIC_DATA_MAX_SIZE_V4) return rejected(`invalid public_data_len ${publicData.length}`);
+  } else {
+    if (proof.length > MAX_ZK_PROOF_SIZE) return rejected('ZK Proof too large');
+    // PublicProofParams::is_valid_wire_size: dense, or a MoE tail of 199 bytes up.
+    if (publicData.length !== PUBLIC_DATA_SIZE_DENSE_V2 && (publicData.length < 199 || publicData.length > PUBLIC_DATA_MAX_SIZE_V2)) {
+      return rejected(`invalid public_data_len ${publicData.length}`);
+    }
+  }
+
   let verifier = await verifierFor(version === 4 ? 'v4' : 'v2');
   while (verifier.broken) verifier = await verifierFor(version === 4 ? 'v4' : 'v2');
   const { exports } = verifier;
@@ -237,7 +259,7 @@ export async function verifyProof(header: PearlBlockHeader, certificate: PearlCe
     code =
       version === 4
         ? withBytes(exports, [concat([headerBytes, ...(certificate.ancestorHeaders ?? []).map(serializeBlockHeader)]), publicData, proof], ([h, pd, p]) =>
-            exports.verify_v4(h!, headerBytes.length + 108 * (certificate.ancestorHeaders?.length ?? 0), pd!, publicData.length, p!, proof.length, bits ?? header.bits),
+            exports.verify_v4(h!, headerBytes.length + 108 * ancestors, pd!, publicData.length, p!, proof.length, bits ?? header.bits),
           )
         : withBytes(exports, [headerBytes.subarray(0, 76), publicData, proof], ([h, pd, p]) =>
             exports.verify_v2(h!, pd!, publicData.length, p!, proof.length, bits === undefined ? 0 : 1, bits ?? 0, version === 3 ? 1 : 0),
