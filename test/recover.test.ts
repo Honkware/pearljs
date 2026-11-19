@@ -30,6 +30,7 @@ import type { PearlNetwork, WalletBackend } from '../src/index.js';
 import { SimulatedChain } from '../src/testing.js';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
 import desktop from './fixtures/desktop-seed-input.json' with { type: 'json' };
+import walk from './fixtures/oyster-recovery-walk.json' with { type: 'json' };
 import { bytesToHex, hexToBytes } from './vector-helpers.js';
 
 const bip32 = BIP32Factory(ecc);
@@ -126,6 +127,31 @@ describe('diagnoseSeed', () => {
     });
   }
 
+  for (const scenario of walk.scenarios) {
+    it(`names the payments Oyster's restore misses in its walk of ${scenario.name}`, async () => {
+      const chain = new SimulatedChain();
+      const account = deriveAccountFromSeed(mnemonicToSeed(walk.mnemonic), chain.network);
+      const missed = new Map<string, string>();
+      for (const block of scenario.blocks) {
+        for (const payment of block.payments) {
+          expect(account.deriveAddress(payment.index, payment.change)).toBe(payment.address);
+          const tx = chain.pay(payment.address, BigInt(payment.amount));
+          if (!payment.found) missed.set(tx.getId(), payment.address);
+        }
+        chain.mine();
+      }
+      const report = await diagnoseSeed(walk.mnemonic, chain, { gap: 400, accounts: 1, otherCoinType: false });
+      const reason = report.reasons.find((item) => item.code === 'BEYOND_RECOVERY_WINDOW');
+      if (missed.size === 0) {
+        expect(reason).toBeUndefined();
+        return;
+      }
+      expect(new Set(reason!.outputs!.map((output) => output.txid))).toEqual(new Set(missed.keys()));
+      expect(new Set(reason!.addresses)).toEqual(new Set(missed.values()));
+      expect(reason!.variant).toBe("oyster m/86'/1'/0'");
+    });
+  }
+
   it('finds coins past the recovery window, on other accounts, coin types and as-typed phrases, and says why', async () => {
     const { chain, network } = chainWithFunds();
     const seed = mnemonicToSeed(ABANDON);
@@ -174,7 +200,8 @@ describe('diagnoseSeed', () => {
       ['OTHER_DERIVATION', "as-typed m/86'/1'/0'"],
     ]);
     expect(report.reasons[0]!.addresses).toEqual([main.deriveAddress(300)]);
-    expect(report.reasons[0]!.message).toContain('they hold 2 PRL');
+    expect(report.reasons[0]!.message).toContain('They hold 2 PRL');
+    expect(report.reasons[0]!.outputs).toEqual(primary.utxos.filter((utxo) => utxo.index === 300).map(({ txid, vout }) => ({ txid, vout })));
     expect(report.reasons[3]!.message).toContain("typed into Oyster's command line");
   });
 

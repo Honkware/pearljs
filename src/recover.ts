@@ -121,7 +121,11 @@ export interface VariantReport {
 
 /** A reason a restored wallet shows less than the chain holds. */
 export type RecoveryReasonCode =
-  /** Used addresses lie past Oyster's recovery window of unused addresses. */
+  /**
+   * Payments a restore misses: in the block that paid it, the address lay
+   * more than Oyster's recovery window past the last address the restore had
+   * found by then (or past the first 250 addresses, before it had found any).
+   */
   | 'BEYOND_RECOVERY_WINDOW'
   /** Coins sit on a derivation a restore does not scan. */
   | 'OTHER_DERIVATION'
@@ -144,6 +148,8 @@ export interface RecoveryReason {
   variant?: string;
   /** The addresses it concerns. */
   addresses?: string[];
+  /** For BEYOND_RECOVERY_WINDOW, the unspent outputs a restore misses. */
+  outputs?: { txid: string; vout: number }[];
 }
 
 /** The result of diagnoseSeed and diagnoseAccount. */
@@ -416,15 +422,69 @@ function addBalances(balances: readonly WalletBalance[]): WalletBalance {
   );
 }
 
-/** Indices a restore with Oyster's recovery window does not reach. */
-function beyondWindow(used: readonly UsedAddress[]): UsedAddress[] {
-  let lastFound = -1;
-  const missed: UsedAddress[] = [];
-  for (const child of used) {
-    if (child.index - lastFound <= OYSTER_RECOVERY_WINDOW) lastFound = child.index;
-    else missed.push(child);
+/** A payment to a used address, by the height of its block; Infinity for the mempool or a payment the backend could not place. */
+interface Payment {
+  child: UsedAddress;
+  txid: string | null;
+  height: number;
+}
+
+/**
+ * The payments to one chain that Oyster's restore misses. It walks blocks in
+ * height order (recoverScopedAddresses, wallet/wallet/wallet.go); at each
+ * block it watches the addresses below nextUnfound plus the recovery window
+ * (BranchRecoveryState.ExtendHorizon, wallet/wallet/recovery.go), takes every
+ * output paying one of them, moves nextUnfound past the highest index found
+ * there, and never returns to an earlier block. So a payment is missed when
+ * its address lay past the horizon in its own block, even if a later payment
+ * brought the address inside it. Mempool payments are walked after the last
+ * block, as a restore run once they confirm would see them.
+ */
+function oysterMisses(payments: readonly Payment[]): Payment[] {
+  const byHeight = [...payments].sort((a, b) => a.height - b.height);
+  const missed: Payment[] = [];
+  let nextUnfound = 0;
+  for (let i = 0; i < byHeight.length; ) {
+    const height = byHeight[i]!.height;
+    const horizon = nextUnfound + OYSTER_RECOVERY_WINDOW;
+    for (; i < byHeight.length && byHeight[i]!.height === height; i += 1) {
+      const payment = byHeight[i]!;
+      if (payment.child.index < horizon) nextUnfound = Math.max(nextUnfound, payment.child.index + 1);
+      else missed.push(payment);
+    }
   }
   return missed;
+}
+
+async function paymentsOf(backend: Pick<WalletBackend, 'getAddressActivity'>, used: readonly UsedAddress[]): Promise<Payment[]> {
+  const out: Payment[] = [];
+  for (let start = 0; start < used.length; start += 8) {
+    const chunk = used.slice(start, start + 8);
+    const activity = await Promise.all(chunk.map((child) => backend.getAddressActivity(child.address)));
+    chunk.forEach((child, i) => {
+      const paid = activity[i]!;
+      // Used by the backend's word but with no payment to place: walked last.
+      if (paid.length === 0) out.push({ child, txid: null, height: Infinity });
+      for (const payment of paid) out.push({ child, txid: payment.txid, height: payment.block?.height ?? Infinity });
+    });
+  }
+  return out;
+}
+
+/** What each variant a restore scans would miss, by variant id. */
+async function restoreMisses(
+  backend: Pick<WalletBackend, 'getAddressActivity'>,
+  reports: readonly VariantReport[],
+  signal: AbortSignal | undefined,
+): Promise<Map<string, Payment[]>> {
+  const out = new Map<string, Payment[]>();
+  for (const report of reports) {
+    if (!report.variant.oysterScans || report.receive.used.length + report.change.used.length === 0) continue;
+    signal?.throwIfAborted();
+    const missed = [...oysterMisses(await paymentsOf(backend, report.receive.used)), ...oysterMisses(await paymentsOf(backend, report.change.used))];
+    if (missed.length > 0) out.set(report.variant.id, missed);
+  }
+  return out;
 }
 
 function describe(variant: DerivationVariant): string {
@@ -440,21 +500,34 @@ function describe(variant: DerivationVariant): string {
   }
 }
 
-function buildReport(network: PearlNetwork, gap: number, variants: VariantReport[], p2mr: { unseen: string[]; balance: WalletBalance }): RecoveryReport {
+function buildReport(
+  network: PearlNetwork,
+  gap: number,
+  variants: VariantReport[],
+  p2mr: { unseen: string[]; balance: WalletBalance },
+  misses: ReadonlyMap<string, Payment[]>,
+): RecoveryReport {
   const reasons: RecoveryReason[] = [];
   const used = (report: VariantReport): number => report.receive.used.length + report.change.used.length;
   const active = variants.filter((report) => used(report) > 0);
   for (const report of active) {
     const { variant } = report;
     if (variant.oysterScans) {
-      const missed = [...beyondWindow(report.receive.used), ...beyondWindow(report.change.used)];
+      const missed = misses.get(variant.id) ?? [];
       if (missed.length > 0) {
-        const held = total(addBalances(missed.map((child) => child.balance)));
+        const txids = new Set(missed.map((payment) => `${payment.txid}:${payment.child.address}`));
+        const outputs = report.utxos.filter((utxo) => txids.has(`${utxo.txid}:${utxo.address}`));
+        const held = outputs.reduce((sum, utxo) => sum + utxo.value, 0n);
+        const addresses = [...new Set(missed.map((payment) => payment.child.address))];
         reasons.push({
           code: 'BEYOND_RECOVERY_WINDOW',
-          message: `${missed.length} used address(es) lie more than ${OYSTER_RECOVERY_WINDOW} unused addresses past the last one before them, so a restore with Oyster's recovery window stops short of them; they hold ${formatPearl(held)} PRL`,
+          message:
+            `${missed.length} payment(s) to ${addresses.length} address(es) came in a block where the address lay more than ${OYSTER_RECOVERY_WINDOW} past the last address a restore had found by then; ` +
+            `Oyster's restore walks blocks in order with a window of ${OYSTER_RECOVERY_WINDOW} and never goes back, so it misses them. They hold ${formatPearl(held)} PRL: ` +
+            `restore the seed into a wallet that scans by index, such as a PearlWallet with a gapLimit of at least requiredGap, and send them to an address of the restored wallet`,
           variant: variant.id,
-          addresses: missed.map((child) => child.address),
+          addresses,
+          outputs: outputs.map(({ txid, vout }) => ({ txid, vout })),
         });
       }
     } else {
@@ -521,8 +594,9 @@ async function run(
         : await scan(candidate, backend, gap, batchSize, options.signal, options.shareAccountKeys === true, options.scanLimit),
     );
   }
+  const misses = await restoreMisses(backend, reports, options.signal);
   const p2mr = await checkP2mr(backend, options.p2mrAddresses ?? []);
-  return buildReport(backend.network, gap, reports, p2mr);
+  return buildReport(backend.network, gap, reports, p2mr, misses);
 }
 
 /**

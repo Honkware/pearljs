@@ -1,0 +1,429 @@
+{
+  "source": "github.com/pearl-research-labs/pearl",
+  "network": "regtest",
+  "mnemonic": "legal winner thank year wave sausage worth useful legal winner thank yellow",
+  "recoveryWindow": 250,
+  "scenarios": [
+    {
+      "name": "index-order",
+      "blocks": [
+        {
+          "height": 1,
+          "payments": [
+            {
+              "change": false,
+              "index": 0,
+              "amount": 100000000,
+              "address": "rprl1p9y6pr3ec7jfdg6aaa282eu6pxn630ujlmkuwzvmdc6lam3t7dy7qapv887",
+              "found": true
+            }
+          ]
+        },
+        {
+          "height": 2,
+          "payments": [
+            {
+              "change": false,
+              "index": 200,
+              "amount": 100000000,
+              "address": "rprl1pcx9tk23j9fadv2qumzeg5ag72w086mm5l9qwaeeym68sdnel3xhqr9rlkz",
+              "found": true
+            }
+          ]
+        },
+        {
+          "height": 3,
+          "payments": [
+            {
+              "change": false,
+              "index": 300,
+              "amount": 100000000,
+              "address": "rprl1phw7tywkazenj8d5xg3srf6lmazc0zerjwvys45l306e4gklg9jaq80eqzw",
+              "found": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "window-reached-a-block-late",
+      "blocks": [
+        {
+          "height": 1,
+          "payments": [
+            {
+              "change": false,
+              "index": 0,
+              "amount": 100000000,
+              "address": "rprl1p9y6pr3ec7jfdg6aaa282eu6pxn630ujlmkuwzvmdc6lam3t7dy7qapv887",
+              "found": true
+            }
+          ]
+        },
+        {
+          "height": 2,
+          "payments": [
+            {
+              "change": false,
+              "index": 300,
+              "amount": 100000000,
+              "address": "rprl1phw7tywkazenj8d5xg3srf6lmazc0zerjwvys45l306e4gklg9jaq80eqzw",
+              "found": false
+            }
+          ]
+        },
+        {
+          "height": 3,
+          "payments": [
+            {
+              "change": false,
+              "index": 200,
+              "amount": 100000000,
+              "address": "rprl1pcx9tk23j9fadv2qumzeg5ag72w086mm5l9qwaeeym68sdnel3xhqr9rlkz",
+              "found": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "window-reached-in-the-same-block",
+      "blocks": [
+        {
+          "height": 1,
+          "payments": [
+            {
+              "change": false,
+              "index": 0,
+              "amount": 100000000,
+              "address": "rprl1p9y6pr3ec7jfdg6aaa282eu6pxn630ujlmkuwzvmdc6lam3t7dy7qapv887",
+              "found": true
+            }
+          ]
+        },
+        {
+          "height": 2,
+          "payments": [
+            {
+              "change": false,
+              "index": 200,
+              "amount": 100000000,
+              "address": "rprl1pcx9tk23j9fadv2qumzeg5ag72w086mm5l9qwaeeym68sdnel3xhqr9rlkz",
+              "found": true
+            },
+            {
+              "change": false,
+              "index": 300,
+              "amount": 200000000,
+              "address": "rprl1phw7tywkazenj8d5xg3srf6lmazc0zerjwvys45l306e4gklg9jaq80eqzw",
+              "found": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "first-block-past-the-window",
+      "blocks": [
+        {
+          "height": 1,
+          "payments": [
+            {
+              "change": false,
+              "index": 100,
+              "amount": 100000000,
+              "address": "rprl1pw7dduljkk49rlhwm3rdz65xlws6ghjc99s377n9dn3c2f0xxwahqe20ekq",
+              "found": true
+            },
+            {
+              "change": false,
+              "index": 250,
+              "amount": 200000000,
+              "address": "rprl1pm6hkqxmjtl0mhv4q3fhfgu4z6d9957z3xjqc3f3cfd5nfjc3ar7s32ze9r",
+              "found": false
+            }
+          ]
+        },
+        {
+          "height": 2,
+          "payments": [
+            {
+              "change": false,
+              "index": 249,
+              "amount": 100000000,
+              "address": "rprl1prvhffp3t9rt6wzxup99ay54w5cxnt7av3s8pyct57xy7lzwjd9gsua4fys",
+              "found": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "paid-again-later",
+      "blocks": [
+        {
+          "height": 1,
+          "payments": [
+            {
+              "change": false,
+              "index": 0,
+              "amount": 100000000,
+              "address": "rprl1p9y6pr3ec7jfdg6aaa282eu6pxn630ujlmkuwzvmdc6lam3t7dy7qapv887",
+              "found": true
+            }
+          ]
+        },
+        {
+          "height": 2,
+          "payments": [
+            {
+              "change": false,
+              "index": 300,
+              "amount": 100000000,
+              "address": "rprl1phw7tywkazenj8d5xg3srf6lmazc0zerjwvys45l306e4gklg9jaq80eqzw",
+              "found": false
+            }
+          ]
+        },
+        {
+          "height": 3,
+          "payments": [
+            {
+              "change": false,
+              "index": 200,
+              "amount": 100000000,
+              "address": "rprl1pcx9tk23j9fadv2qumzeg5ag72w086mm5l9qwaeeym68sdnel3xhqr9rlkz",
+              "found": true
+            }
+          ]
+        },
+        {
+          "height": 4,
+          "payments": [
+            {
+              "change": false,
+              "index": 300,
+              "amount": 100000000,
+              "address": "rprl1phw7tywkazenj8d5xg3srf6lmazc0zerjwvys45l306e4gklg9jaq80eqzw",
+              "found": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "change-chain",
+      "blocks": [
+        {
+          "height": 1,
+          "payments": [
+            {
+              "change": true,
+              "index": 0,
+              "amount": 100000000,
+              "address": "rprl1pv4cpduejqk97r8gufhfll6n0vekhumzms4rh7hnlxtechwuj86msnuekff",
+              "found": true
+            }
+          ]
+        },
+        {
+          "height": 2,
+          "payments": [
+            {
+              "change": true,
+              "index": 260,
+              "amount": 100000000,
+              "address": "rprl1pqlpxp7dfzvq5updwveuzw0n7etukv3vsgwft9yaqw9lrd7hzhdaqz0crez",
+              "found": false
+            }
+          ]
+        },
+        {
+          "height": 3,
+          "payments": [
+            {
+              "change": true,
+              "index": 240,
+              "amount": 100000000,
+              "address": "rprl1p05fcz2lqwya5ydak7wcqdg683pmm0dj2t24kcawdfpz88pdev54qksjs75",
+              "found": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "chains-apart",
+      "blocks": [
+        {
+          "height": 1,
+          "payments": [
+            {
+              "change": false,
+              "index": 0,
+              "amount": 100000000,
+              "address": "rprl1p9y6pr3ec7jfdg6aaa282eu6pxn630ujlmkuwzvmdc6lam3t7dy7qapv887",
+              "found": true
+            },
+            {
+              "change": true,
+              "index": 0,
+              "amount": 200000000,
+              "address": "rprl1pv4cpduejqk97r8gufhfll6n0vekhumzms4rh7hnlxtechwuj86msnuekff",
+              "found": true
+            }
+          ]
+        },
+        {
+          "height": 2,
+          "payments": [
+            {
+              "change": true,
+              "index": 200,
+              "amount": 100000000,
+              "address": "rprl1p5k7wzeeqnnfcfr9v72elqf3aayzedupy9vcszlkjj36samxdkj6shje3d4",
+              "found": true
+            }
+          ]
+        },
+        {
+          "height": 3,
+          "payments": [
+            {
+              "change": false,
+              "index": 260,
+              "amount": 100000000,
+              "address": "rprl1pzft62gtshvh3e9upm3glk0vw3snjx0mrl90m78cmvpprel463zgqt7a4r9",
+              "found": false
+            }
+          ]
+        },
+        {
+          "height": 4,
+          "payments": [
+            {
+              "change": false,
+              "index": 240,
+              "amount": 100000000,
+              "address": "rprl1pg4vw9vakfl6wq69r7u9pc02xtl9uzfqlnnjnq8aj3apvg563mrksfk2ex4",
+              "found": true
+            },
+            {
+              "change": true,
+              "index": 400,
+              "amount": 200000000,
+              "address": "rprl1pdtjvsevj6lqfpv7smd9vxqqx9u0c224q566yhm7m6uzzapdzzf4sage9zf",
+              "found": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "window-edges",
+      "blocks": [
+        {
+          "height": 1,
+          "payments": [
+            {
+              "change": false,
+              "index": 249,
+              "amount": 100000000,
+              "address": "rprl1prvhffp3t9rt6wzxup99ay54w5cxnt7av3s8pyct57xy7lzwjd9gsua4fys",
+              "found": true
+            }
+          ]
+        },
+        {
+          "height": 2,
+          "payments": [
+            {
+              "change": false,
+              "index": 499,
+              "amount": 100000000,
+              "address": "rprl1pqrefgwt9jqjnn8248q0vrcpwmgjlkklchsdp25ukh408zq8tqlzqq8a3va",
+              "found": true
+            }
+          ]
+        },
+        {
+          "height": 3,
+          "payments": [
+            {
+              "change": false,
+              "index": 750,
+              "amount": 100000000,
+              "address": "rprl1pjsn24tj6z08cphe7kh5f0vg7ljgyfc2f34mtah52y7chnwwhfl0q7w99v4",
+              "found": false
+            }
+          ]
+        },
+        {
+          "height": 4,
+          "payments": [
+            {
+              "change": false,
+              "index": 749,
+              "amount": 100000000,
+              "address": "rprl1phhkraxdmeqjmma052ukupfpwfv77me4dqzvx8p06qjj5vlcqh5qq3eqdnp",
+              "found": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "across-recovery-batches",
+      "blocks": [
+        {
+          "height": 1,
+          "payments": [
+            {
+              "change": false,
+              "index": 0,
+              "amount": 100000000,
+              "address": "rprl1p9y6pr3ec7jfdg6aaa282eu6pxn630ujlmkuwzvmdc6lam3t7dy7qapv887",
+              "found": true
+            }
+          ]
+        },
+        {
+          "height": 1990,
+          "payments": [
+            {
+              "change": false,
+              "index": 300,
+              "amount": 100000000,
+              "address": "rprl1phw7tywkazenj8d5xg3srf6lmazc0zerjwvys45l306e4gklg9jaq80eqzw",
+              "found": false
+            }
+          ]
+        },
+        {
+          "height": 2050,
+          "payments": [
+            {
+              "change": false,
+              "index": 200,
+              "amount": 100000000,
+              "address": "rprl1pcx9tk23j9fadv2qumzeg5ag72w086mm5l9qwaeeym68sdnel3xhqr9rlkz",
+              "found": true
+            }
+          ]
+        },
+        {
+          "height": 2101,
+          "payments": [
+            {
+              "change": false,
+              "index": 301,
+              "amount": 100000000,
+              "address": "rprl1p00tuxspx7nyjntmr6rscmzspga58qcg04l8z5hpewv33xyfpnaxsul02ng",
+              "found": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
