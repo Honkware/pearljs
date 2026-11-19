@@ -129,6 +129,8 @@ const TXID_RE = /^[0-9a-f]{64}$/;
 const XPUB_MAX_GAP = 10_000;
 // Transactions to a page of an account's history since a block.
 const XPUB_PAGE_SIZE = 100;
+// How long an account's xpub hint answers the later batches of a scan, in ms.
+const SCAN_HINT_AGE = 30_000;
 
 // What an xpub reply says of the account's addresses: on each chain, the
 // address and confirmed transaction count the server gives each index, and
@@ -534,6 +536,8 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
 
   // The account's mempool transactions, each read and hash-checked. Blockbook puts them in front of the first page
   // and counts them in unconfirmedTxs of the same reply, which the page of one confirmed transaction then follows.
+  // Unlike an address's, the xpub page is not cut to the page size: GetXpubAddress (api/xpub.go, 81f52f21) appends
+  // every mempool entry first and pages only the confirmed transactions after them.
   const pendingOf = async (source: BlockbookClient, xpub: string, gap: number): Promise<{ txid: string; tx: Transaction }[] | null> => {
     const reply = await xpubQuery(source, xpub, { details: 'txids', pageSize: 1, tokens: 'used', gap });
     if (reply === null) return null;
@@ -562,15 +566,17 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   };
 
   // Each account's hint from each server for the scan under way, and the indices that scan has asked about. A scan asks
-  // about each index once, so an index asked again is a new scan, which asks the server again.
-  const scans = new Map<string, { gap: number; asked: Set<string>; hint: Promise<{ hint: XpubHint; paid: Set<string> } | null> }>();
+  // about each index once, so an index asked again is a new scan, which asks the server again; so does a batch asked
+  // SCAN_HINT_AGE after the hint, which a caller going on with its own scan later would otherwise get stale.
+  const scans = new Map<string, { gap: number; at: number; asked: Set<string>; hint: Promise<{ hint: XpubHint; paid: Set<string> } | null> }>();
   const scanHint = (i: number, source: BlockbookClient, account: AccountAddresses, children: readonly (readonly [string, { change: boolean; index: number }])[]) => {
     const gap = accountGap(account);
     const key = `${i}:${account.xpub}`;
     const marks = children.map(([, child]) => `${child.change ? 1 : 0}/${child.index}`);
     let scan = scans.get(key);
-    if (scan === undefined || scan.gap !== gap || marks.some((mark) => scan!.asked.has(mark))) {
-      const fresh = { gap, asked: new Set<string>(), hint: scanHintOf(source, account.xpub, gap) };
+    const now = Date.now();
+    if (scan === undefined || scan.gap !== gap || now - scan.at >= SCAN_HINT_AGE || marks.some((mark) => scan!.asked.has(mark))) {
+      const fresh = { gap, at: now, asked: new Set<string>(), hint: scanHintOf(source, account.xpub, gap) };
       fresh.hint.catch(() => scans.get(key) === fresh && scans.delete(key));
       scans.set(key, (scan = fresh));
     }

@@ -3,7 +3,7 @@
 // the wallet ends where the per-address path leaves it, and that a hint
 // that lies is caught or costs no more than an omission already could.
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   BlockbookClient,
   PearlWallet,
@@ -168,6 +168,28 @@ describe('blockbookBackend with useXpub', () => {
     // asked one address at a time.
     const basic = small.server.requests.filter((path) => path.endsWith('details=basic')).length;
     expect(basic).toBe(76 + 43);
+  });
+
+  it('asks the server again for a later batch of a scan once the hint it gave is old', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const chain = scenario();
+      const backend = serve(chain).backend({ useXpub: true });
+      const batch = (from: number) => {
+        const children = new Map(Array.from({ length: 10 }, (_, i) => [receive(from + i), { change: false, index: from + i }] as const));
+        return backend.findUsed([...children.keys()], [{ xpub: XPUB, children, gap: 20 }]);
+      };
+      expect(await batch(0)).toEqual([receive(0), receive(1), receive(4), receive(9)]);
+      chain.pay(receive(22), 5000000n);
+      chain.mine(1);
+      // The next batch of the same scan, moments later, is answered from the same hint.
+      vi.advanceTimersByTime(1000);
+      expect(await batch(10)).toEqual([]);
+      vi.advanceTimersByTime(60_000);
+      expect(await batch(20)).toEqual([receive(22)]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('takes the server\'s word that an index is used no further than the history that address has', async () => {
