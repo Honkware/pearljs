@@ -181,6 +181,9 @@ describe('blockbookBackend with useXpub', () => {
     const wallet = await open(lying.backend({ useXpub: true }));
     await wallet.sync();
     expect(stateOf(wallet)).toEqual(stateOf(perAddress));
+    // Read as the hint said: receive 2, 3 and 30 had their histories read, and no index the server derived was asked about by itself.
+    for (const index of [2, 3, 30]) expect(lying.server.requests).toContain(`api/v2/address/${receive(index)}?pageSize=1000&from=8&details=txids`);
+    expect(lying.server.requests.filter((path) => path.endsWith('details=basic'))).toHaveLength(5);
   });
 
   it('misses an address the hint leaves out, as a server leaving out its history would, unless a cross-check server lists it', async () => {

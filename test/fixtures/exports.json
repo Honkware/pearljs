@@ -411,6 +411,7 @@
       "xmssVerify"
     ],
     "types": [
+      "AccountAddresses",
       "AccountChild",
       "AccountDiscovery",
       "AccountPaymentOptions",
@@ -789,6 +790,7 @@
       "sumBalance"
     ],
     "types": [
+      "AccountAddresses",
       "AddressHistoryEntry",
       "OysterBackendOptions",
       "PearldBackendOptions",
