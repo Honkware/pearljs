@@ -23,7 +23,7 @@ export function blockbookClient(): BlockbookClient {
 
 export function backends(birthday: number, blockbook: BlockbookBackendOptions | null = { verifyBlocks: true }): Record<string, WalletBackend> {
   const all: Record<string, WalletBackend> = {
-    pearld: pearldBackend(node, { network }),
+    pearld: pearldBackend(node, { network, scanFrom: birthday }),
     filters: filterBackend(node, { network, birthday }),
   };
   if (blockbook !== null && blockbookUrl !== undefined) all.blockbook = blockbookBackend(blockbookClient(), blockbook);
