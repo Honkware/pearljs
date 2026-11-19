@@ -676,7 +676,9 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
 
     async getTransaction(txid): Promise<ChainTransaction | null> {
       const upTo = await tip();
-      const fetched = await fetchTx(txid);
+      let fetched = await fetchTx(txid);
+      // One server's "not found" is not the answer while another has the transaction: a wallet frees coins on it.
+      for (let i = 0; fetched === null && i < others.length; i++) fetched = await ask(i, (other) => fetchTx(txid, false, other));
       if (fetched === null) return null;
       const { blockHeight, blockHash, blockTime } = fetched.reply;
       if (!Number.isSafeInteger(blockHeight) || blockHeight < 0 || blockHeight > upTo.height || typeof blockHash !== 'string' || !TXID_RE.test(blockHash)) return { txid, block: null };
@@ -701,7 +703,16 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
     async broadcast(tx) {
       const hex = typeof tx === 'string' ? tx : toHex(tx);
       const txid = transactionId(parseTransaction(hex));
-      const reported = await client.sendTransaction(hex);
+      let reported: string;
+      try {
+        reported = await client.sendTransaction(hex);
+      } catch (err) {
+        // A refusal is the server's word, and a cross-check server that has the transaction shows it went out all the same.
+        if (err instanceof PearlRpcError && err.kind === 'rpc') {
+          for (let i = 0; i < others.length; i++) if ((await ask(i, (other) => fetchTx(txid, false, other)).catch(() => null)) !== null) return txid;
+        }
+        throw err;
+      }
       if (reported !== txid) throw bad(`reported txid ${reported} for transaction ${txid}`);
       return txid;
     },
@@ -727,7 +738,8 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
       const said = fetched.reply.vout?.find((item) => item?.n === vout);
       if (said?.spent === true) {
         const spender = said.spentTxId;
-        if (spender === undefined || spender === '') return { status: 'spent', confirmed: true };
+        // A spend is believed only with the spending transaction in hand.
+        if (spender === undefined || spender === '') return { status: 'unknown' };
         if (!TXID_RE.test(spender)) throw bad(`names ${String(spender)} as the spender of ${id}`);
         const spending = await fetchTx(spender);
         if (spending === null || spending.tx.isCoinbase() || !spending.tx.ins.some((input) => outpointOf(input) === id)) throw bad(`names ${spender} as the spender of ${id}, which it does not spend`);

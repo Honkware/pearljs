@@ -46,12 +46,16 @@ function serve(chain: FakeChain, rewrite: { current: Rewrite | null } = { curren
     const reply = await server.fetch(input, init);
     if (rewrite.current === null || !reply.ok) return reply;
     const path = new URL(String(input)).pathname.slice(1);
-    return new Response(JSON.stringify(rewrite.current(path, await reply.json())), { status: 200 });
+    const body = rewrite.current(path, await reply.json());
+    return body instanceof Response ? body : new Response(JSON.stringify(body), { status: 200 });
   }) as typeof globalThis.fetch;
   const client = new BlockbookClient({ url: server.url, network, fetch });
   const backend = (options: BlockbookBackendOptions = {}) => blockbookBackend(client, options);
   return { server, client, backend, rewrite };
 }
+
+// Blockbook's answer for a transaction it does not have.
+const notFound = (txid: string): Response => new Response(JSON.stringify({ error: `Transaction '${txid}' not found` }), { status: 400 });
 
 const sorted = <T extends { txid: string; vout?: number }>(items: T[]) => [...items].sort((a, b) => `${a.txid}:${a.vout ?? 0}`.localeCompare(`${b.txid}:${b.vout ?? 0}`));
 const historyOf = (entries: { txid: string; received: bigint; spent?: bigint; block: { height: number } | null }[]) =>
@@ -266,6 +270,18 @@ describe('a Blockbook that lies', () => {
     await expect(backend().getSpendStatus({ txid: paid.getId(), vout: 0 })).rejects.toThrow(/which it does not spend/);
   });
 
+  it('calls an output spent only when the server names the transaction that spends it', async () => {
+    const { chain, backend, rewrite } = setup();
+    const paid = chain.pay(r0, 8000n);
+    chain.mine(1);
+    rewrite.current = (path, body) => {
+      if (path !== `api/v2/tx/${paid.getId()}`) return body;
+      const reply = body as { vout: { n: number }[] };
+      return { ...reply, vout: reply.vout.map((out) => ({ ...out, spent: true })) };
+    };
+    expect(await backend().getSpendStatus({ txid: paid.getId(), vout: 0 })).toEqual({ status: 'unknown' });
+  });
+
   it('refuses a server for another network', async () => {
     const chain = new FakeChain({ network: networks.testnet2, premine: 1 });
     const server = simulatedBlockbook(chain);
@@ -310,6 +326,38 @@ describe('cross-checked against other Blockbooks', () => {
     });
     await expect(hiding.backend().getUtxos([r0])).resolves.toEqual([]);
     await expect(hiding.backend({ crossCheck: [c.client] }).getUtxos([r0])).rejects.toThrow(/lists 1 confirmed transactions/);
+  });
+
+  it('asks the other servers about a transaction the server says it does not have', async () => {
+    const chain = new FakeChain({ network, premine: 4 });
+    const paid = chain.pay(r0, 8000n);
+    const hiding = serve(chain, { current: (path, body) => (path === `api/v2/tx/${paid.getId()}` ? notFound(paid.getId()) : body) });
+    const witness = serve(chain);
+    expect(await hiding.backend().getTransaction(paid.getId())).toBeNull();
+    expect(await hiding.backend({ crossCheck: [witness.client] }).getTransaction(paid.getId())).toEqual({ txid: paid.getId(), block: null });
+    chain.mine(1);
+    expect(await hiding.backend({ crossCheck: [witness.client] }).getTransaction(paid.getId())).toMatchObject({ txid: paid.getId(), block: { height: chain.height, hash: chain.tip.hash } });
+    expect(await hiding.backend({ crossCheck: [witness.client] }).getTransaction('11'.repeat(32))).toBeNull();
+  });
+
+  it('takes a broadcast the server refused as sent when another server has it', async () => {
+    const attempt = async (checked: boolean) => {
+      const chain = new FakeChain({ network, premine: 4 });
+      const paid = chain.pay(r0, 8000n);
+      chain.mine(1);
+      const tx = createTransaction(2);
+      addInputByTxid(tx, paid.getId(), 0);
+      tx.addOutput(toOutputScript(STRANGER, network), 7000n);
+      const spend = signWithTestWallet(tx, chain.prevouts(tx)!);
+      // The server relays the transaction and answers with pearld's refusal.
+      const relaying = serve(chain, { current: (path, body) => (path === 'api/v2/sendtx/' ? new Response(JSON.stringify({ error: '-26: txn-mempool-conflict' }), { status: 400 }) : body) });
+      const result = await relaying.backend(checked ? { crossCheck: [serve(chain).client] } : {}).broadcast(spend.toHex()).catch((err: unknown) => err);
+      expect(chain.mempool.has(spend.getId())).toBe(true);
+      return { result, txid: spend.getId() };
+    };
+    expect((await attempt(false)).result).toMatchObject({ kind: 'rpc', rpcCode: -26 });
+    const checked = await attempt(true);
+    expect(checked.result).toBe(checked.txid);
   });
 
   it('reads no further than the lowest server, and fails when they are too far apart', async () => {
