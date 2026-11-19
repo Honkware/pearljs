@@ -623,7 +623,7 @@ export interface BlockbookWsClientOptions {
   readonly keepAlive?: number;
 }
 
-/** getInfo over the websocket (WsInfoRes). */
+/** What getInfo answers over the websocket (WsInfoRes). */
 export interface BlockbookWsInfo {
   readonly name: string;
   readonly shortcut: string;

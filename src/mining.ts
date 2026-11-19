@@ -9,12 +9,12 @@
 // little-endian 256-bit number, is at most the header's target scaled by the
 // work one attempt costs. Everything here is cheap hashing and arithmetic;
 // the zero-knowledge proof that hash_jackpot really came from that work is
-// not verified.
+// verified by verify-proof.ts, not here.
 
 /**
  * Mining: block templates into blocks, job keys, matrix commitments, noise
  * seeds, jackpot bounds by certificate version, the rank-penalty rule, and
- * pool effort and luck. The ZK proof is not verified.
+ * pool effort and luck. The ZK proof is verified by pearljs/verify-proof, not here.
  *
  * @module
  */
@@ -289,7 +289,7 @@ export function sealBlock(skeleton: BlockSkeleton, work: ProvenWork): PearlBlock
   return block;
 }
 
-/** zk-pow's MiningConfiguration::SERIALIZED_SIZE. */
+/** Bytes of a serialized mining configuration (zk-pow's MiningConfiguration::SERIALIZED_SIZE). */
 export const MINING_CONFIGURATION_SIZE = 52;
 /** PublicProofParams::WIRE_SIZE: V2 and V3 public data of a dense proof. */
 export const PUBLIC_DATA_SIZE = 164;
@@ -996,7 +996,7 @@ export function shareValue(shareBound: bigint, blockBound: bigint): number {
   return ratio(blockBound + 1n, shareBound + 1n);
 }
 
-/** Effort: blocks' worth of shares done, a sum of shareValue; 1 is a block's worth. */
+/** Blocks' worth of shares done, the sum of each share's shareValue; 1 is a block's worth. */
 export function effort(shares: readonly { readonly shareBound: bigint; readonly blockBound: bigint }[]): number {
   return shares.reduce((sum, share) => sum + shareValue(share.shareBound, share.blockBound), 0);
 }
@@ -1065,7 +1065,7 @@ export function gammaQuantile(p: number, shape: number): number {
   return (low + high) / 2;
 }
 
-/** Luck over a window, with a confidence interval. */
+/** Blocks found over blocks expected, with its confidence interval. */
 export interface Luck {
   /** Blocks found over blocks expected: above 1 is lucky. */
   readonly luck: number;
@@ -1075,8 +1075,8 @@ export interface Luck {
 }
 
 /**
- * Luck over a window: `found` blocks against `expected` blocks' worth of
- * effort, with the exact Poisson (Garwood) interval for the ratio of the
+ * `found` blocks over `expected` blocks' worth of effort in a window,
+ * with the exact Poisson (Garwood) interval for the ratio of the
  * true rate to the expected one. Count the open round's effort in
  * `expected`, or a window that ends on a block reads lucky.
  */

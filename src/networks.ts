@@ -71,7 +71,7 @@ export interface ForkHeights {
   readonly moe: number;
   /** From this height MoE proofs are refused. */
   readonly denseOnly: number;
-  /** From this height the rank-penalty rule applies. pearljs does not check that rule. */
+  /** From this height the rank-penalty rule applies; checkBlockWork checks it. */
   readonly rankPenalty: number;
   /** From this height blocks need a V3 certificate. */
   readonly saltedSeed: number;

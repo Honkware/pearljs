@@ -7,12 +7,12 @@
 // certificate. This module parses and serializes blocks, computes merkle
 // roots, witness commitments and vsize the way Pearl's node does, and checks
 // that a certificate is bound to its header and, for V4, to its ancestors.
-// It does not verify the zero-knowledge proof itself.
+// It does not verify the zero-knowledge proof itself; verify-proof.ts does.
 
 /**
  * Full Pearl blocks: certificate, header and transactions. Parsing,
- * serialization, Merkle roots, witness commitments and sizes. Proofs are not
- * verified.
+ * serialization, Merkle roots, witness commitments and sizes. Proofs are
+ * verified by pearljs/verify-proof, not here.
  *
  * @module
  */
@@ -86,7 +86,7 @@ export interface PearlCertificate {
    * the proof was keyed by (see certificateAncestorHeader).
    */
   publicData: Uint8Array;
-  /** The ZK proof, up to 62000 bytes (60000 for V1 to V3). Not verified by pearljs. */
+  /** The ZK proof, up to 62000 bytes (60000 for V1 to V3). Not verified here; verifyProof in pearljs/verify-proof checks it. */
   proof: Uint8Array;
   /**
    * V4 only: the full headers between this block and the proof's ancestor,

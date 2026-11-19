@@ -212,7 +212,7 @@ function sourceOf(client: BlockbookClient | BlockbookWsClient): Source {
  * and sweep run over it unchanged.
  *
  * Trust: the server can leave transactions out and can make up blocks,
- * since pearljs verifies no proof; `crossCheck` against servers run by
+ * since the backend verifies no proof; `crossCheck` against servers run by
  * others is what catches that. What it cannot do unnoticed is change a
  * transaction, credit an address with an output that does not pay it,
  * place a transaction in a block that does not hold it (with verifyBlocks),

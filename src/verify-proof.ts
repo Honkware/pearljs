@@ -51,6 +51,7 @@ export interface ProofVerdict {
 /** Files the verifier loads, by the name they have next to this module. */
 export type ProofVerifierAsset = 'verifier.wasm' | 'v2-cache.bin' | 'v4-cache.bin';
 
+/** Where loadProofVerifier reads the verifier's files from. */
 export interface ProofVerifierOptions {
   /**
    * Where to read an asset from, for a page that serves them itself. By

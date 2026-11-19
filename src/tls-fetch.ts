@@ -16,6 +16,7 @@ import { Agent, request } from 'node:https';
 import type { IncomingMessage } from 'node:http';
 import { Readable } from 'node:stream';
 
+/** The certificate pearldFetch trusts, and how it keeps connections. */
 export interface PearldFetchOptions {
   /** The server's certificate, PEM: the contents of its rpc.cert. */
   readonly ca: string | Uint8Array;
