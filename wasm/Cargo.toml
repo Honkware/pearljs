@@ -14,7 +14,8 @@ path = "src/lib.rs"
 measure-setup = []
 
 [dependencies]
-zk-pow = { path = "vendor/zk-pow", default-features = false }
+# build.sh puts the patched zk-pow here.
+zk-pow = { path = "../zk-pow", default-features = false }
 anyhow = "1.0"
 blake3 = "1.8"
 # rand 0.9 needs a getrandom 0.3 backend to link on wasm32-unknown-unknown (.cargo/config.toml).

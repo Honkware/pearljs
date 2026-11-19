@@ -5,7 +5,7 @@ The crates are cargo's normal dependency graph for wasm32-unknown-unknown,
 without proc macros, which run at build time and leave no code behind. Each
 crate's licence files are copied as the crate ships them, each distinct text once with the crates that ship it; a crate without one
 gets its Cargo.toml licence expression, and Pearl's own crates the licence at
-the root of Pearl's repository.
+the root of Pearl's repository, which build.sh copies beside them.
 """
 import json
 import os
@@ -13,8 +13,8 @@ import subprocess
 import sys
 
 here = os.path.dirname(os.path.abspath(__file__))
-pearl = os.path.realpath(sys.argv[1])
-out = sys.argv[2]
+stage = os.path.dirname(here)
+out = sys.argv[1]
 
 meta = json.loads(subprocess.check_output(
     ['cargo', 'metadata', '--format-version', '1', '--locked', '--filter-platform', 'wasm32-unknown-unknown'], cwd=here))
@@ -42,8 +42,8 @@ for pid in sorted(linked, key=lambda i: (packages[i]['name'], packages[i]['versi
     lic = (p['license'] or '').replace('/', ' OR ')
     if ' OR ' in lic and 'MIT' in lic.split(' OR ') and any('MIT' in f.upper() for f in files):
         files = [f for f in files if 'MIT' in f.upper()]
-    if not files and (root.startswith(os.path.join(here, 'vendor')) or root.startswith(pearl)):
-        root, files = pearl, ['LICENSE']
+    if not files and root.startswith(stage + os.sep):
+        root, files = stage, ['LICENSE']
     header = f"{p['name']} {p['version']}" + (f" ({p['license']})" if p['license'] else '')
     texts = [open(os.path.join(root, f), encoding='utf-8', errors='replace').read().strip() for f in files]
     for text in texts or [f"License: {p['license']}"]:
