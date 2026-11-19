@@ -1,7 +1,7 @@
 // What global setup hands to the live tests, the fixed test wallets, and the
 // typed clients every test talks to the servers through.
 
-import { Agent, type buildConnector } from 'undici';
+import { Agent, buildConnector } from 'undici';
 import { OysterClient, PearldClient, PearlRpcError } from '../src/index.js';
 import type { RpcClientOptions } from '../src/index.js';
 
@@ -36,16 +36,37 @@ export const OYSTER_MNEMONIC = 'legal winner thank year wave sausage worth usefu
 export const OYSTER_PASSPHRASE = 'pearljs-live';
 
 // pearld and Oyster close every RPC connection after one reply, so each call
-// opens a new one. On a busy macOS host a burst of them to one loopback port
-// sees some SYNs go unanswered for 7, 13 and more seconds before the kernel's
-// own retransmission gets through, past undici's 10 second connect timeout.
-// Waiting longer is safe for every method, since a connection that never
-// opened never carried the request; it stays under the 60 second call limit.
-const CONNECT_TIMEOUT = 45_000;
+// opens a new one. On this busy macOS host new loopback connections stall now
+// and then for 7 to 15 seconds and more, every socket opened in that window
+// alike, and a single socket's SYNs can go unanswered until the kernel itself
+// gives up. A connect that failed never carried a request, so a new socket is
+// tried for every method, sends included, within the 60 second call limit.
+const CONNECT_ATTEMPT = 10_000;
+const CONNECT_ATTEMPTS = 5;
 
-/** An undici dispatcher that trusts a server's own certificate and waits out slow connects. */
+const stalled = (err: Error): boolean => {
+  const code = (err as { code?: unknown }).code;
+  return code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'ETIMEDOUT';
+};
+
+/** An undici dispatcher that trusts a server's own certificate and opens a new socket when a connect stalls. */
 export function trustingAgent(ca: string, connect: buildConnector.BuildOptions = {}): Agent {
-  return new Agent({ connect: { ca, timeout: CONNECT_TIMEOUT, ...connect } });
+  const once = buildConnector({ ca, timeout: CONNECT_ATTEMPT, ...connect });
+  const retrying: buildConnector.connector = (options, callback) => {
+    let attempt = 1;
+    const tryOnce = (): void =>
+      once(options, (...result) => {
+        const [err] = result;
+        if (err !== null && stalled(err) && attempt < CONNECT_ATTEMPTS) {
+          attempt += 1;
+          tryOnce();
+        } else {
+          callback(...result);
+        }
+      });
+    tryOnce();
+  };
+  return new Agent({ connect: retrying });
 }
 
 /**
