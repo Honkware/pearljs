@@ -110,7 +110,8 @@ export function basicAuth(username: string, password: string): string {
   return `Basic ${btoa(binary)}`;
 }
 
-function isLoopback(hostname: string): boolean {
+/** Whether a URL's hostname is this machine: localhost, a .localhost name, ::1 or 127.0.0.0/8. */
+export function isLoopback(hostname: string): boolean {
   const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
   return host === 'localhost' || host.endsWith('.localhost') || host === '::1' || /^127(\.\d{1,3}){3}$/.test(host);
 }
@@ -240,3 +241,34 @@ export function decimalToGrain(text: string): bigint {
   return sign === '-' ? -grain : grain;
 }
 
+// The body as text, refused once it passes `limit` bytes.
+export async function readBounded(response: Response, limit: number, method: string, origin: string): Promise<string> {
+  const tooLarge = () => new PearlRpcError('response', method, `the reply from ${origin} is larger than maxReplySize, ${limit} bytes`);
+  const declared = Number(response.headers.get('content-length') ?? NaN);
+  if (Number.isFinite(declared) && declared > limit) {
+    void response.body?.cancel().catch(() => {});
+    throw tooLarge();
+  }
+  const body = response.body;
+  if (body === null || typeof body.getReader !== 'function') {
+    const text = await response.text();
+    // UTF-8 takes at most three bytes per UTF-16 unit, so short text needs no count.
+    if (text.length * 3 > limit && new TextEncoder().encode(text).length > limit) throw tooLarge();
+    return text;
+  }
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let size = 0;
+  let text = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      void reader.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
