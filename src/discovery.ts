@@ -79,8 +79,8 @@ export async function discoverAccount(
   const usedAmong = async (batch: DiscoveredAddress[]): Promise<Set<string>> => {
     const addresses = batch.map((child) => child.address);
     if (backend.findUsed !== undefined) {
-      const accounts = xpub === undefined ? [] : [{ xpub, children: new Map(batch.map(({ address, index, change }) => [address, { change, index }])), gap }];
-      return new Set(await backend.findUsed(addresses, accounts));
+      if (xpub === undefined) return new Set(await backend.findUsed(addresses));
+      return new Set(await backend.findUsed(addresses, [{ xpub, children: new Map(batch.map(({ address, index, change }) => [address, { change, index }])), gap }]));
     }
     const activity = await Promise.all(addresses.map((address) => backend.getAddressActivity(address)));
     return new Set(addresses.filter((_, i) => activity[i]!.length > 0));

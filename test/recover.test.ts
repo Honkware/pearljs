@@ -302,6 +302,36 @@ describe('diagnoseSeed', () => {
   });
 });
 
+describe('account keys and the backend', () => {
+  const recording = (network: PearlNetwork, calls: unknown[][]): Pick<WalletBackend, 'getAddressActivity' | 'getUtxos' | 'getBalance' | 'network' | 'findUsed'> => ({
+    network,
+    getAddressActivity: async () => [],
+    getUtxos: async () => [],
+    getBalance: async () => ({ confirmed: 0n, unconfirmed: 0n, immature: 0n }),
+    findUsed: async (...args: unknown[]) => {
+      calls.push(args);
+      return [];
+    },
+  });
+
+  it('gives findUsed only addresses unless shareAccountKeys is set for the call', async () => {
+    const network = networks.regtest;
+    const calls: unknown[][] = [];
+    await diagnoseSeed(ABANDON, recording(network, calls), { gap: 3, passphrases: ['secret one', 'secret two'] });
+    const main = deriveAccountFromSeed(mnemonicToSeed(ABANDON), network, 0);
+    await diagnoseAccount(main.extendedPublicKey(), recording(network, calls), { gap: 3 });
+    await diagnoseAccount(main, recording(network, calls), { gap: 3 });
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((args) => args.length === 1)).toBe(true);
+
+    const shared: unknown[][] = [];
+    await diagnoseSeed(ABANDON, recording(network, shared), { gap: 3, accounts: 1, otherCoinType: false, shareAccountKeys: true });
+    await diagnoseAccount(main.extendedPublicKey(), recording(network, shared), { gap: 3, shareAccountKeys: true });
+    const xpubs = new Set(shared.flatMap(([, accounts]) => (accounts as { xpub: string }[]).map((account) => account.xpub)));
+    expect([...xpubs]).toEqual([main.extendedPublicKey()]);
+  });
+});
+
 describe('diagnoseAccount and a watch-only wallet', () => {
   it('scans an account key without the seed, and a watch-only wallet from it holds what the report found', async () => {
     const { chain, network } = chainWithFunds();

@@ -170,6 +170,14 @@ export interface RecoveryOptions {
   onVariant?: (variant: DerivationVariant) => void;
   /** P2MR addresses to check besides the derived ones, such as an XMSS key's. */
   p2mrAddresses?: readonly string[];
+  /**
+   * Hand each variant's account extended public key to a backend whose
+   * findUsed asks about whole accounts, such as Blockbook with useXpub. That
+   * reveals to the backend every address of every account scanned, past and
+   * future, those of passphrase and unused variants included. Off by
+   * default, when only addresses are sent.
+   */
+  shareAccountKeys?: boolean;
 }
 
 /** Options for diagnoseSeed. */
@@ -189,7 +197,7 @@ export interface SeedRecoveryOptions extends RecoveryOptions {
 
 interface Candidate {
   variant: DerivationVariant;
-  account: Pick<PearlAccount, 'deriveAddress'>;
+  account: Pick<PearlAccount, 'deriveAddress'> & Partial<Pick<PearlAccount, 'extendedPublicKey'>>;
   accountKey: string | null;
   origin: KeyOrigin | null;
 }
@@ -303,8 +311,11 @@ async function scan(
   gap: number,
   batchSize: number,
   signal: AbortSignal | undefined,
+  shareAccountKeys: boolean,
 ): Promise<VariantReport> {
-  const found: AccountDiscovery = await discoverAccount(candidate.account, backend, { gap, batchSize, ...(signal === undefined ? {} : { signal }) });
+  // Without extendedPublicKey, discoverAccount tells the backend nothing but addresses.
+  const account = shareAccountKeys ? candidate.account : { deriveAddress: (index: number, change?: boolean) => candidate.account.deriveAddress(index, change) };
+  const found: AccountDiscovery = await discoverAccount(account, backend, { gap, batchSize, ...(signal === undefined ? {} : { signal }) });
   const maturity = backend.network.coinbaseMaturity;
   const withBalance = (child: DiscoveredAddress): UsedAddress => ({
     ...child,
@@ -339,7 +350,7 @@ async function scanRange(
   count: number,
   signal: AbortSignal | undefined,
 ): Promise<VariantReport> {
-  return scan(candidate, backend, count, count, signal);
+  return scan(candidate, backend, count, count, signal, false);
 }
 
 const total = (balance: WalletBalance): bigint => balance.confirmed + balance.unconfirmed + balance.immature;
@@ -453,7 +464,7 @@ async function run(
     reports.push(
       candidate.variant.pq
         ? await scanRange(candidate, backend, options.pqAddresses ?? 0, options.signal)
-        : await scan(candidate, backend, gap, batchSize, options.signal),
+        : await scan(candidate, backend, gap, batchSize, options.signal, options.shareAccountKeys === true),
     );
   }
   const p2mr = await checkP2mr(backend, options.p2mrAddresses ?? []);
@@ -464,7 +475,8 @@ async function run(
  * Scans every derivation Pearl's wallets have used for a recovery phrase, a
  * hex seed or seed bytes, deeper than a restore does, and reports what each
  * holds and why a restored wallet might show less. Only addresses go to the
- * backend; the seed and keys stay in this process, and nothing is written.
+ * backend, unless `shareAccountKeys` is set; the seed and private keys stay
+ * in this process, and nothing is written.
  *
  * A phrase is tried as Oyster and the desktop wallet read it, and, when it
  * differs, exactly as typed, as Oyster's command line hashes it. Each seed is
