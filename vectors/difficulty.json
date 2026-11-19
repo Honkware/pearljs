@@ -1,0 +1,1005 @@
+{
+  "networks": [
+    {
+      "name": "mainnet",
+      "powNoRetargeting": false,
+      "reduceMinDifficulty": false,
+      "minDiffReductionTime": 0,
+      "cases": [
+        {
+          "name": "empty chain",
+          "last": null,
+          "time": 1795000000,
+          "bits": 453050367
+        },
+        {
+          "name": "first block after genesis",
+          "last": {
+            "bits": 453050367,
+            "timestamp": 1795000000,
+            "parentTimestamp": null
+          },
+          "time": 1795000194,
+          "bits": 453050367
+        },
+        {
+          "name": "first block after genesis at other bits",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000000,
+            "parentTimestamp": null
+          },
+          "time": 1795000194,
+          "bits": 390355749
+        },
+        {
+          "name": "mainnet bits, last block 194 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000194,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000195,
+          "bits": 390355749
+        },
+        {
+          "name": "mainnet bits, last block 0 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000000,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000001,
+          "bits": 390354312
+        },
+        {
+          "name": "mainnet bits, last block 1 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000001,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000002,
+          "bits": 390354319
+        },
+        {
+          "name": "mainnet bits, last block 193 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000193,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000194,
+          "bits": 390355741
+        },
+        {
+          "name": "mainnet bits, last block 195 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000195,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000196,
+          "bits": 390355756
+        },
+        {
+          "name": "mainnet bits, last block 388 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000388,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000389,
+          "bits": 390357185
+        },
+        {
+          "name": "mainnet bits, last block 600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000600,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000601,
+          "bits": 390358756
+        },
+        {
+          "name": "mainnet bits, last block 3600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795003600,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795003601,
+          "bits": 390380977
+        },
+        {
+          "name": "mainnet bits, last block -3600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1794996400,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794996401,
+          "bits": 390327646
+        },
+        {
+          "name": "mainnet bits, last block -194 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1794999806,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794999807,
+          "bits": 390352875
+        },
+        {
+          "name": "limit bits after a slow block, held at the limit",
+          "last": {
+            "bits": 453050367,
+            "timestamp": 1795001940,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795001941,
+          "bits": 453050367
+        },
+        {
+          "name": "target past the limit after a week-long block",
+          "last": {
+            "bits": 444596223,
+            "timestamp": 1795604994,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795604995,
+          "bits": 453050367
+        },
+        {
+          "name": "tiny target after a negative gap of a half-life, floored at 1",
+          "last": {
+            "bits": 33631232,
+            "timestamp": 1794395200,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794395201,
+          "bits": 16842752
+        },
+        {
+          "name": "tiny target, rounding a negative adjustment down",
+          "last": {
+            "bits": 33631232,
+            "timestamp": 1795000187,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000194,
+          "bits": 33630976
+        },
+        {
+          "name": "negative compact target",
+          "last": {
+            "bits": 75572037,
+            "timestamp": 1795000199,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000200,
+          "bits": 16842752
+        }
+      ]
+    },
+    {
+      "name": "testnet",
+      "powNoRetargeting": false,
+      "reduceMinDifficulty": true,
+      "minDiffReductionTime": 14400,
+      "cases": [
+        {
+          "name": "empty chain",
+          "last": null,
+          "time": 1795000000,
+          "bits": 453050367
+        },
+        {
+          "name": "first block after genesis",
+          "last": {
+            "bits": 453050367,
+            "timestamp": 1795000000,
+            "parentTimestamp": null
+          },
+          "time": 1795000194,
+          "bits": 453050367
+        },
+        {
+          "name": "first block after genesis at other bits",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000000,
+            "parentTimestamp": null
+          },
+          "time": 1795000194,
+          "bits": 390355749
+        },
+        {
+          "name": "mainnet bits, last block 194 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000194,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000195,
+          "bits": 390355749
+        },
+        {
+          "name": "mainnet bits, last block 0 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000000,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000001,
+          "bits": 390354312
+        },
+        {
+          "name": "mainnet bits, last block 1 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000001,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000002,
+          "bits": 390354319
+        },
+        {
+          "name": "mainnet bits, last block 193 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000193,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000194,
+          "bits": 390355741
+        },
+        {
+          "name": "mainnet bits, last block 195 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000195,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000196,
+          "bits": 390355756
+        },
+        {
+          "name": "mainnet bits, last block 388 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000388,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000389,
+          "bits": 390357185
+        },
+        {
+          "name": "mainnet bits, last block 600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000600,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000601,
+          "bits": 390358756
+        },
+        {
+          "name": "mainnet bits, last block 3600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795003600,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795003601,
+          "bits": 390380977
+        },
+        {
+          "name": "mainnet bits, last block -3600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1794996400,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794996401,
+          "bits": 390327646
+        },
+        {
+          "name": "mainnet bits, last block -194 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1794999806,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794999807,
+          "bits": 390352875
+        },
+        {
+          "name": "limit bits after a slow block, held at the limit",
+          "last": {
+            "bits": 453050367,
+            "timestamp": 1795001940,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795001941,
+          "bits": 453050367
+        },
+        {
+          "name": "target past the limit after a week-long block",
+          "last": {
+            "bits": 444596223,
+            "timestamp": 1795604994,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795604995,
+          "bits": 453050367
+        },
+        {
+          "name": "tiny target after a negative gap of a half-life, floored at 1",
+          "last": {
+            "bits": 33631232,
+            "timestamp": 1794395200,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794395201,
+          "bits": 16842752
+        },
+        {
+          "name": "tiny target, rounding a negative adjustment down",
+          "last": {
+            "bits": 33631232,
+            "timestamp": 1795000187,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000194,
+          "bits": 33630976
+        },
+        {
+          "name": "negative compact target",
+          "last": {
+            "bits": 75572037,
+            "timestamp": 1795000199,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000200,
+          "bits": 16842752
+        },
+        {
+          "name": "new block exactly the reduction time after the last",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000194,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795014594,
+          "bits": 390355749
+        },
+        {
+          "name": "new block one second past the reduction time",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000194,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795014595,
+          "bits": 453050367
+        }
+      ]
+    },
+    {
+      "name": "testnet2",
+      "powNoRetargeting": false,
+      "reduceMinDifficulty": true,
+      "minDiffReductionTime": 14400,
+      "cases": [
+        {
+          "name": "empty chain",
+          "last": null,
+          "time": 1795000000,
+          "bits": 453050367
+        },
+        {
+          "name": "first block after genesis",
+          "last": {
+            "bits": 453050367,
+            "timestamp": 1795000000,
+            "parentTimestamp": null
+          },
+          "time": 1795000194,
+          "bits": 453050367
+        },
+        {
+          "name": "first block after genesis at other bits",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000000,
+            "parentTimestamp": null
+          },
+          "time": 1795000194,
+          "bits": 390355749
+        },
+        {
+          "name": "mainnet bits, last block 194 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000194,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000195,
+          "bits": 390355749
+        },
+        {
+          "name": "mainnet bits, last block 0 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000000,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000001,
+          "bits": 390354312
+        },
+        {
+          "name": "mainnet bits, last block 1 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000001,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000002,
+          "bits": 390354319
+        },
+        {
+          "name": "mainnet bits, last block 193 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000193,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000194,
+          "bits": 390355741
+        },
+        {
+          "name": "mainnet bits, last block 195 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000195,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000196,
+          "bits": 390355756
+        },
+        {
+          "name": "mainnet bits, last block 388 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000388,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000389,
+          "bits": 390357185
+        },
+        {
+          "name": "mainnet bits, last block 600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000600,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000601,
+          "bits": 390358756
+        },
+        {
+          "name": "mainnet bits, last block 3600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795003600,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795003601,
+          "bits": 390380977
+        },
+        {
+          "name": "mainnet bits, last block -3600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1794996400,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794996401,
+          "bits": 390327646
+        },
+        {
+          "name": "mainnet bits, last block -194 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1794999806,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794999807,
+          "bits": 390352875
+        },
+        {
+          "name": "limit bits after a slow block, held at the limit",
+          "last": {
+            "bits": 453050367,
+            "timestamp": 1795001940,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795001941,
+          "bits": 453050367
+        },
+        {
+          "name": "target past the limit after a week-long block",
+          "last": {
+            "bits": 444596223,
+            "timestamp": 1795604994,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795604995,
+          "bits": 453050367
+        },
+        {
+          "name": "tiny target after a negative gap of a half-life, floored at 1",
+          "last": {
+            "bits": 33631232,
+            "timestamp": 1794395200,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794395201,
+          "bits": 16842752
+        },
+        {
+          "name": "tiny target, rounding a negative adjustment down",
+          "last": {
+            "bits": 33631232,
+            "timestamp": 1795000187,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000194,
+          "bits": 33630976
+        },
+        {
+          "name": "negative compact target",
+          "last": {
+            "bits": 75572037,
+            "timestamp": 1795000199,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000200,
+          "bits": 16842752
+        },
+        {
+          "name": "new block exactly the reduction time after the last",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000194,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795014594,
+          "bits": 390355749
+        },
+        {
+          "name": "new block one second past the reduction time",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000194,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795014595,
+          "bits": 453050367
+        }
+      ]
+    },
+    {
+      "name": "regtest",
+      "powNoRetargeting": true,
+      "reduceMinDifficulty": true,
+      "minDiffReductionTime": 388,
+      "cases": [
+        {
+          "name": "empty chain",
+          "last": null,
+          "time": 1795000000,
+          "bits": 503382016
+        },
+        {
+          "name": "first block after genesis",
+          "last": {
+            "bits": 503447551,
+            "timestamp": 1795000000,
+            "parentTimestamp": null
+          },
+          "time": 1795000194,
+          "bits": 503382016
+        },
+        {
+          "name": "first block after genesis at other bits",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000000,
+            "parentTimestamp": null
+          },
+          "time": 1795000194,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 194 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000194,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000195,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 0 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000000,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000001,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 1 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000001,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000002,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 193 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000193,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000194,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 195 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000195,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000196,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 388 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000388,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000389,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000600,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000601,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 3600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795003600,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795003601,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block -3600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1794996400,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794996401,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block -194 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1794999806,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794999807,
+          "bits": 503382016
+        },
+        {
+          "name": "limit bits after a slow block, held at the limit",
+          "last": {
+            "bits": 503447551,
+            "timestamp": 1795001940,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795001941,
+          "bits": 503382016
+        },
+        {
+          "name": "target past the limit after a week-long block",
+          "last": {
+            "bits": 503382015,
+            "timestamp": 1795604994,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795604995,
+          "bits": 503382016
+        },
+        {
+          "name": "tiny target after a negative gap of a half-life, floored at 1",
+          "last": {
+            "bits": 33631232,
+            "timestamp": 1794395200,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794395201,
+          "bits": 503382016
+        },
+        {
+          "name": "tiny target, rounding a negative adjustment down",
+          "last": {
+            "bits": 33631232,
+            "timestamp": 1795000187,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000194,
+          "bits": 503382016
+        },
+        {
+          "name": "negative compact target",
+          "last": {
+            "bits": 75572037,
+            "timestamp": 1795000199,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000200,
+          "bits": 503382016
+        },
+        {
+          "name": "new block exactly the reduction time after the last",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000194,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000582,
+          "bits": 503382016
+        },
+        {
+          "name": "new block one second past the reduction time",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000194,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000583,
+          "bits": 503382016
+        }
+      ]
+    },
+    {
+      "name": "simnet",
+      "powNoRetargeting": true,
+      "reduceMinDifficulty": true,
+      "minDiffReductionTime": 388,
+      "cases": [
+        {
+          "name": "empty chain",
+          "last": null,
+          "time": 1795000000,
+          "bits": 503382016
+        },
+        {
+          "name": "first block after genesis",
+          "last": {
+            "bits": 503447551,
+            "timestamp": 1795000000,
+            "parentTimestamp": null
+          },
+          "time": 1795000194,
+          "bits": 503382016
+        },
+        {
+          "name": "first block after genesis at other bits",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000000,
+            "parentTimestamp": null
+          },
+          "time": 1795000194,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 194 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000194,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000195,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 0 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000000,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000001,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 1 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000001,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000002,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 193 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000193,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000194,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 195 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000195,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000196,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 388 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000388,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000389,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000600,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000601,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block 3600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795003600,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795003601,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block -3600 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1794996400,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794996401,
+          "bits": 503382016
+        },
+        {
+          "name": "mainnet bits, last block -194 s after its parent",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1794999806,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794999807,
+          "bits": 503382016
+        },
+        {
+          "name": "limit bits after a slow block, held at the limit",
+          "last": {
+            "bits": 503447551,
+            "timestamp": 1795001940,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795001941,
+          "bits": 503382016
+        },
+        {
+          "name": "target past the limit after a week-long block",
+          "last": {
+            "bits": 503382015,
+            "timestamp": 1795604994,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795604995,
+          "bits": 503382016
+        },
+        {
+          "name": "tiny target after a negative gap of a half-life, floored at 1",
+          "last": {
+            "bits": 33631232,
+            "timestamp": 1794395200,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1794395201,
+          "bits": 503382016
+        },
+        {
+          "name": "tiny target, rounding a negative adjustment down",
+          "last": {
+            "bits": 33631232,
+            "timestamp": 1795000187,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000194,
+          "bits": 503382016
+        },
+        {
+          "name": "negative compact target",
+          "last": {
+            "bits": 75572037,
+            "timestamp": 1795000199,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000200,
+          "bits": 503382016
+        },
+        {
+          "name": "new block exactly the reduction time after the last",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000194,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000582,
+          "bits": 503382016
+        },
+        {
+          "name": "new block one second past the reduction time",
+          "last": {
+            "bits": 390355749,
+            "timestamp": 1795000194,
+            "parentTimestamp": 1795000000
+          },
+          "time": 1795000583,
+          "bits": 503382016
+        }
+      ]
+    }
+  ],
+  "source": "calcNextRequiredDifficulty (node/blockchain/difficulty.go) with each network's chaincfg.Params, run by vectors/difficulty_test.go"
+}
