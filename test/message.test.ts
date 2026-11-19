@@ -58,6 +58,12 @@ describe('message signing', () => {
     });
   }
 
+  it('gives the empty message and a lone NUL one Oyster-format signature and two BIP-322 ones', () => {
+    expect(verifyMessage(address, account.signMessage('', { index: 0 }), '\u0000', networks.mainnet)).toBe(true);
+    expect(verifyMessage(address, account.signMessage('', { index: 0, format: 'bip322' }), '\u0000', networks.mainnet, { format: 'bip322' })).toBe(false);
+    expect(verifyMessage(address, account.signMessage('\u0000', { index: 0, format: 'bip322' }), '', networks.mainnet, { format: 'bip322' })).toBe(false);
+  });
+
   it('produces a one-item witness with a 64-byte signature, so always SIGHASH_DEFAULT', () => {
     for (const format of ['oyster', 'bip322'] as const) {
       const signature = account.signMessage('Hello, Pearl', { index: 0, format });

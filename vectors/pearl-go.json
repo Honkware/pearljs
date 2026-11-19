@@ -1392,6 +1392,15 @@
       "valid": false
     },
     {
+      "name": "nul-with-empty-message-signature",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "\u0000",
+      "signature": "AUByq8gAnixDKUdEanB11Dv3ZdzBB264fUnCvdT2pJXdf/ROGwpFfkH/HRHKiaJcgA4Yxo/jvJGyt05cek8l6In0",
+      "signError": "",
+      "valid": true
+    },
+    {
       "name": "line-feed-in-signature",
       "path": "m/86'/808276'/0'/0/0",
       "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",

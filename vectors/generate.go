@@ -1938,6 +1938,13 @@ func main() {
 			Signature: asciiSignature, Valid: valid,
 		})
 	}
+	// NullDataScript pushes both the empty message and a lone NUL as OP_0.
+	emptyValid, err := jsonrpc.BIP322VerifyMessageSimple(addrM0, vectors.Messages[0].Signature, "\x00")
+	check(err)
+	vectors.Messages = append(vectors.Messages, MessageVector{
+		Name: "nul-with-empty-message-signature", Path: accountPath + "/0/0", Address: addrM0.String(), Message: "\x00",
+		Signature: vectors.Messages[0].Signature, Valid: emptyValid,
+	})
 	// base64.StdEncoding skips line breaks and refuses every other character
 	// outside the alphabet.
 	// A byte after the witness stack is ignored, and gives the text padding.
