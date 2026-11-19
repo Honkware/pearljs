@@ -419,6 +419,27 @@ describe('cross-checked against other Blockbooks', () => {
     await wallet.close();
   });
 
+  it('asks the other servers about a spend before calling an output unspent', async () => {
+    const chain = new FakeChain({ network, premine: 4 });
+    const paid = chain.pay(r0, 8000n);
+    const tx = createTransaction(2);
+    addInputByTxid(tx, paid.getId(), 0);
+    tx.addOutput(toOutputScript(STRANGER, network), 7000n);
+    const spend = signWithTestWallet(tx, chain.prevouts(tx)!);
+    await chain.broadcast(spend.toHex());
+    chain.mine(1);
+    const hiding = serve(chain, {
+      current: (path, body) => {
+        if (path !== `api/v2/tx/${paid.getId()}`) return body;
+        const reply = body as { vout: { spent?: boolean; spentTxId?: string }[] };
+        return { ...reply, vout: reply.vout.map(({ spent: _, spentTxId: __, ...out }) => out) };
+      },
+    });
+    const outpoint = { txid: paid.getId(), vout: 0 };
+    expect(await hiding.backend().getSpendStatus(outpoint)).toMatchObject({ status: 'unspent' });
+    expect(await hiding.backend({ crossCheck: [serve(chain).client] }).getSpendStatus(outpoint)).toEqual({ status: 'spent', spender: spend.getId(), confirmed: true });
+  });
+
   it('takes a broadcast the server refused as sent when another server has it', async () => {
     const attempt = async (checked: boolean) => {
       const chain = new FakeChain({ network, premine: 4 });

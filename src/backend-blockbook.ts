@@ -490,6 +490,23 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
     return null;
   };
 
+  // What one server's reply for a transaction says spent its output `vout`, with the spender in hand: fetched, hashing
+  // to its txid, spending the output and, when it is in a block, placed. A spend with no spender named is unknown.
+  const spentBy = async (source: BlockbookClient, reply: BlockbookTx, txid: string, vout: number, upTo: BlockRef): Promise<SpendStatus | null> => {
+    const id = `${txid}:${vout}`;
+    const said = reply.vout?.find((item) => item?.n === vout);
+    if (said?.spent !== true) return null;
+    const spender = said.spentTxId;
+    if (spender === undefined || spender === '') return { status: 'unknown' };
+    if (typeof spender !== 'string' || !TXID_RE.test(spender)) throw badAt(source, `names ${String(spender)} as the spender of ${id}`);
+    const spending = await fetchTx(spender, false, source);
+    if (spending === null || spending.tx.isCoinbase() || !spending.tx.ins.some((input) => outpointOf(input) === id)) throw badAt(source, `names ${spender} as the spender of ${id}, which it does not spend`);
+    const { blockHeight, blockHash, blockTime } = spending.reply;
+    const inBlock = Number.isSafeInteger(blockHeight) && blockHeight >= 0 && blockHeight <= upTo.height && typeof blockHash === 'string' && TXID_RE.test(blockHash);
+    if (inBlock) await place(spender, { height: blockHeight, hash: blockHash, time: blockTime }, upTo);
+    return { status: 'spent', spender, confirmed: inBlock };
+  };
+
   const usedBy = async (source: BlockbookClient, addresses: readonly string[]): Promise<Set<string>> => {
     const counts = await mapLimit(addresses, concurrency, (address) => source.getAddress(address, { details: 'basic' }));
     return new Set(addresses.filter((_, i) => (counts[i]!.txs ?? 0) > 0 || (counts[i]!.unconfirmedTxs ?? 0) > 0));
@@ -775,22 +792,19 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
       const out = fetched?.tx.outs[vout];
       if (fetched === null || out === undefined) return { status: 'unknown' };
       const id = `${txid}:${vout}`;
-      const said = fetched.reply.vout?.find((item) => item?.n === vout);
-      if (said?.spent === true) {
-        const spender = said.spentTxId;
-        // A spend is believed only with the spending transaction in hand.
-        if (spender === undefined || spender === '') return { status: 'unknown' };
-        if (!TXID_RE.test(spender)) throw bad(`names ${String(spender)} as the spender of ${id}`);
-        const spending = await fetchTx(spender);
-        if (spending === null || spending.tx.isCoinbase() || !spending.tx.ins.some((input) => outpointOf(input) === id)) throw bad(`names ${spender} as the spender of ${id}, which it does not spend`);
-        const { blockHeight, blockHash, blockTime } = spending.reply;
-        const inBlock = Number.isSafeInteger(blockHeight) && blockHeight >= 0 && blockHeight <= upTo.height && typeof blockHash === 'string' && TXID_RE.test(blockHash);
-        if (inBlock) await place(spender, { height: blockHeight, hash: blockHash, time: blockTime }, upTo);
-        return { status: 'spent', spender, confirmed: inBlock };
-      }
+      const said = await spentBy(client, fetched.reply, txid, vout, upTo);
+      if (said !== null) return said;
       // Blockbook marks confirmed spends only, so a mempool spend is looked for among the address's mempool transactions.
       const pending = await pendingSpender(out.script, id, upTo);
       if (pending !== null) return { status: 'spent', spender: pending, confirmed: false };
+      // The server can leave a confirmed spend out of its reply; with crossCheck, every server must leave it out.
+      for (let i = 0; i < others.length; i++) {
+        const theirs = await ask(i, async (other) => {
+          const reply = await fetchTx(txid, true, other);
+          return reply === null ? null : spentBy(other, reply.reply, txid, vout, upTo);
+        });
+        if (theirs !== null) return theirs;
+      }
       const { blockHeight, blockHash, blockTime } = fetched.reply;
       if (!Number.isSafeInteger(blockHeight) || blockHeight < 0 || blockHeight > upTo.height || typeof blockHash !== 'string' || !TXID_RE.test(blockHash)) return { status: 'unspent', confirmations: 0 };
       const block = await place(txid, { height: blockHeight, hash: blockHash, time: blockTime }, upTo);
