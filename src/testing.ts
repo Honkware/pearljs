@@ -13,3 +13,4 @@
 export * from './testing/chain.js';
 export * from './testing/keys.js';
 export type { SimulatedSocket, SimulatedWebSocket } from './testing/socket.js';
+export * from './testing/blockbook.js';

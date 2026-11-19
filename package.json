@@ -23,6 +23,10 @@
       "types": "./dist/backend.d.ts",
       "default": "./dist/backend.js"
     },
+    "./backend-blockbook": {
+      "types": "./dist/backend-blockbook.d.ts",
+      "default": "./dist/backend-blockbook.js"
+    },
     "./backend-filters": {
       "types": "./dist/backend-filters.d.ts",
       "default": "./dist/backend-filters.js"
@@ -30,6 +34,10 @@
     "./block": {
       "types": "./dist/block.d.ts",
       "default": "./dist/block.js"
+    },
+    "./blockbook": {
+      "types": "./dist/blockbook.d.ts",
+      "default": "./dist/blockbook.js"
     },
     "./blockheader": {
       "types": "./dist/blockheader.d.ts",
