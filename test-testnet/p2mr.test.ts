@@ -63,12 +63,12 @@ let walletKey = '';
 const voutOf = (script: Uint8Array, skipFirst = 0): number =>
   funding.outs.findIndex((out, i) => i >= skipFirst && Buffer.from(out.script).equals(Buffer.from(script)));
 
-/** An unsigned spend of one funding output to the first address, less the fee for how it will be spent. */
-function spendTo(vout: number, tree: ScriptTree, leafIndex: number, sequence?: number): Transaction {
+/** An unsigned spend of one funding output to the first address, less the fee for how it will be spent. `stack` gives the witness sizes under a leaf estimateVsize cannot read. */
+function spendTo(vout: number, tree: ScriptTree, leafIndex: number, sequence?: number, stack?: number[]): Transaction {
   const tx = createTransaction(2);
   addInputByTxid(tx, funding.getId(), vout, sequence);
   tx.addOutput(toOutputScript(home(), network), 0n);
-  const fee = feeForVsize(estimateVsize(tx, [{ type: 'scriptPath', tree, leafIndex, p2mr: true }]), rate);
+  const fee = feeForVsize(estimateVsize(tx, [{ type: 'scriptPath', tree, leafIndex, p2mr: true, ...(stack === undefined ? {} : { stack }) }]), rate);
   tx.outs[0]!.value = funding.outs[vout]!.value - fee;
   return tx;
 }
@@ -132,7 +132,7 @@ describeTestnet('P2MR spends on testnet2', () => {
     if (skip !== null || funding === undefined) context.skip(skip ?? 'not funded');
     const vout = voutOf(p2mr({ merkleRoot: vault.root }).output, voutOf(p2mr({ merkleRoot: vault.root }).output) + 1);
     const sign = (): Transaction => {
-      const psbt = createPsbt(spendTo(vout, vault, 1, LOCK));
+      const psbt = createPsbt(spendTo(vout, vault, 1, LOCK, [64]));
       prepareP2mrScriptPathInput(psbt, 0, { tree: vault, leafIndex: 1, value: VALUE, previousTransaction: funding });
       signers[0]!.signScriptPathInput(psbt, 0, { index: 1, leafHash: vault.leaves[1]!.leafHash });
       return finalizePsbt(psbt);
