@@ -273,7 +273,6 @@ export const OP_CODES = {
   OP_INVALIDOPCODE: 0xff,
 } as const;
 
-/** The name of an opcode in OP_CODES. */
 export type OpcodeName = keyof typeof OP_CODES;
 
 const ALIASES = new Set<string>(['OP_FALSE', 'OP_NOP2', 'OP_NOP3', 'OP_TRUE']);

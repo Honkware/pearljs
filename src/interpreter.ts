@@ -147,7 +147,6 @@ export interface ScriptPosition {
   opcodeIndex: number;
   /** Byte offset of the opcode in its script. */
   offset: number;
-  /** The opcode byte. */
   opcode: number;
   /** The opcode's name in Pearl's table, such as OP_CHECKSIG or OP_DATA_32. */
   name: string;

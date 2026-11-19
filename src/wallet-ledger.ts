@@ -291,7 +291,7 @@ export function computeHistory(
   return entries.sort((a, b) => rank(b) - rank(a) || b.seenAt - a.seenAt || (a.txid < b.txid ? -1 : 1));
 }
 
-// ---- JSON forms. JSON.stringify throws on a bigint, so a balance, coin or
+// JSON forms. JSON.stringify throws on a bigint, so a balance, coin or
 // history entry has a form with every amount as a decimal string and every
 // script as hex, which goes through JSON, postMessage and storage unchanged,
 // and a function that reads it back, refusing anything that is not one.

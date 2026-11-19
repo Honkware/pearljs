@@ -46,7 +46,6 @@ import type { HeightFilter } from './internal/filter-scan.js';
 import { safeHeight } from './internal/rpc-wire.js';
 import type { ActivityScanner } from './wallet.js';
 
-/** Options for filterBackend. */
 export interface FilterBackendOptions {
   network: PearlNetwork;
   /** The first block to scan: the height of the block the wallet's first address was made in, or 0 for the whole chain. */

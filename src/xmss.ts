@@ -63,7 +63,6 @@ const ADDR_TYPE_OTS = 0;
 const ADDR_TYPE_LTREE = 1;
 const ADDR_TYPE_HASHTREE = 2;
 
-/** An XMSS key pair. */
 export interface XmssKeyPair {
   /** root || public seed */
   publicKey: Uint8Array;

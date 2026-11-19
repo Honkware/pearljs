@@ -162,14 +162,12 @@ export interface WalletConnection {
   quietSyncInterval?: number;
 }
 
-/** Options for watch. */
 export interface WatchOptions {
   /** Milliseconds between full syncs; 60 seconds unless given. */
   pollInterval?: number;
   notifier?: WalletNotifier;
 }
 
-/** Options for sync. */
 export interface SyncOptions {
   /** Scan the whole gap limit past the last used address and ask about every address, as the first sync does. */
   full?: boolean;
@@ -280,7 +278,6 @@ export interface RestoreWalletOptions extends WalletConnection {
 /** Which of the wallet's outputs a send may spend. */
 export type CoinSource = { account: string } | { imported: string } | { xmss: string } | 'all';
 
-/** Options for send. */
 export interface SendOptions {
   recipients: readonly Recipient[];
   /** Grain per 1000 vbytes; the backend's estimate unless given. */
@@ -403,7 +400,6 @@ export interface RebroadcastResult {
   failed: { txid: string; error: Error }[];
 }
 
-/** An account of the wallet. */
 export interface WalletAccount {
   id: string;
   /** seed accounts sign through the keystore; xpub accounts are watch-only. */
@@ -1039,8 +1035,6 @@ export class PearlWallet {
     return wallet;
   }
 
-  // ---- keystore
-
   /** Whether the wallet can sign: false for a watch-only wallet and while locked. */
   get locked(): boolean {
     return this.#keystore === null || this.#keystore.locked;
@@ -1098,8 +1092,6 @@ export class PearlWallet {
   exportKeystore(): EncryptedKeystore {
     return this.#requireKeystore().toJSON();
   }
-
-  // ---- accounts and addresses
 
   accounts(): WalletAccount[] {
     return [...this.#accounts.values()].map((record) => ({
@@ -1243,8 +1235,6 @@ export class PearlWallet {
     });
   }
 
-  // ---- XMSS
-
   /**
    * Adds an XMSS key, generated unless seeds are given. Seeds of a key that
    * has signed before need nextIndex: the wallet cannot know which indices
@@ -1340,8 +1330,6 @@ export class PearlWallet {
       return this.#xmssView(record);
     });
   }
-
-  // ---- reading state
 
   /** Confirmed, unconfirmed, immature and locked grain, which add up to every unspent output. */
   balance(options: { account?: string } = {}): WalletStateBalance {
@@ -1459,8 +1447,6 @@ export class PearlWallet {
     return this.#emitter.on(event, listener);
   }
 
-  // ---- locks
-
   /** Keeps an output out of coin selection, until `until` (milliseconds since the epoch) or unlockOutpoint. Locks are stored. */
   async lockOutpoint(outpoint: { txid: string; vout: number }, options: { until?: number } = {}): Promise<void> {
     await this.#exclusive(async () => {
@@ -1492,8 +1478,6 @@ export class PearlWallet {
         return { txid: txid!, vout: Number(vout), until };
       });
   }
-
-  // ---- sync
 
   /**
    * Brings the wallet up to the chain: checks recorded blocks against it and
@@ -1772,8 +1756,6 @@ export class PearlWallet {
     this.#stops.push(stop);
     return stop;
   }
-
-  // ---- spending
 
   /**
    * Pays the recipients: selects coins as Oyster does, adds change to the
@@ -2197,8 +2179,6 @@ export class PearlWallet {
     });
   }
 
-  // ---- backup
-
   /** The non-secret state: accounts, addresses, labels, transactions, locks and XMSS indices. Keep it with exportKeystore. */
   async exportState(): Promise<WalletBackup> {
     return this.#exclusive(async () => {
@@ -2218,8 +2198,6 @@ export class PearlWallet {
       await this.#store.close();
     });
   }
-
-  // ---- internals: state
 
   async #load(): Promise<void> {
     const entries = await this.#store.list('');
@@ -2446,8 +2424,6 @@ export class PearlWallet {
     return keystore;
   }
 
-  // ---- internals: addresses
-
   #addAccount(record: AccountRecord, save = true): void {
     this.#accounts.set(record.id, record);
     const account = importWatchOnlyAccount(record.xpub, this.network, record.origin ?? undefined);
@@ -2592,8 +2568,6 @@ export class PearlWallet {
     if (notifier === null || addresses.length === 0) return;
     notifier.notifyReceived(addresses).catch((err: unknown) => this.#emitter.emit('error', err instanceof Error ? err : new Error(String(err))));
   }
-
-  // ---- internals: ledger
 
   #ownership(): LedgerOwnership {
     return {
@@ -2834,8 +2808,6 @@ export class PearlWallet {
     }
     for (const [id, index] of highest) await this.#advanceXmss(this.#xmss.get(id)!, index, 'The transaction was not recorded');
   }
-
-  // ---- internals: transactions
 
   #record(
     tx: Transaction,
@@ -3229,8 +3201,6 @@ export class PearlWallet {
       else await this.#ingest(tx, block, events);
     });
   }
-
-  // ---- internals: signing
 
   async #signAndBroadcast(
     payment: Payment<WalletCoin>,

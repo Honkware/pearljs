@@ -611,7 +611,6 @@ export interface InvoiceIndexState {
   issued?: { index: number; at: number }[];
 }
 
-/** Options for InvoiceIndexAllocator. */
 export interface InvoiceIndexAllocatorOptions {
   /** The address at an index, such as `(index) => account.deriveAddress(index)`. */
   readonly deriveAddress: (index: number) => string;

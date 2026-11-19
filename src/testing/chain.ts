@@ -127,7 +127,6 @@ export type SimulatedEvent =
   /** A mempool transaction left without being mined: replaced, conflicted or dropped. */
   | { type: 'removed'; txid: string };
 
-/** Options for a SimulatedChain. */
 export interface SimulatedChainOptions {
   /** regtest unless given. A customNetwork with a short coinbaseMaturity keeps tests quick to set up. */
   network?: PearlNetwork;
@@ -153,7 +152,6 @@ export interface SimulatedChainOptions {
   addrindex?: boolean;
 }
 
-/** Options for mine. */
 export interface MineOptions {
   /** Pay `value` of the first block's coinbase here; the rest goes to the faucet. */
   coinbaseTo?: string;
@@ -165,7 +163,6 @@ export interface MineOptions {
   skipMempool?: boolean;
 }
 
-/** Options for reorg. */
 export interface ReorgOptions {
   /** Blocks to mine on the new branch. One more than were taken off unless given; 0 leaves the chain shorter. */
   mine?: number;
@@ -322,8 +319,6 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
     if (premine > 0) this.mine(premine);
   }
 
-  // ---- what the chain looks like
-
   /** Height of the tip. */
   get height(): number {
     return this.#active.length - 1;
@@ -448,8 +443,6 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
     this.#listeners.add(listener);
     return () => this.#listeners.delete(listener);
   }
-
-  // ---- steps a test takes
 
   /** Sets the simulated clock, which stamps the next block. A block's time is still at least a second after its parent's. */
   setTime(seconds: number): void {
@@ -619,8 +612,6 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
     this.#evict(txid);
   }
 
-  // ---- WalletBackend, ChainClient and TransactionSource
-
   async getTip(): Promise<BlockRef> {
     this.enter('getTip');
     return { height: this.height, hash: this.tip.hash };
@@ -691,8 +682,6 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
     this.#failures = this.#failures.filter((item) => item.left > 0);
     throw failure.error?.(method) ?? new PearlRpcError('network', method, 'the simulated node dropped the connection');
   }
-
-  // ---- internals
 
   #asClient<T>(method: string, run: () => T): T {
     try {
@@ -1087,8 +1076,6 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
     this.#refill(returning);
     for (const block of connected) this.#emit({ type: 'connected', block });
   }
-
-  // ---- the faucet
 
   // The faucet's spendable coins: mature confirmed ones oldest first, then its unconfirmed change.
   #faucetCoins(): (SimulatedCoin & { txid: string; vout: number })[] {

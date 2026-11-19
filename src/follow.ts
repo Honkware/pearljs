@@ -383,7 +383,6 @@ export function watchChain(
   return { stop: abort, done, cursor: () => follower.cursor() };
 }
 
-/** Options for resolvePrevouts. */
 export interface ResolvePrevoutsOptions {
   /**
    * Transactions already at hand, by txid: the other transactions of the

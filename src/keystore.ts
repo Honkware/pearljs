@@ -93,7 +93,6 @@ export interface KeystoreOptions {
 /** The longest unlock timeout: what a timer can hold, a little under 25 days. */
 export const MAX_UNLOCK_TIMEOUT_MS = 2 ** 31 - 1;
 
-/** Options for unlock. */
 export interface UnlockOptions {
   /** Lock again after this many milliseconds, at most MAX_UNLOCK_TIMEOUT_MS. Stays unlocked until lock() unless given. */
   timeout?: number;

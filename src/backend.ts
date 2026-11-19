@@ -233,7 +233,6 @@ export function sumBalance(utxos: readonly Utxo[], coinbaseMaturity: number): Wa
   return balance;
 }
 
-/** Options for pearldBackend. */
 export interface PearldBackendOptions {
   network: PearlNetwork;
   /** Transactions per searchrawtransactions request. Default 100. */
@@ -475,7 +474,6 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletCh
 /** txrules.DefaultRelayFeePerKb, the rate Oyster falls back to (wallet/wallet/txrules/rules.go:19). */
 export const OYSTER_DEFAULT_FEE_RATE = 1000n;
 
-/** Options for oysterBackend. */
 export interface OysterBackendOptions {
   network: PearlNetwork;
 }

@@ -121,7 +121,6 @@ for (let n = 1; n <= 16; n += 1) SMALL_INT_NAMES[OP_CODES.OP_1 + n - 1] = String
 // "10" to "16" are both OP_10 to OP_16 and a one-byte push of 0x10 to 0x16.
 const AMBIGUOUS_WORD = /^1[0-6]$/;
 
-/** Options for scriptToAsm. */
 export interface ScriptToAsmOptions {
   /**
    * Print the words DisasmString leaves ambiguous in a form scriptFromAsm
@@ -245,7 +244,6 @@ export function isPushOnlyScript(script: Uint8Array): boolean {
   return error === null && tokens.every((token) => token.opcode <= OP_CODES.OP_16);
 }
 
-/** Options for decodeScriptNumber. */
 export interface DecodeScriptNumberOptions {
   /** Refuse an encoding longer than the number needs. True unless given. */
   requireMinimal?: boolean;

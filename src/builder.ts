@@ -87,7 +87,6 @@ export interface PaymentOptions<T extends Utxo = Utxo> extends SpendableOptions 
 
 /** An unsigned payment, as buildPayment returns it. Amounts are in grain. */
 export interface Payment<T extends Utxo = Utxo> {
-  /** The unsigned transaction. */
   transaction: Transaction;
   /**
    * The same transaction as a PSBT. Its inputs are bare: prepareInput and
