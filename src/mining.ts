@@ -30,11 +30,13 @@ import {
   checkCertificateBinding,
 } from './block.js';
 import type { CertificateVersion, PearlBlock, PearlCertificate, V4Statement } from './block.js';
+import { PUBLIC_DATA_SIZE_V1 } from './block.js';
 import { BLOCK_HEADER_SIZE, blockHash, parseBlockHeader, serializeBlockHeader } from './blockheader.js';
 import type { PearlBlockHeader } from './blockheader.js';
 import { bitsToTarget, requiredCertVersion } from './consensus.js';
 import { PearlError, PolicyError } from './errors.js';
 import { concat, equalBytes, fromHex, toHex, uint32le } from './internal/bytes.js';
+import { checkV4Statement } from './internal/v4-statement.js';
 import type { PearlNetwork } from './networks.js';
 import { checkSanity } from './policy.js';
 import type { BlockTemplate } from './rpc.js';
@@ -551,6 +553,11 @@ const isPowerOfTwo = (x: number): boolean => x > 0 && (x & (x - 1)) === 0;
  * Throws CERTIFICATE_MALFORMED.
  */
 export function checkPublicData(data: PublicData): void {
+  checkStructure(data, 2);
+}
+
+// public_params_sanity_check; V1's (zk-pow's v1 module) has no upper bound on the tile and no MoE.
+function checkStructure(data: PublicData, version: 1 | 2): void {
   const { config, m, n, tRows, tCols } = data;
   const k = config.commonDim;
   const r = config.rank;
@@ -567,7 +574,7 @@ export function checkPublicData(data: PublicData): void {
   if (k < 1024) malformed(`k must be >= 1024 || k=${k}`);
   if (h % 2 !== 0 || w % 2 !== 0) malformed(`Inner hash tile dimensions must be divisible by 2 || h=${h} w=${w}`);
   if (h * w < 32) malformed(`Inner hash size must be >= 32 || h=${h} w=${w}`);
-  if (h * w > 256) malformed(`Inner hash size must be <= 256 || h=${h} w=${w}`);
+  if (version === 2 && h * w > 256) malformed(`Inner hash size must be <= 256 || h=${h} w=${w}`);
   if (dot % 8 !== 0) malformed(`dot_product_length must be divisible by DWORD_SIZE=8 || got ${dot}`);
   if (m > 1 << 24) malformed(`m must be <= 2^24 || m=${m}`);
   if (n > 1 << 24) malformed(`n must be <= 2^24 || n=${n}`);
@@ -849,29 +856,55 @@ export interface JackpotCheckOptions {
  * it verifies the proof, against `bits`: a block header's bits, or a pool's
  * share bits, which Pearl's verifier also accepts in their place. For V2 and
  * V3: the public data's layout and structure (parsePublicData,
- * checkPublicData), then hash_jackpot at most jackpotBound. For V4: the
- * statement's layout (certificateStatement), then hash_jackpot at most
- * v4JackpotBound. Throws JACKPOT_ABOVE_TARGET for a jackpot over its bound
- * and CERTIFICATE_MALFORMED for the rest, with Pearl's messages. Passing
- * means only that the proof is worth verifying.
+ * checkPublicData), then hash_jackpot at most jackpotBound. For V1, which
+ * mainnet carries below its MoE fork: the 164-byte layout with an all-zero
+ * reserved tail and V1's structure rules, then the same bound. For V4: the
+ * statement's layout (certificateStatement) and bounds, then
+ * hash_jackpot at most v4JackpotBound. Throws JACKPOT_ABOVE_TARGET for a
+ * jackpot over its bound and CERTIFICATE_MALFORMED for the rest, with
+ * Pearl's messages. Passing means only that the proof is worth
+ * verifying.
  */
 export function checkJackpot(certificate: PearlCertificate, bits: number, options: JackpotCheckOptions = {}): void {
-  if (certificate.version === 4) {
+  const { version, publicData } = certificate;
+  if (version === 4) {
     const statement = certificateStatement(certificate)!;
+    checkV4Statement(statement);
     if (jackpotValue(statement.hashJackpot) > v4JackpotBound(bits, statement)) {
       jackpotFailure('Jackpot condition not satisfied: hash does not meet difficulty target');
     }
     return;
   }
-  if (certificate.version !== 2 && certificate.version !== 3) {
-    throw new RangeError(`checkJackpot reads V2 to V4 certificates, not V${certificate.version}`);
+  if (version === 1) {
+    checkJackpotV1(publicData, bits);
+    return;
   }
-  const data = parsePublicData(certificate.publicData);
+  if (version !== 2 && version !== 3) malformed(`unknown certificate version ${version}`);
+  const data = parsePublicData(publicData);
   checkPublicData(data);
   if (jackpotValue(data.hashJackpot) > jackpotBound(bits, data.config)) {
     jackpotFailure('Jackpot condition not satisfied: hash does not meet difficulty target');
   }
-  if (options.rankPenalty === true) checkRankPenalty(bits, certificate.publicData);
+  if (options.rankPenalty === true) checkRankPenalty(bits, publicData);
+}
+
+// verify_zk_proof_v1's checks before the proof: the fixed length, v1's
+// PublicProofParams::from_bytes (the 32 bytes after the patterns are all
+// reserved) and its sanity check, then the same jackpot bound as V2.
+function checkJackpotV1(publicData: Uint8Array, bits: number): void {
+  if (publicData.length !== PUBLIC_DATA_SIZE_V1) malformed(`v1 proof requires ${PUBLIC_DATA_SIZE_V1} byte public_data, got ${publicData.length}`);
+  const configBytes = publicData.slice(0, MINING_CONFIGURATION_SIZE);
+  const config = parseMiningConfiguration(Uint8Array.from(configBytes).fill(0, 20));
+  if (configBytes.subarray(20).some((b) => b !== 0)) malformed('Reserved field must be all zeros');
+  const view = new DataView(publicData.buffer, publicData.byteOffset, publicData.byteLength);
+  const [m, n, tRows, tCols] = [148, 152, 156, 160].map((at) => view.getUint32(at, true)) as [number, number, number, number];
+  if (!offsetIsValid(patternFromBytes(configBytes.subarray(8, 14)), tRows)) malformed('t_rows must be a valid offset for rows_pattern');
+  if (!offsetIsValid(patternFromBytes(configBytes.subarray(14, 20)), tCols)) malformed('t_cols must be a valid offset for cols_pattern');
+  const hashJackpot = publicData.slice(116, 148);
+  checkStructure({ config, configBytes, hashA: publicData.slice(52, 84), hashB: publicData.slice(84, 116), hashJackpot, m, n, tRows, tCols, moe: null }, 1);
+  if (jackpotValue(hashJackpot) > jackpotBound(bits, config)) {
+    jackpotFailure('Jackpot condition not satisfied: hash does not meet difficulty target');
+  }
 }
 
 /**
