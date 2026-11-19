@@ -6,6 +6,9 @@
 //	PEARLJS_RPC_FIXTURES=/path/to/pearljs/test/fixtures/rpc-responses.json \
 //	  go -C /path/to/pearl/node test -overlay /tmp/overlay.json -run TestPearljsRPCFixtures -count=1 .
 //
+// The same run against a checkout of Pearl's fp8-scheme branch writes
+// test/fixtures/rpc-responses-fp8.json, the bodies of a 1.6 pearld.
+//
 // Each fixture is the exact body pearld or Oyster writes, plus the values the
 // TypeScript side must decode from it, computed here from integer grains.
 // Three kinds: results of pearld's handlers called directly, bodies served
