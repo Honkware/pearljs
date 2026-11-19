@@ -89,7 +89,6 @@ class ApiError extends Error {
   }
 }
 
-/** Blockbook's REST and websocket APIs over `chain`. */
 /** Options for simulatedBlockbook. */
 export interface SimulatedBlockbookOptions {
   /**
@@ -101,6 +100,7 @@ export interface SimulatedBlockbookOptions {
   extendedIndex?: boolean;
 }
 
+/** Blockbook's REST and websocket APIs over `chain`, for tests of code that reads through BlockbookClient or BlockbookWsClient. */
 export function simulatedBlockbook(chain: SimulatedChain, options: SimulatedBlockbookOptions = {}): SimulatedBlockbook {
   const extendedIndex = options.extendedIndex ?? true;
   const requests: string[] = [];
