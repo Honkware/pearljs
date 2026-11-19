@@ -164,10 +164,13 @@ function parseWitness(bytes: Uint8Array): Uint8Array[] {
   return items;
 }
 
-function decodeBase64(text: string): Uint8Array {
+function decodeBase64(text: string, lineBreaks = false): Uint8Array {
   if (typeof text !== 'string') {
     throw new TypeError('signature must be a base64 string');
   }
+  // Oyster decodes with Go's base64.StdEncoding, which skips CR and LF
+  // anywhere and refuses every other character outside the alphabet.
+  if (lineBreaks) text = text.replace(/[\r\n]/g, '');
   if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text)) {
     throw new PearlError('SIGNATURE_MALFORMED', 'signature is not valid base64');
   }
@@ -281,7 +284,7 @@ function verifyWitness(program: Uint8Array, signature: string, message: string, 
   try {
     messageBytes(message, format === 'oyster');
     const text = format === 'bip322' && signature.startsWith(BIP322_SIMPLE_PREFIX) ? signature.slice(3) : signature;
-    witness = parseWitness(decodeBase64(text));
+    witness = parseWitness(decodeBase64(text, format === 'oyster'));
   } catch (err) {
     if (err instanceof PearlError) return false;
     throw err;

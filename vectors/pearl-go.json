@@ -1390,6 +1390,69 @@
       "signature": "AUA2KBw4ERWXbXbd7dUzHcZ+MgNphEKz6hnPxsaVtJs7qzsmXS6HUw5eUzHR0P18kqwiHpBHOh06s6hhfGTQPlk0",
       "signError": "",
       "valid": false
+    },
+    {
+      "name": "line-feed-in-signature",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "Hello, Pearl",
+      "signature": "AUA2KBw4ER\nWXbXbd7dUzHcZ+MgNphEKz6hnPxsaVtJs7qzsmXS6HUw5eUzHR0P18kqwiHpBHOh06s6hhfGTQPlk0",
+      "signError": "",
+      "valid": true
+    },
+    {
+      "name": "crlf-in-signature",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "Hello, Pearl",
+      "signature": "AUA2KBw4ERWXbXbd7dUzHcZ+MgNphEKz6hnPxsaVtJs7qzsmXS6HUw5eUzHR0P18kqwiHpBHOh06\r\ns6hhfGTQPlk0\n",
+      "signError": "",
+      "valid": true
+    },
+    {
+      "name": "padded-signature",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "Hello, Pearl",
+      "signature": "AUA2KBw4ERWXbXbd7dUzHcZ+MgNphEKz6hnPxsaVtJs7qzsmXS6HUw5eUzHR0P18kqwiHpBHOh06s6hhfGTQPlk0AA==",
+      "signError": "",
+      "valid": true
+    },
+    {
+      "name": "line-feed-in-padding",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "Hello, Pearl",
+      "signature": "AUA2KBw4ERWXbXbd7dUzHcZ+MgNphEKz6hnPxsaVtJs7qzsmXS6HUw5eUzHR0P18kqwiHpBHOh06s6hhfGTQPlk0AA=\n=",
+      "signError": "",
+      "valid": true
+    },
+    {
+      "name": "space-in-signature",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "Hello, Pearl",
+      "signature": "AUA2KBw4ER WXbXbd7dUzHcZ+MgNphEKz6hnPxsaVtJs7qzsmXS6HUw5eUzHR0P18kqwiHpBHOh06s6hhfGTQPlk0",
+      "signError": "",
+      "valid": false
+    },
+    {
+      "name": "tab-in-signature",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "Hello, Pearl",
+      "signature": "AUA2KBw4ER\tWXbXbd7dUzHcZ+MgNphEKz6hnPxsaVtJs7qzsmXS6HUw5eUzHR0P18kqwiHpBHOh06s6hhfGTQPlk0",
+      "signError": "",
+      "valid": false
+    },
+    {
+      "name": "leading-space",
+      "path": "m/86'/808276'/0'/0/0",
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "message": "Hello, Pearl",
+      "signature": " AUA2KBw4ERWXbXbd7dUzHcZ+MgNphEKz6hnPxsaVtJs7qzsmXS6HUw5eUzHR0P18kqwiHpBHOh06s6hhfGTQPlk0",
+      "signError": "",
+      "valid": false
     }
   ],
   "messageFormats": [

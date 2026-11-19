@@ -1918,6 +1918,27 @@ func main() {
 			Signature: asciiSignature, Valid: valid,
 		})
 	}
+	// base64.StdEncoding skips line breaks and refuses every other character
+	// outside the alphabet.
+	// A byte after the witness stack is ignored, and gives the text padding.
+	raw, err := base64.StdEncoding.DecodeString(asciiSignature)
+	check(err)
+	padded := base64.StdEncoding.EncodeToString(append(raw, 0))
+	for _, item := range []struct{ name, signature string }{
+		{"line-feed-in-signature", asciiSignature[:10] + "\n" + asciiSignature[10:]},
+		{"crlf-in-signature", asciiSignature[:76] + "\r\n" + asciiSignature[76:] + "\n"},
+		{"padded-signature", padded},
+		{"line-feed-in-padding", padded[:len(padded)-1] + "\n" + padded[len(padded)-1:]},
+		{"space-in-signature", asciiSignature[:10] + " " + asciiSignature[10:]},
+		{"tab-in-signature", asciiSignature[:10] + "\t" + asciiSignature[10:]},
+		{"leading-space", " " + asciiSignature},
+	} {
+		valid, _ := jsonrpc.BIP322VerifyMessageSimple(addrM0, item.signature, "Hello, Pearl")
+		vectors.Messages = append(vectors.Messages, MessageVector{
+			Name: item.name, Path: accountPath + "/0/0", Address: addrM0.String(), Message: "Hello, Pearl",
+			Signature: item.signature, Valid: valid,
+		})
+	}
 
 	vectors.MessageFormats = messageFormatVectors(privM0, addrM0, accountPath+"/0/0")
 
