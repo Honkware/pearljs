@@ -162,7 +162,7 @@ describe('blockSkeleton', () => {
     expect(code({ ...fromFixture, default_witness_commitment: '00'.repeat(32) })).toBe('MINING_TEMPLATE_INVALID');
     expect(code({ ...fromFixture, target: '00'.repeat(32) })).toBe('MINING_TEMPLATE_INVALID');
     expect(code({ ...fromFixture, requiredcertversion: 2 })).toBe('MINING_TEMPLATE_INVALID');
-    expect(code({ ...fromFixture, coinbasevalue: undefined } as BlockTemplate)).toBe('MINING_TEMPLATE_INVALID');
+    expect(code({ ...fromFixture, coinbasevalue: undefined } as unknown as BlockTemplate)).toBe('MINING_TEMPLATE_INVALID');
     expect(code({ ...fromFixture, ancestorheaders: ['00'.repeat(108)] })).toBe('MINING_TEMPLATE_INVALID');
     const tx = goVectors.transactions[0]!;
     const withTx = { ...fromFixture, transactions: [{ data: tx.hex, txid: '00'.repeat(32), hash: '00'.repeat(32), depends: [], fee: 0n, vsize: 1 }] };
