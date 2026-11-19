@@ -20,7 +20,7 @@ import {
 } from '../src/index.js';
 import type { CertificateVersion, PearlCertificate } from '../src/index.js';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
-import { networkNamed } from './vector-helpers.js';
+import { masterNetworkNamed, networkNamed } from './vector-helpers.js';
 
 const certificate = (version: number, size: number): PearlCertificate => ({
   version: version as CertificateVersion,
@@ -37,11 +37,13 @@ describe('network consensus params', () => {
   for (const expected of vectors.consensus.networks) {
     it(`match chaincfg for ${expected.name}`, () => {
       const network = networkNamed(expected.name);
-      expect(network.forkHeights).toEqual({
+      // The FP8 fork height is checked against vectors/fp8.json; master has none.
+      expect(masterNetworkNamed(expected.name).forkHeights).toEqual({
         moe: expected.moeForkHeight,
         denseOnly: expected.denseOnlyForkHeight,
         rankPenalty: expected.rankPenaltyForkHeight,
         saltedSeed: expected.saltedSeedForkHeight,
+        fp8: 0,
       });
       expect(network.checkpoints).toEqual(expected.checkpoints);
       expect(network.dnsSeeds).toEqual(expected.dnsSeeds);
@@ -58,7 +60,7 @@ describe('network consensus params', () => {
 describe('certificate rules', () => {
   for (const expected of vectors.consensus.networks) {
     it(`require the certificate CheckCertificateRules does on ${expected.name}`, () => {
-      const network = networkNamed(expected.name);
+      const network = masterNetworkNamed(expected.name);
       for (const rule of expected.certRules) {
         expect(requiredCertVersion(network, rule.height)).toBe(rule.required);
         let error = '';

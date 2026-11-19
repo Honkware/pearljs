@@ -988,8 +988,14 @@ export interface BlockTemplate {
   readonly mutable?: string[];
   readonly noncerange?: string;
   readonly capabilities?: string[];
-  /** Pearl's addition: the certificate version a block at `height` must carry (1, 2 or 3). */
+  /** Pearl's addition: the certificate version a block at `height` must carry (1 to 4). */
   readonly requiredcertversion: number;
+  /**
+   * Pearl's addition for V4 templates only: hex of the full 108-byte headers
+   * of up to four most recent ancestors, parent first. A V4 proof is keyed by
+   * one of them and its certificate carries the ones in between.
+   */
+  readonly ancestorheaders?: string[];
 }
 
 /** An output named by transaction id (display hex) and output index. */
@@ -1134,7 +1140,8 @@ export abstract class PearldMethods implements Rpc {
   /**
    * A block template in template mode. `coinbasevalue` and each
    * transaction's `fee` are grains; `requiredcertversion` says which
-   * certificate version the block must carry.
+   * certificate version the block must carry, and a V4 template lists the
+   * headers its proof may be keyed by in `ancestorheaders`.
    */
   getBlockTemplate(request: BlockTemplateRequest = {}, options: Pick<CallOptions, 'signal' | 'timeout'> = {}): Promise<BlockTemplate> {
     return this.call('getblocktemplate', [request], { ...options, integers: ['fee', 'coinbasevalue'] });

@@ -85,12 +85,12 @@ describe('the blocks of a simulated chain', () => {
   }
 
   it('mines blocks that pass every block check pearljs has, at each certificate version', () => {
-    // Forks at heights 3 and 6 put V1, V2 and V3 certificates in one short chain.
-    const forked = customNetwork(quick, { forkHeights: { moe: 3, saltedSeed: 6, denseOnly: 0, rankPenalty: 0 } });
-    const chain = new SimulatedChain({ network: forked, premine: 8 });
+    // Forks at heights 3, 6 and 9 put V1, V2, V3 and V4 certificates in one short chain.
+    const forked = customNetwork(quick, { forkHeights: { moe: 3, saltedSeed: 6, fp8: 9, denseOnly: 0, rankPenalty: 0 } });
+    const chain = new SimulatedChain({ network: forked, premine: 10 });
     chain.pay(alice.deriveAddress(0), prl('1'));
     chain.mine();
-    expect(chain.blocks.map((block) => block.block.certificate?.version)).toEqual([1, 1, 1, 2, 2, 2, 3, 3, 3, 3]);
+    expect(chain.blocks.map((block) => block.block.certificate?.version)).toEqual([1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4]);
     chain.blocks.slice(1).forEach((block, i) => {
       const height = i + 1;
       // Through bytes and back, as an explorer reads a block from getblock.

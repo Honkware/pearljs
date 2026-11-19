@@ -8,9 +8,9 @@ import { fromOutputScript, toOutputScript } from '../address.js';
 import type { FeeRate } from '../amount.js';
 import { sumBalance } from '../backend.js';
 import type { AddressHistoryEntry, SpendStatus, WalletBackend, WalletBalance, WalletUtxo, Watched } from '../backend.js';
-import { blockVsize, calculateMerkleRoot, certificateProofCommitment, parseBlock } from '../block.js';
-import type { PearlBlock } from '../block.js';
-import { blockHash, blockHashHex } from '../blockheader.js';
+import { blockVsize, calculateMerkleRoot, certificateProofCommitment, parseBlock, PUBLIC_DATA_MIN_SIZE_V4 } from '../block.js';
+import type { PearlBlock, PearlCertificate } from '../block.js';
+import { BLOCK_HEADER_SIZE, blockHash, blockHashHex, serializeBlockHeader } from '../blockheader.js';
 import type { PearlBlockHeader } from '../blockheader.js';
 import type { AddressPayment, BlockRef, ChainTransaction } from '../client.js';
 import { blockSubsidy, requiredCertVersion } from '../consensus.js';
@@ -978,8 +978,12 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
 
     const version = requiredCertVersion(this.network, height);
     // A stand-in for the proof's public data: the right size, tied to this block, and nothing a verifier would accept.
+    // A V4 one starts with the parent's header, the ancestor pearld's miner keys its proofs by.
     const seed = sha256(concat([fromHex(parent.hash), new TextEncoder().encode(`pearljs simulated block ${height}`)]));
-    const publicData = concat(Array.from({ length: 6 }, (_, i) => sha256(concat([seed, Uint8Array.of(i)])))).slice(0, 164);
+    const filler = concat(Array.from({ length: 6 }, (_, i) => sha256(concat([seed, Uint8Array.of(i)]))));
+    const publicData = version === 4
+      ? concat([serializeBlockHeader(parent.block.header), filler.slice(0, PUBLIC_DATA_MIN_SIZE_V4 - BLOCK_HEADER_SIZE)])
+      : filler.slice(0, 164);
     const header: PearlBlockHeader = {
       version: 0x20000000,
       prevBlock: Uint8Array.from(fromHex(parent.hash)).reverse(),
@@ -988,7 +992,10 @@ export class SimulatedChain implements WalletBackend, TransactionSource {
       bits: this.network.powLimitBits,
       proofCommitment: certificateProofCommitment({ version, hash: new Uint8Array(32), publicData, proof: new Uint8Array(0) }),
     };
-    const certificate = { version, hash: blockHash(header), publicData, proof: new TextEncoder().encode('pearljs simulated proof') };
+    const proof = new TextEncoder().encode('pearljs simulated proof');
+    const certificate: PearlCertificate = version === 4
+      ? { version, hash: blockHash(header), publicData, proof, ancestorHeaders: [] }
+      : { version, hash: blockHash(header), publicData, proof };
     const block: PearlBlock = { certificate, header, transactions };
     if (blockVsize(block) > 1_000_000) throw invalid('the block is over the size limit');
     return { hash: display(certificate.hash), height, parent: parent.hash, time, block, txs: transactions, fees, undo: new Map() };

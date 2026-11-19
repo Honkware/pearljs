@@ -43,9 +43,10 @@ export interface PearlNetwork {
    */
   readonly messagePrefix: string;
   /**
-   * Heights at which Pearl's forks activate, 0 where a fork is disabled. MoE
-   * and SaltedSeed are hard forks to V2 and V3 certificates; DenseOnly and
-   * RankPenalty are soft forks that tighten what a certificate may carry.
+   * Heights at which Pearl's forks activate, 0 where a fork is disabled. MoE,
+   * SaltedSeed and FP8 are hard forks to V2, V3 and V4 certificates;
+   * DenseOnly and RankPenalty are soft forks that tighten what a certificate
+   * may carry.
    */
   readonly forkHeights: ForkHeights;
   /** Known-good blocks, oldest first, hashes as display-order hex. */
@@ -74,6 +75,12 @@ export interface ForkHeights {
   readonly rankPenalty: number;
   /** From this height blocks need a V3 certificate. */
   readonly saltedSeed: number;
+  /**
+   * From this height blocks need a V4 (FP8) certificate. The values are those
+   * of Pearl's fp8-scheme branch; a pearld built without it never forks, which
+   * `customNetwork(network, { forkHeights: { fp8: 0 } })` describes.
+   */
+  readonly fp8: number;
 }
 
 /** A known-good block. */
@@ -114,7 +121,7 @@ export const mainnet: PearlNetwork = frozen({
   genesisHash:
     'a18d3093b7ff618f0cdd073fa3d10374e2e0105fe7ef53ff48b55f41c58dadd7',
   messagePrefix: MESSAGE_PREFIX,
-  forkHeights: { moe: 71935, denseOnly: 91630, rankPenalty: 96251, saltedSeed: 99000 },
+  forkHeights: { moe: 71935, denseOnly: 91630, rankPenalty: 96251, saltedSeed: 99000, fp8: 0 },
   checkpoints: [
     { height: 10000, hash: 'a3c196fb1c3f7837bbebd69b98fc451d88d48083af98c318c78486d7f1888490' },
     { height: 20000, hash: '513270b25c6d538f38b26ecdc014f2a809639ec7ebd3c09e4685675311420273' },
@@ -150,7 +157,7 @@ export const testnet: PearlNetwork = frozen({
   genesisHash:
     '10f0be7be9950f74021d0f7c62989d1e2541c4d46f3c95b74e61679864b43d18',
   messagePrefix: MESSAGE_PREFIX,
-  forkHeights: { moe: 1, denseOnly: 28262, rankPenalty: 36763, saltedSeed: 38648 },
+  forkHeights: { moe: 1, denseOnly: 28262, rankPenalty: 36763, saltedSeed: 38648, fp8: 67415 },
   checkpoints: [],
   dnsSeeds: seeds('testnet.pearlnetwork.net'),
   targetSpacing: TARGET_SPACING,
@@ -174,7 +181,7 @@ export const testnet2: PearlNetwork = frozen({
   genesisHash:
     'b0c86d0cd8825f4d72260d2de46f470429eece413811d5d82b5f2e2ea0336f96',
   messagePrefix: MESSAGE_PREFIX,
-  forkHeights: { moe: 54869, denseOnly: 80051, rankPenalty: 80627, saltedSeed: 83109 },
+  forkHeights: { moe: 54869, denseOnly: 80051, rankPenalty: 80627, saltedSeed: 83109, fp8: 150283 },
   checkpoints: [],
   dnsSeeds: seeds('testnet2.pearlnetwork.net'),
   targetSpacing: TARGET_SPACING,
@@ -197,7 +204,7 @@ export const regtest: PearlNetwork = frozen({
   genesisHash:
     '78d0ab27df6a51a8e9dbbdefffca1ebbbeb3818cb083ce2c2f43b047247e5832',
   messagePrefix: MESSAGE_PREFIX,
-  forkHeights: { moe: 1, denseOnly: 0, rankPenalty: 1, saltedSeed: 1 },
+  forkHeights: { moe: 1, denseOnly: 0, rankPenalty: 1, saltedSeed: 1, fp8: 1 },
   checkpoints: [],
   dnsSeeds: [],
   targetSpacing: TARGET_SPACING,
@@ -222,7 +229,7 @@ export const simnet: PearlNetwork = frozen({
   genesisHash:
     '78d0ab27df6a51a8e9dbbdefffca1ebbbeb3818cb083ce2c2f43b047247e5832',
   messagePrefix: MESSAGE_PREFIX,
-  forkHeights: { moe: 1, denseOnly: 0, rankPenalty: 0, saltedSeed: 1 },
+  forkHeights: { moe: 1, denseOnly: 0, rankPenalty: 0, saltedSeed: 1, fp8: 1 },
   checkpoints: [],
   dnsSeeds: [],
   targetSpacing: TARGET_SPACING,

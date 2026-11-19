@@ -27,7 +27,7 @@ export interface SentRequest {
 export type Route = string | Response | ((request: SentRequest) => string | Response);
 
 /** A fetch that answers each method from a fixture, with the reply id set to the request's. */
-export function fakeFetch(routes: Record<string, Route>) {
+export function fakeFetch(routes: Record<string, Route>, from: Record<string, Fixture> = fixtures) {
   const sent: SentRequest[] = [];
   const fetch = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
     const text = init.body as string;
@@ -37,7 +37,9 @@ export function fakeFetch(routes: Record<string, Route>) {
     if (route === undefined) throw new Error(`unexpected method ${request.body.method}`);
     const answer = typeof route === 'function' ? route(request) : route;
     if (answer instanceof Response) return answer;
-    const body = fixture(answer).body.replace(/"id":\d+}\n$/, `"id":${request.body.id}}\n`);
+    const found = from[answer];
+    if (found === undefined) throw new Error(`missing fixture ${answer}`);
+    const body = found.body.replace(/"id":\d+}\n$/, `"id":${request.body.id}}\n`);
     return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
   };
   return { fetch: fetch as typeof globalThis.fetch, sent };

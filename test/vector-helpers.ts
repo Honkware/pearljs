@@ -1,5 +1,5 @@
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
-import { networks, toOutputScript } from '../src/index.js';
+import { customNetwork, networks, toOutputScript } from '../src/index.js';
 import type { PearlNetwork } from '../src/index.js';
 
 export function hexToBytes(hex: string): Uint8Array {
@@ -14,6 +14,14 @@ export function networkNamed(name: string): PearlNetwork {
   const network = (networks as Record<string, PearlNetwork>)[name];
   if (network === undefined) throw new Error(`unknown vector network: ${name}`);
   return network;
+}
+
+/**
+ * The network as Pearl master (1.5) has it, which pearl-go.json is generated
+ * from: no FP8 fork on any network.
+ */
+export function masterNetworkNamed(name: string): PearlNetwork {
+  return customNetwork(networkNamed(name), { forkHeights: { fp8: 0 } });
 }
 
 export function scriptFromVectors(name: string, kind: string): Uint8Array {

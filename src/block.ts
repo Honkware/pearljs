@@ -2,11 +2,12 @@
 //
 // The certificate comes first on the wire and carries the proof of useful
 // work. Its version picks the layout: V1 has 164 bytes of public data, V2
-// and V3 a length-prefixed public data of up to 4807 bytes, and version 0
-// means no certificate. This module parses and serializes blocks, computes
-// merkle roots, witness commitments and vsize the way Pearl's node does, and
-// checks that a certificate is bound to its header. It does not verify the
-// zero-knowledge proof itself.
+// and V3 a length-prefixed public data of up to 4807 bytes, V4 (FP8) up to
+// 832 bytes followed by up to three ancestor headers, and version 0 means no
+// certificate. This module parses and serializes blocks, computes merkle
+// roots, witness commitments and vsize the way Pearl's node does, and checks
+// that a certificate is bound to its header and, for V4, to its ancestors.
+// It does not verify the zero-knowledge proof itself.
 
 /**
  * Full Pearl blocks: certificate, header and transactions. Parsing,
@@ -29,10 +30,15 @@ import { concat, equalBytes, toHex, uint32le, varInt } from './internal/bytes.js
 import { PearlError } from './errors.js';
 
 // wire.CertificateMaxSize, wire.MaxZKProofSize and the public data sizes.
-/** wire.CertificateMaxSize: the most bytes a serialized certificate may have. */
+/** wire.CertificateMaxSize: the most bytes a serialized certificate may have, version included. */
 export const CERTIFICATE_MAX_SIZE = 65000;
-/** wire.MaxZKProofSize: the most bytes a certificate's proof may have. */
-export const MAX_ZK_PROOF_SIZE = 60000;
+/** wire.MaxZKProofSize: the most bytes a certificate's proof may have on the wire. */
+export const MAX_ZK_PROOF_SIZE = 62000;
+/**
+ * The proof limit before FP8 (wire.MaxZKProofSize in Pearl 1.5), which Pearl's
+ * verifier still applies to V1, V2 and V3 proofs.
+ */
+export const LEGACY_MAX_ZK_PROOF_SIZE = 60000;
 /** Bytes of public data in a V1 certificate, exactly. */
 export const PUBLIC_DATA_SIZE_V1 = 164;
 /** The most bytes of public data in a V2 or V3 certificate. */
@@ -40,6 +46,12 @@ export const PUBLIC_DATA_MAX_SIZE_V2 = 4807;
 // A V2 or V3 certificate with more public data than a dense one is MoE.
 /** Bytes of public data in a dense V2 or V3 certificate; one with more is MoE. */
 export const PUBLIC_DATA_SIZE_DENSE_V2 = 164;
+/** wire.PublicDataMaxSizeV4: the most bytes of public data in a V4 certificate. */
+export const PUBLIC_DATA_MAX_SIZE_V4 = 832;
+/** The fewest bytes of V4 public data Pearl's verifier accepts: a dense statement (PublicParams::WIRE_SIZE). */
+export const PUBLIC_DATA_MIN_SIZE_V4 = 240;
+/** wire.MaxCertificateV4AncestorHeaders: headers a V4 certificate may carry between its block and the proof's ancestor. */
+export const MAX_CERTIFICATE_V4_ANCESTOR_HEADERS = 3;
 // blockchain.MaxBlockVsize and WitnessScaleFactor.
 /** blockchain.MaxBlockVsize: the largest block, in vbytes, certificate not counted. */
 export const MAX_BLOCK_VSIZE = 1_000_000;
@@ -57,7 +69,7 @@ const COINBASE_WITNESS_NONCE_LENGTH = 32;
  * Certificate versions Pearl defines. Which one a block needs depends on its
  * height; see requiredCertVersion.
  */
-export type CertificateVersion = 1 | 2 | 3;
+export type CertificateVersion = 1 | 2 | 3 | 4;
 
 /**
  * A block's proof-of-work certificate: a ZK proof and its public data. pearljs
@@ -67,10 +79,31 @@ export interface PearlCertificate {
   version: CertificateVersion;
   /** Hash of the block header this certificate proves, in internal order. */
   hash: Uint8Array;
-  /** The proof's public inputs: 164 bytes for V1, up to 4807 for V2 and V3. */
+  /**
+   * The proof's public inputs: 164 bytes for V1, up to 4807 for V2 and V3,
+   * up to 832 for V4, whose first 108 bytes are the header of the ancestor
+   * the proof was keyed by (see certificateAncestorHeader).
+   */
   publicData: Uint8Array;
-  /** The ZK proof, up to 60000 bytes. Not verified by pearljs. */
+  /** The ZK proof, up to 62000 bytes (60000 for V1 to V3). Not verified by pearljs. */
   proof: Uint8Array;
+  /**
+   * V4 only: the full headers between this block and the proof's ancestor,
+   * parent first, at most three. Empty when the ancestor is the parent. They
+   * are outside the proof commitment; parseBlock sets it for V4 only.
+   */
+  ancestorHeaders?: PearlBlockHeader[];
+}
+
+/**
+ * How a block or certificate is decoded and encoded. `fp8: false` follows a
+ * pearld without the FP8 fork code (Pearl 1.5): version 4 is unsupported,
+ * proofs are capped at 60000 bytes and the limits read as that release words
+ * them. The default follows Pearl's fp8-scheme branch (1.6), which accepts
+ * every block the older code does.
+ */
+export interface BlockCodecOptions {
+  readonly fp8?: boolean;
 }
 
 /** A full block: certificate, header and transactions, in wire order. */
@@ -110,8 +143,16 @@ class Reader {
 
   /** wire.ReadVarInt, which refuses a value written in more bytes than it needs. */
   varInt(): number {
+    const value = this.varIntBig();
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new PearlError('BLOCK_MALFORMED', 'transaction count does not fit in a number');
+    }
+    return Number(value);
+  }
+
+  varIntBig(): bigint {
     const first = this.take(1)[0]!;
-    if (first < 0xfd) return first;
+    if (first < 0xfd) return BigInt(first);
     const [value, min] =
       first === 0xfd
         ? [BigInt(new DataView(this.take(2).buffer).getUint16(0, true)), 0xfdn]
@@ -124,10 +165,7 @@ class Reader {
         `non-canonical varint ${value.toString(16)} - discriminant ${first.toString(16)} encodes a value that fits in fewer bytes`,
       );
     }
-    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new PearlError('BLOCK_MALFORMED', 'transaction count does not fit in a number');
-    }
-    return Number(value);
+    return value;
   }
 
   remaining(): Uint8Array {
@@ -135,12 +173,20 @@ class Reader {
   }
 }
 
-function readCertificate(reader: Reader): PearlCertificate | null {
+// The limits each wire generation reads a certificate with, and how it words them.
+function blobLimit(fp8: boolean, field: string, length: number, max: number, legacy: string): void {
+  if (length > max) throw new PearlError('CERTIFICATE_MALFORMED', fp8 ? `${field}_len ${length} exceeds max ${max}` : legacy);
+}
+
+function readCertificate(reader: Reader, fp8: boolean): PearlCertificate | null {
   const version = reader.uint32();
   if (version === 0) return null;
-  if (version !== 1 && version !== 2 && version !== 3) {
+  if (version !== 1 && version !== 2 && version !== 3 && !(fp8 && version === 4)) {
     throw new PearlError('CERTIFICATE_MALFORMED', `unsupported certificate version: ${version}`);
   }
+  const maxProof = fp8 ? MAX_ZK_PROOF_SIZE : LEGACY_MAX_ZK_PROOF_SIZE;
+  // Pearl 1.6 reads the body through CertificateMaxSize less the version, 1.5 through all of it.
+  const maxBody = fp8 ? CERTIFICATE_MAX_SIZE - 4 : CERTIFICATE_MAX_SIZE;
   const start = reader.offset;
   const hash = reader.take(HASH_SIZE);
   let publicData: Uint8Array;
@@ -148,29 +194,39 @@ function readCertificate(reader: Reader): PearlCertificate | null {
     publicData = reader.take(PUBLIC_DATA_SIZE_V1);
   } else {
     const length = reader.uint32();
-    if (length > PUBLIC_DATA_MAX_SIZE_V2) {
-      throw new PearlError('CERTIFICATE_MALFORMED', `public_data_len ${length} exceeds max ${PUBLIC_DATA_MAX_SIZE_V2}`);
-    }
+    const [field, max] = version === 4 ? ['fp8 public_data', PUBLIC_DATA_MAX_SIZE_V4] : ['public_data', PUBLIC_DATA_MAX_SIZE_V2];
+    blobLimit(true, field, length, max, '');
     publicData = reader.take(length);
   }
   const proofLength = reader.uint32();
-  if (proofLength > MAX_ZK_PROOF_SIZE) {
-    throw new PearlError('CERTIFICATE_MALFORMED', `proof data too large: ${proofLength} bytes (max ${MAX_ZK_PROOF_SIZE})`);
-  }
+  blobLimit(fp8, version === 4 ? 'fp8 proof_data' : 'proof_data', proofLength, maxProof,
+    `proof data too large: ${proofLength} bytes (max ${maxProof})`);
   const proof = reader.take(proofLength);
-  // Pearl reads the certificate body through a CertificateMaxSize limit.
-  if (reader.offset - start > CERTIFICATE_MAX_SIZE) {
-    throw new PearlError('CERTIFICATE_MALFORMED', `certificate body exceeds ${CERTIFICATE_MAX_SIZE} bytes`);
+  let ancestorHeaders: PearlBlockHeader[] | undefined;
+  if (version === 4) {
+    const count = reader.varIntBig();
+    if (count > BigInt(MAX_CERTIFICATE_V4_ANCESTOR_HEADERS)) {
+      throw new PearlError('CERTIFICATE_MALFORMED', `too many v4 ancestor headers: ${count} (max ${MAX_CERTIFICATE_V4_ANCESTOR_HEADERS})`);
+    }
+    ancestorHeaders = Array.from({ length: Number(count) }, () => parseBlockHeader(reader.take(BLOCK_HEADER_SIZE)));
   }
-  return { version, hash, publicData, proof };
+  if (reader.offset - start > maxBody) {
+    throw new PearlError('CERTIFICATE_MALFORMED', `certificate body exceeds ${maxBody} bytes`);
+  }
+  return ancestorHeaders === undefined ? { version, hash, publicData, proof } : { version, hash, publicData, proof, ancestorHeaders };
 }
 
 /** Serialize a certificate with its version prefix; null encodes version 0. */
-export function serializeCertificate(certificate: PearlCertificate | null): Uint8Array {
+export function serializeCertificate(certificate: PearlCertificate | null, options: BlockCodecOptions = {}): Uint8Array {
   if (certificate === null) return uint32le(0);
+  const fp8 = options.fp8 ?? true;
   const { version, hash, publicData, proof } = certificate;
+  const ancestors = certificate.ancestorHeaders ?? [];
   if (hash.length !== HASH_SIZE) {
     throw new PearlError('CERTIFICATE_MALFORMED', `certificate hash must be ${HASH_SIZE} bytes, got ${hash.length}`);
+  }
+  if (version !== 4 && ancestors.length > 0) {
+    throw new PearlError('CERTIFICATE_MALFORMED', `a V${version} certificate carries no ancestor headers`);
   }
   let body: Uint8Array[];
   if (version === 1) {
@@ -183,12 +239,25 @@ export function serializeCertificate(certificate: PearlCertificate | null): Uint
       throw new PearlError('CERTIFICATE_MALFORMED', `public data of ${publicData.length} bytes exceeds max ${PUBLIC_DATA_MAX_SIZE_V2}`);
     }
     body = [hash, uint32le(publicData.length), publicData];
+  } else if (version === 4 && fp8) {
+    body = [hash, uint32le(publicData.length), publicData];
   } else {
     throw new PearlError('CERTIFICATE_MALFORMED', `unsupported certificate version: ${String(version)}`);
   }
-  const out = concat([uint32le(version), ...body, uint32le(proof.length), proof]);
+  const tail = version === 4 ? [varInt(ancestors.length), ...ancestors.map((header) => serializeBlockHeader(header))] : [];
+  const out = concat([uint32le(version), ...body, uint32le(proof.length), proof, ...tail]);
+  // MsgCertificate checks the whole size before the certificate checks its fields.
   if (out.length > CERTIFICATE_MAX_SIZE) {
     throw new PearlError('CERTIFICATE_MALFORMED', `certificate too large: ${out.length} bytes (max ${CERTIFICATE_MAX_SIZE})`);
+  }
+  if (version === 4) {
+    if (ancestors.length > MAX_CERTIFICATE_V4_ANCESTOR_HEADERS) {
+      throw new PearlError('CERTIFICATE_MALFORMED', `too many v4 ancestor headers: ${ancestors.length} (max ${MAX_CERTIFICATE_V4_ANCESTOR_HEADERS})`);
+    }
+    blobLimit(true, 'fp8 public_data', publicData.length, PUBLIC_DATA_MAX_SIZE_V4, '');
+    blobLimit(true, 'fp8 proof_data', proof.length, MAX_ZK_PROOF_SIZE, '');
+  } else if (fp8) {
+    blobLimit(true, 'proof_data', proof.length, MAX_ZK_PROOF_SIZE, '');
   }
   return out;
 }
@@ -200,9 +269,9 @@ export function serializeCertificate(certificate: PearlCertificate | null): Uint
  * Throws when a certificate breaks Pearl's size limits, a transaction is not
  * canonical, or bytes follow the last transaction. The proof is not verified.
  */
-export function parseBlock(bytes: Uint8Array): PearlBlock {
+export function parseBlock(bytes: Uint8Array, options: BlockCodecOptions = {}): PearlBlock {
   const reader = new Reader(bytes);
-  const certificate = readCertificate(reader);
+  const certificate = readCertificate(reader, options.fp8 ?? true);
   const header = parseBlockHeader(reader.take(BLOCK_HEADER_SIZE));
   const count = reader.varInt();
   if (count > MAX_TX_PER_BLOCK) {
@@ -233,45 +302,95 @@ export function parseBlock(bytes: Uint8Array): PearlBlock {
 }
 
 /** Serialize a block with witness data, the encoding Pearl stores and relays. */
-export function serializeBlock(block: PearlBlock): Uint8Array {
+export function serializeBlock(block: PearlBlock, options: BlockCodecOptions = {}): Uint8Array {
   return concat([
-    serializeCertificate(block.certificate),
+    serializeCertificate(block.certificate, options),
     serializeBlockHeader(block.header),
     varInt(block.transactions.length),
     ...block.transactions.map((tx) => tx.toBuffer()),
   ]);
 }
 
-/** Double-SHA256 of the version and public data, as the header commits to it. */
+/** Double-SHA256 of the version and public data, as the header commits to it. V4 ancestor headers are outside it. */
 export function certificateProofCommitment(certificate: PearlCertificate): Uint8Array {
   return doubleSha256(concat([uint32le(certificate.version), certificate.publicData]));
 }
 
-/** Whether a certificate carries more public data than a dense V2 proof. */
+/**
+ * Whether a V2 or V3 certificate carries more public data than a dense
+ * proof. Pearl keeps V1 and V4 outside this classification, so the dense-only
+ * rule never applies to them.
+ */
 export function isMoECertificate(certificate: PearlCertificate): boolean {
-  return certificate.version !== 1 && certificate.publicData.length > PUBLIC_DATA_SIZE_DENSE_V2;
+  return (certificate.version === 2 || certificate.version === 3) && certificate.publicData.length > PUBLIC_DATA_SIZE_DENSE_V2;
 }
 
 /**
- * Checks the binding Pearl requires before verifying a proof: the
+ * The header of the ancestor a V4 proof was keyed by (σ_d), the first 108
+ * bytes of its public data, or null for another version or public data too
+ * short to hold one.
+ */
+export function certificateAncestorHeader(certificate: PearlCertificate): PearlBlockHeader | null {
+  if (certificate.version !== 4 || certificate.publicData.length < BLOCK_HEADER_SIZE) return null;
+  return parseBlockHeader(certificate.publicData.subarray(0, BLOCK_HEADER_SIZE));
+}
+
+// The checks verify_zk_proof_v4 and JobParams::check_ancestry make before
+// they decode the statement or verify the proof, in their order and words.
+function checkV4Ancestry(certificate: PearlCertificate, header: PearlBlockHeader): void {
+  const fail = (message: string): never => {
+    throw new PearlError('BLOCK_CERTIFICATE_INVALID', message);
+  };
+  const { publicData, proof } = certificate;
+  const ancestors = certificate.ancestorHeaders ?? [];
+  if (ancestors.length > MAX_CERTIFICATE_V4_ANCESTOR_HEADERS) fail(`invalid v4 headers length ${(ancestors.length + 1) * BLOCK_HEADER_SIZE}`);
+  if (proof.length > MAX_ZK_PROOF_SIZE) fail('FP8 proof too large');
+  if (publicData.length < PUBLIC_DATA_MIN_SIZE_V4 || publicData.length > PUBLIC_DATA_MAX_SIZE_V4) {
+    fail(`invalid public_data_len ${publicData.length}`);
+  }
+  let child = header;
+  [...ancestors, certificateAncestorHeader(certificate)!].forEach((parent, i) => {
+    if (!equalBytes(child.prevBlock, blockHash(parent))) fail(`v4 ancestor header at depth ${i + 1} does not connect`);
+    child = parent;
+  });
+}
+
+/**
+ * Checks the binding Pearl requires before verifying a proof, in its order:
+ * a V1 to V3 proof within the 60000 bytes those versions keep, the
  * certificate's hash equal to the header hash, the header's proof commitment
- * equal to the certificate's, and a non-empty proof. Genesis blocks are
- * hardcoded and fail these checks.
+ * equal to the certificate's, and public data and proof that are not empty.
+ * For V4 it then checks what Pearl's verifier checks before the proof: a
+ * public data length a statement can have, and ancestor headers that chain
+ * the block, parent first, to the ancestor header in the public data. Genesis
+ * blocks are hardcoded and fail these checks.
  */
 export function checkCertificateBinding(block: PearlBlock): void {
   const { certificate, header } = block;
   if (certificate === null) {
     throw new PearlError('BLOCK_CERTIFICATE_INVALID', 'block has no certificate');
   }
-  if (!equalBytes(certificate.hash, blockHash(header))) {
-    throw new PearlError('BLOCK_CERTIFICATE_INVALID', 'block hash mismatch between certificate and header');
+  if (certificate.version !== 4 && certificate.proof.length > LEGACY_MAX_ZK_PROOF_SIZE) {
+    throw new PearlError('BLOCK_CERTIFICATE_INVALID',
+      `v${certificate.version} proof rejected: legacy proof data too large: ${certificate.proof.length} bytes (max ${LEGACY_MAX_ZK_PROOF_SIZE})`);
   }
-  if (!equalBytes(header.proofCommitment, certificateProofCommitment(certificate))) {
-    throw new PearlError('BLOCK_CERTIFICATE_INVALID', 'proof commitment mismatch between header and certificate');
+  const display = (hash: Uint8Array): string => toHex(Uint8Array.from(hash).reverse());
+  const hash = blockHash(header);
+  if (!equalBytes(certificate.hash, hash)) {
+    throw new PearlError('BLOCK_CERTIFICATE_INVALID', `block hash mismatch: certificate has ${display(certificate.hash)}, header has ${display(hash)}`);
+  }
+  const commitment = certificateProofCommitment(certificate);
+  if (!equalBytes(header.proofCommitment, commitment)) {
+    throw new PearlError('BLOCK_CERTIFICATE_INVALID',
+      `proof commitment mismatch: header has ${display(header.proofCommitment)}, certificate has ${display(commitment)}`);
+  }
+  if (certificate.publicData.length === 0) {
+    throw new PearlError('BLOCK_CERTIFICATE_INVALID', 'empty public data');
   }
   if (certificate.proof.length === 0) {
     throw new PearlError('BLOCK_CERTIFICATE_INVALID', 'empty proof data');
   }
+  if (certificate.version === 4) checkV4Ancestry(certificate, header);
 }
 
 function merkleRoot(hashes: Uint8Array[]): Uint8Array {

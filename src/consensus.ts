@@ -41,6 +41,7 @@ const active = (forkHeight: number, height: number): boolean => forkHeight !== 0
 /** The certificate version a block at this height must carry (Params.RequiredCertVersion). */
 export function requiredCertVersion(network: PearlNetwork, height: number): CertificateVersion {
   assertHeight(height);
+  if (active(network.forkHeights.fp8, height)) return 4;
   if (active(network.forkHeights.saltedSeed, height)) return 3;
   if (active(network.forkHeights.moe, height)) return 2;
   return 1;
@@ -51,6 +52,7 @@ export function requiredCertVersion(network: PearlNetwork, height: number): Cert
  * the height, or it carries a MoE proof after the dense-only fork. These are
  * the rules of blockchain.CheckCertificateRules that need no proof; the
  * rank-penalty rule reads the proof's public data and is not checked here.
+ * Pearl does not apply that rule to V4 certificates.
  */
 export function checkCertificateRules(certificate: PearlCertificate | null, network: PearlNetwork, height: number): void {
   if (certificate === null) throw new PearlError('BLOCK_CERTIFICATE_INVALID', 'block has no certificate');

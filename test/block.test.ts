@@ -29,6 +29,8 @@ describe('Pearl blocks', () => {
   for (const expected of vectors.blocks) {
     it(`matches Go for ${expected.name}`, () => {
       const block = parseBlock(hexToBytes(expected.hex));
+      expect(parseBlock(hexToBytes(expected.hex), { fp8: false })).toEqual(block);
+      expect(bytesToHex(serializeBlock(block, { fp8: false }))).toBe(expected.hex);
       expect(bytesToHex(serializeBlock(block))).toBe(expected.hex);
       expect(blockHashHex(block.header)).toBe(expected.hash);
       expect(bytesToHex(serializeCertificate(block.certificate))).toBe(expected.certificateHex);
@@ -66,14 +68,16 @@ describe('Pearl blocks', () => {
 
   for (const expected of vectors.badBlocks) {
     it(`rejects ${expected.name} like Pearl`, () => {
+      expect(() => parseBlock(hexToBytes(expected.hex), { fp8: false })).toThrow();
       expect(() => parseBlock(hexToBytes(expected.hex))).toThrow();
     });
   }
 
   it('uses the same error text as Pearl for certificate limits', () => {
+    // pearl-go.json is generated from master, whose decoder knows no FP8.
     for (const name of ['unknown-certificate-version', 'public-data-over-limit', 'proof-over-limit']) {
       const expected = vectors.badBlocks.find((item) => item.name === name)!;
-      expect(() => parseBlock(hexToBytes(expected.hex))).toThrow(expected.error);
+      expect(() => parseBlock(hexToBytes(expected.hex), { fp8: false })).toThrow(expected.error);
     }
   });
 
