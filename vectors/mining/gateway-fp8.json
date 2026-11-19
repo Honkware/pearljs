@@ -1,0 +1,151 @@
+{
+  "source": "github.com/pearl-research-labs/pearl miner/pearl-gateway (fp8-scheme)",
+  "commit": "1dd75a52e073b4a67079c7b6758228d71865ccea",
+  "jobs": [
+    {
+      "incomplete_header_bytes": "JTA7RlFcZ3J9iJOeqbS/ytXg6/YBDBciLThDTllkb3qFkJumsbzH0t3o8/4JFB8qNUBLVmFsd4KNmKOuucTP2uXw+wYRHCcyPUhTXg==",
+      "target": 57896037716911750921221705069588091649609539881711309849342236841432341020672,
+      "cert_version": 3,
+      "ancestor_headers": []
+    },
+    {
+      "incomplete_header_bytes": "SlVga3aBjJeirbjDztnk7/oFEBsmMTxHUl1oc36JlJ+qtcDL1uHs9wINGCMuOURPWmVwe4aRnKeyvcjT3un0/woVICs2QUxXYm14gw==",
+      "target": 26959535291011309493156476344723991336010898738574164086137773096960,
+      "cert_version": 1,
+      "ancestor_headers": []
+    },
+    {
+      "incomplete_header_bytes": "b3qFkJumsbzH0t3o8/4JFB8qNUBLVmFsd4KNmKOuucTP2uXw+wYRHCcyPUhTXml0f4qVoKu2wczX4u34Aw4ZJC86RVBbZnF8h5KdqA==",
+      "target": 4660,
+      "cert_version": 2,
+      "ancestor_headers": []
+    },
+    {
+      "incomplete_header_bytes": "lJ+qtcDL1uHs9wINGCMuOURPWmVwe4aRnKeyvcjT3un0/woVICs2QUxXYm14g46ZpK+6xdDb5vH8BxIdKDM+SVRfanWAi5ahrLfCzQ==",
+      "target": 13803387381289459017682813806526367234469899049245372561213794136621056,
+      "cert_version": 4,
+      "ancestor_headers": [
+        "CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+Lp8Pf+BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ+mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O/2",
+        "PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30+wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL/GzdTb4unw9/4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8/oBCA8WHSQr",
+        "c3qBiI+WnaSrsrnAx87V3OPq8fj/Bg0UGyIpMDc+RUxTWmFob3Z9hIuSmaCnrrW8w8rR2N/m7fT7AgkQFx4lLDM6QUhPVl1ka3J5gIeOlZyjqrG4v8bN1Nvi6fD3/gUMExohKC82PURLUllg",
+        "qK+2vcTL0tng5+71/AMKERgfJi00O0JJUFdeZWxzeoGIj5adpKuyucDHztXc4+rx+P8GDRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3+bt9PsCCRAXHiUsMzpBSE9WXWRrcnmAh46V"
+      ]
+    }
+  ],
+  "targets": [
+    {
+      "bits": 486604799,
+      "target": "26959535291011309493156476344723991336010898738574164086137773096960"
+    },
+    {
+      "bits": 545259519,
+      "target": "57896037716911750921221705069588091649609539881711309849342236841432341020672"
+    },
+    {
+      "bits": 503382016,
+      "target": "6901746346790563787434755862277025452451108972170386555162524223799296"
+    },
+    {
+      "bits": 453050367,
+      "target": "411369862228566123857978459849914418579267864052950501802639360"
+    },
+    {
+      "bits": 51524694,
+      "target": "1193046"
+    },
+    {
+      "bits": 76690518,
+      "target": "2452903424"
+    },
+    {
+      "bits": 570425345,
+      "target": "452312848583266388373324160190187140051835877600158453279131187530910662656"
+    },
+    {
+      "bits": 4286578687,
+      "target": "63119144958639986584854293520262832684685737538126762341781715062854652006759578739737695115877080834911536729898108211256216231902763758351724627596798067196203866577586789364514022856089959012026469381002722748489975264028415685723882208353467651862351803217528553851158828320170898323307273515536868083174766327830242362084927718222467008423185204687335210037568092136295480103543386596837793077321393930028906929250321156779059914793971845168900254327862534183282983747461107416786700705915281593002614032021233542099318559748885883681365573294332856023451874423425211080847063825199113186681992371681311588352"
+    }
+  ],
+  "frames": [
+    {
+      "name": "getMiningInfo 0",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"getMiningInfo\", \"id\": 1, \"params\": {}}\n",
+      "response": "{\"jsonrpc\": \"2.0\", \"result\": {\"incomplete_header_bytes\": \"JTA7RlFcZ3J9iJOeqbS/ytXg6/YBDBciLThDTllkb3qFkJumsbzH0t3o8/4JFB8qNUBLVmFsd4KNmKOuucTP2uXw+wYRHCcyPUhTXg==\", \"target\": 57896037716911750921221705069588091649609539881711309849342236841432341020672, \"cert_version\": 3, \"ancestor_headers\": []}, \"id\": 1}\n"
+    },
+    {
+      "name": "submitPlainProof 0",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"submitPlainProof\", \"id\": 1, \"params\": {\"plain_proof\": \"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJw==\", \"mining_job\": {\"incomplete_header_bytes\": \"JTA7RlFcZ3J9iJOeqbS/ytXg6/YBDBciLThDTllkb3qFkJumsbzH0t3o8/4JFB8qNUBLVmFsd4KNmKOuucTP2uXw+wYRHCcyPUhTXg==\", \"target\": 57896037716911750921221705069588091649609539881711309849342236841432341020672, \"cert_version\": 3, \"ancestor_headers\": []}}}\n",
+      "response": "{\"jsonrpc\": \"2.0\", \"result\": \"submitted\", \"id\": 1}\n"
+    },
+    {
+      "name": "getMiningInfo 1",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"getMiningInfo\", \"id\": 1, \"params\": {}}\n",
+      "response": "{\"jsonrpc\": \"2.0\", \"result\": {\"incomplete_header_bytes\": \"SlVga3aBjJeirbjDztnk7/oFEBsmMTxHUl1oc36JlJ+qtcDL1uHs9wINGCMuOURPWmVwe4aRnKeyvcjT3un0/woVICs2QUxXYm14gw==\", \"target\": 26959535291011309493156476344723991336010898738574164086137773096960, \"cert_version\": 1, \"ancestor_headers\": []}, \"id\": 1}\n"
+    },
+    {
+      "name": "submitPlainProof 1",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"submitPlainProof\", \"id\": 1, \"params\": {\"plain_proof\": \"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJyg=\", \"mining_job\": {\"incomplete_header_bytes\": \"SlVga3aBjJeirbjDztnk7/oFEBsmMTxHUl1oc36JlJ+qtcDL1uHs9wINGCMuOURPWmVwe4aRnKeyvcjT3un0/woVICs2QUxXYm14gw==\", \"target\": 26959535291011309493156476344723991336010898738574164086137773096960, \"cert_version\": 1, \"ancestor_headers\": []}}}\n",
+      "response": "{\"jsonrpc\": \"2.0\", \"result\": \"submitted\", \"id\": 1}\n"
+    },
+    {
+      "name": "getMiningInfo 2",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"getMiningInfo\", \"id\": 1, \"params\": {}}\n",
+      "response": "{\"jsonrpc\": \"2.0\", \"result\": {\"incomplete_header_bytes\": \"b3qFkJumsbzH0t3o8/4JFB8qNUBLVmFsd4KNmKOuucTP2uXw+wYRHCcyPUhTXml0f4qVoKu2wczX4u34Aw4ZJC86RVBbZnF8h5KdqA==\", \"target\": 4660, \"cert_version\": 2, \"ancestor_headers\": []}, \"id\": 1}\n"
+    },
+    {
+      "name": "submitPlainProof 2",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"submitPlainProof\", \"id\": 1, \"params\": {\"plain_proof\": \"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygp\", \"mining_job\": {\"incomplete_header_bytes\": \"b3qFkJumsbzH0t3o8/4JFB8qNUBLVmFsd4KNmKOuucTP2uXw+wYRHCcyPUhTXml0f4qVoKu2wczX4u34Aw4ZJC86RVBbZnF8h5KdqA==\", \"target\": 4660, \"cert_version\": 2, \"ancestor_headers\": []}}}\n",
+      "response": "{\"jsonrpc\": \"2.0\", \"result\": \"submitted\", \"id\": 1}\n"
+    },
+    {
+      "name": "getMiningInfo 3",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"getMiningInfo\", \"id\": 1, \"params\": {}}\n",
+      "response": "{\"jsonrpc\": \"2.0\", \"result\": {\"incomplete_header_bytes\": \"lJ+qtcDL1uHs9wINGCMuOURPWmVwe4aRnKeyvcjT3un0/woVICs2QUxXYm14g46ZpK+6xdDb5vH8BxIdKDM+SVRfanWAi5ahrLfCzQ==\", \"target\": 13803387381289459017682813806526367234469899049245372561213794136621056, \"cert_version\": 4, \"ancestor_headers\": [\"CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+Lp8Pf+BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ+mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O/2\", \"PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30+wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL/GzdTb4unw9/4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8/oBCA8WHSQr\", \"c3qBiI+WnaSrsrnAx87V3OPq8fj/Bg0UGyIpMDc+RUxTWmFob3Z9hIuSmaCnrrW8w8rR2N/m7fT7AgkQFx4lLDM6QUhPVl1ka3J5gIeOlZyjqrG4v8bN1Nvi6fD3/gUMExohKC82PURLUllg\", \"qK+2vcTL0tng5+71/AMKERgfJi00O0JJUFdeZWxzeoGIj5adpKuyucDHztXc4+rx+P8GDRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3+bt9PsCCRAXHiUsMzpBSE9WXWRrcnmAh46V\"]}, \"id\": 1}\n"
+    },
+    {
+      "name": "submitPlainProof 3",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"submitPlainProof\", \"id\": 1, \"params\": {\"plain_proof\": \"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIjJCUmJygpKg==\", \"mining_job\": {\"incomplete_header_bytes\": \"lJ+qtcDL1uHs9wINGCMuOURPWmVwe4aRnKeyvcjT3un0/woVICs2QUxXYm14g46ZpK+6xdDb5vH8BxIdKDM+SVRfanWAi5ahrLfCzQ==\", \"target\": 13803387381289459017682813806526367234469899049245372561213794136621056, \"cert_version\": 4, \"ancestor_headers\": [\"CRAXHiUsMzpBSE9WXWRrcnmAh46VnKOqsbi/xs3U2+Lp8Pf+BQwTGiEoLzY9REtSWWBnbnV8g4qRmJ+mrbS7wsnQ197l7PP6AQgPFh0kKzI5QEdOVVxjanF4f4aNlJuiqbC3vsXM09rh6O/2\", \"PkVMU1phaG92fYSLkpmgp661vMPK0djf5u30+wIJEBceJSwzOkFIT1ZdZGtyeYCHjpWco6qxuL/GzdTb4unw9/4FDBMaISgvNj1ES1JZYGdudXyDipGYn6attLvCydDX3uXs8/oBCA8WHSQr\", \"c3qBiI+WnaSrsrnAx87V3OPq8fj/Bg0UGyIpMDc+RUxTWmFob3Z9hIuSmaCnrrW8w8rR2N/m7fT7AgkQFx4lLDM6QUhPVl1ka3J5gIeOlZyjqrG4v8bN1Nvi6fD3/gUMExohKC82PURLUllg\", \"qK+2vcTL0tng5+71/AMKERgfJi00O0JJUFdeZWxzeoGIj5adpKuyucDHztXc4+rx+P8GDRQbIikwNz5FTFNaYWhvdn2Ei5KZoKeutbzDytHY3+bt9PsCCRAXHiUsMzpBSE9WXWRrcnmAh46V\"]}}}\n",
+      "response": "{\"jsonrpc\": \"2.0\", \"result\": \"submitted\", \"id\": 1}\n"
+    },
+    {
+      "name": "getMiningInfo without params",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"getMiningInfo\", \"id\": 7}",
+      "response": "{\"jsonrpc\": \"2.0\", \"result\": {\"incomplete_header_bytes\": \"JTA7RlFcZ3J9iJOeqbS/ytXg6/YBDBciLThDTllkb3qFkJumsbzH0t3o8/4JFB8qNUBLVmFsd4KNmKOuucTP2uXw+wYRHCcyPUhTXg==\", \"target\": 57896037716911750921221705069588091649609539881711309849342236841432341020672, \"cert_version\": 3, \"ancestor_headers\": []}, \"id\": 7}\n"
+    },
+    {
+      "name": "mining paused",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"getMiningInfo\", \"params\": {}, \"id\": 8}",
+      "response": "{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32001, \"message\": \"mining_paused: no block template available\"}, \"id\": 8}\n"
+    },
+    {
+      "name": "unknown method",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"getwork\", \"params\": {}, \"id\": 9}",
+      "response": "{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32601, \"message\": \"Method getwork not found\"}, \"id\": 9}\n"
+    },
+    {
+      "name": "params on getMiningInfo",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"getMiningInfo\", \"params\": {\"x\": 1}, \"id\": 10}",
+      "response": "{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32602, \"message\": \"Invalid params\", \"data\": \"data must not contain {'x'} properties\"}, \"id\": 10}\n"
+    },
+    {
+      "name": "missing jsonrpc",
+      "request": "{\"method\": \"getMiningInfo\", \"id\": 11}",
+      "response": "{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32600, \"message\": \"Invalid Request\", \"data\": \"data must contain ['jsonrpc'] properties\"}, \"id\": 11}\n"
+    },
+    {
+      "name": "not json",
+      "request": "{getMiningInfo",
+      "response": "{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32700, \"message\": \"Parse error\", \"data\": \"Expecting property name enclosed in double quotes: line 1 column 2 (char 1)\"}, \"id\": null}\n"
+    },
+    {
+      "name": "proof not base64",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"submitPlainProof\", \"id\": 12, \"params\": {\"plain_proof\": \"not base64!\", \"mining_job\": {\"incomplete_header_bytes\": \"JTA7RlFcZ3J9iJOeqbS/ytXg6/YBDBciLThDTllkb3qFkJumsbzH0t3o8/4JFB8qNUBLVmFsd4KNmKOuucTP2uXw+wYRHCcyPUhTXg==\", \"target\": 57896037716911750921221705069588091649609539881711309849342236841432341020672, \"cert_version\": 3, \"ancestor_headers\": []}}}",
+      "response": "{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32602, \"message\": \"Invalid params\", \"data\": \"data.plain_proof must match pattern ^[A-Za-z0-9+/]*={0,2}$\"}, \"id\": 12}\n"
+    },
+    {
+      "name": "job without header",
+      "request": "{\"jsonrpc\": \"2.0\", \"method\": \"submitPlainProof\", \"id\": 13, \"params\": {\"plain_proof\": \"AA==\", \"mining_job\": {\"target\": 1, \"cert_version\": 3}}}",
+      "response": "{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32602, \"message\": \"Invalid params\", \"data\": \"data.mining_job must contain ['incomplete_header_bytes'] properties\"}, \"id\": 13}\n"
+    }
+  ]
+}
