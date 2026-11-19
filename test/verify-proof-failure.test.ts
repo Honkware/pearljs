@@ -10,7 +10,6 @@ import { certificateProofCommitment } from '../src/block.js';
 import type { PearlBlockHeader } from '../src/blockheader.js';
 import { blockHash, parseBlockHeader } from '../src/blockheader.js';
 import { fromHex } from '../src/internal/bytes.js';
-import { verifyProof } from '../src/verify-proof.js';
 
 const v3 = vectors.cases.find((c) => c.name === 'V3 dense')!;
 const proof = fromHex((vectors.proofs as Record<string, string>)[v3.certificate.proof.from]!);
@@ -30,12 +29,14 @@ afterEach(() => {
 
 describe('verifyProof when the module fails', () => {
   it('still verifies a valid proof after 50 hostile certificates', async () => {
+    const { verifyProof } = await import('../src/verify-proof.js');
     // m = 2^21 - 1 with k = 2048 put m*k next to 2^32 and the jackpot at 0, so it passes the target.
     const publicData = fromHex(v3.certificate.publicData);
     new DataView(publicData.buffer).setUint32(148, 2 ** 21 - 1, true);
     publicData.fill(0, 116, 148);
     const hostile = bound(publicData);
-    for (let i = 0; i < 50; i += 1) expect((await verifyProof(hostile.header, hostile.certificate)).valid).toBe(false);
+    // pearld's verdict for it: its proof is another statement's (vectors/mining/proofs-differential.json).
+    for (let i = 0; i < 50; i += 1) expect(await verifyProof(hostile.header, hostile.certificate)).toEqual({ valid: false, outcome: 'rejected', message: 'Proof Invalid' });
     expect(await verifyProof(valid.header, valid.certificate)).toMatchObject({ valid: true, outcome: 'accepted' });
   }, 120_000);
 
@@ -52,6 +53,7 @@ describe('verifyProof when the module fails', () => {
       };
       return { exports };
     }) as typeof WebAssembly.instantiate);
+    // A module instance of its own, with no verifier loaded yet.
     vi.resetModules();
     const { verifyProof } = await import('../src/verify-proof.js');
     // Whichever of the two reaches the module first gets the exception.

@@ -29,4 +29,13 @@ panic = "abort"
 debug = false
 strip = true
 
+# A usize product that does not fit wasm32's 32 bits panics, so the verdict is a
+# loud error rather than a judgment of a different statement. The patch
+# computes every matrix position in u64; this catches anything it missed.
+[profile.release.package.zk-pow]
+overflow-checks = true
+
+[profile.release.package.pearl-blake3]
+overflow-checks = true
+
 [workspace]

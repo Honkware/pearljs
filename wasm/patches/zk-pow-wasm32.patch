@@ -21,9 +21,175 @@
              let key: FirstCircuitKey = bincode::deserialize(
                  chunk
                      .get(..key_size)
+--- src/v2/api/plain_proof.rs
++++ src/v2/api/plain_proof.rs
+@@ -93,12 +93,13 @@
+                     (*proof, ranges)
+                 }
+             };
+-            if let Some(&(_, _, h)) = ranges.iter().find(|(s, e, _)| *s == loc.global_start && *e == loc.global_end) {
++            let (start, end) = (usize::try_from(loc.global_start)?, usize::try_from(loc.global_end)?);
++            if let Some(&(_, _, h)) = ranges.iter().find(|(s, e, _)| *s == start && *e == end) {
+                 return Ok(h);
+             }
+             log::warn!("CV not in proof, computing recursively");
+             proof
+-                .compute_cv(loc.global_start, loc.global_end, ranges, key)
++                .compute_cv(start, end, ranges, key)
+                 .context("Failed to compute CV")
+         })
+         .collect()
+@@ -143,7 +144,7 @@
+     locs.iter()
+         .map(|loc| {
+             let proof = proof_for(p, loc.source)?;
+-            proof.extract_bytes(loc.global_start, 64).map(|b| b.try_into().unwrap())
++            proof.extract_bytes(usize::try_from(loc.global_start)?, 64).map(|b| b.try_into().unwrap())
+         })
+         .collect()
+ }
+--- src/v2/api/sanity_checks.rs
++++ src/v2/api/sanity_checks.rs
+@@ -41,8 +41,9 @@
+         h.is_multiple_of(TILE_H) && w.is_multiple_of(TILE_H),
+         "Inner hash tile dimensions must be divisible by {TILE_H} || h={h} w={w}"
+     );
+-    ensure!(h * w >= 32, "Inner hash size must be >= 32 || h={h} w={w}");
+-    ensure!(h * w <= 256, "Inner hash size must be <= 256 || h={h} w={w}");
++    // Each pattern holds up to 2^24 entries, so h*w is computed in u64 whatever usize is.
++    ensure!(h as u64 * w as u64 >= 32, "Inner hash size must be >= 32 || h={h} w={w}");
++    ensure!(h as u64 * w as u64 <= 256, "Inner hash size must be <= 256 || h={h} w={w}");
+     ensure!(
+         dot_product_len.is_multiple_of(DWORD_SIZE),
+         "dot_product_length must be divisible by DWORD_SIZE={DWORD_SIZE} || got {dot_product_len}"
 --- src/v2/circuit/chip/blake3/program.rs
 +++ src/v2/circuit/chip/blake3/program.rs
-@@ -390,7 +390,7 @@
+@@ -156,14 +156,14 @@
+ 
+ #[derive(Debug, Clone, Copy)]
+ pub struct AuxiliaryMsgLocation {
+-    pub global_start: usize, // index in the global matrix pointing to first byte in message
++    pub global_start: u64, // index in the global matrix pointing to first byte in message
+     pub source: ProofSource,
+ }
+ 
+ #[derive(Debug, Clone, Copy)]
+ pub struct AuxiliaryCvLocation {
+-    pub global_start: usize, // start index in the global matrix
+-    pub global_end: usize,   // end index in the global matrix (exclusive)
++    pub global_start: u64, // start index in the global matrix
++    pub global_end: u64,   // end index in the global matrix (exclusive)
+     pub source: ProofSource,
+ }
+ 
+@@ -184,13 +184,14 @@
+         let mut instructions = Vec::new();
+         let mut msgs: Vec<AuxiliaryMsgLocation> = vec![];
+         let mut cvs: Vec<AuxiliaryCvLocation> = vec![];
+-        let m = params.m() as usize;
++        // Matrix byte positions reach 2^40, so they are u64 whatever usize is.
++        let m = params.m() as u64;
+         let common_dim = params.common_dim();
+-        let total_b_cols = params.total_b_cols();
++        let total_b_cols = params.total_b_cols() as u64;
+ 
+         let cv = recursive_compilation(
+             0,
+-            pearl_blake3::padded_chunk_len(m * common_dim),
++            padded_chunk_len_u64(m * common_dim as u64),
+             m,
+             common_dim,
+             &params.a_rows_indices(),
+@@ -206,7 +207,7 @@
+ 
+         let cv = recursive_compilation(
+             0,
+-            pearl_blake3::padded_chunk_len(total_b_cols * common_dim),
++            padded_chunk_len_u64(total_b_cols * common_dim as u64),
+             total_b_cols,
+             common_dim,
+             &params.b_cols_indices(),
+@@ -226,17 +227,17 @@
+             // (every token is routed to exactly `top_k` experts). We pad the entry
+             // count up to a multiple of 16 so the byte length tiles evenly into the
+             // 64-byte virtual rows the commitment uses below.
+-            let total_routing_entries = params.padded_routing_entries().expect("MoE params present");
+-            let full_routing_size = total_routing_entries * mem::size_of::<u32>();
++            let total_routing_entries = (params.routing_entries().expect("MoE params present") as u64).next_multiple_of(16);
++            let full_routing_size = total_routing_entries * mem::size_of::<u32>() as u64;
+             let routing_row_len = 64; // Just to satisfy the conditions.
+-            let num_rows = full_routing_size / routing_row_len;
++            let num_rows = full_routing_size / routing_row_len as u64;
+             let inner = params.a_inner_indices();
+             let hotspots = routing_blake_hotspot_rows(moe.expert_start_offset(), &inner);
+             num_routing_strips = hotspots.len();
+ 
+             let cv = recursive_compilation(
+                 0,
+-                pearl_blake3::padded_chunk_len(num_rows * routing_row_len),
++                padded_chunk_len_u64(num_rows * routing_row_len as u64),
+                 num_rows,
+                 routing_row_len,
+                 &hotspots,
+@@ -331,11 +332,16 @@
+     }
+ }
+ 
++/// pearl_blake3::padded_chunk_len in u64.
++fn padded_chunk_len_u64(raw_len: u64) -> u64 {
++    raw_len.div_ceil(BLAKE3_CHUNK_LEN as u64) * BLAKE3_CHUNK_LEN as u64
++}
++
+ #[allow(clippy::too_many_arguments)]
+ fn recursive_compilation(
+-    start: usize,
+-    end: usize,
+-    num_rows: usize,
++    start: u64,
++    end: u64,
++    num_rows: u64,
+     row_len: usize,         // row length in bytes
+     hotspot_strips: &[u32], // sorted global row indices into the committed matrix
+     strip_len: usize,       // prefix length of each row exposed to the circuit
+@@ -360,37 +366,37 @@
+         ProofSource::A
+     };
+ 
+-    let is_root = start == 0 && end == pearl_blake3::padded_chunk_len(num_rows * row_len);
++    let is_root = start == 0 && end == padded_chunk_len_u64(num_rows * row_len as u64);
+     let root_flag = is_root as u8 * B3F_ROOT;
+ 
+     // Binary search: first strip whose byte range ends after `start`
+     // i.e. first s where s * row_len + strip_len > start
+-    let lo = hotspot_strips.partition_point(|&s| s as usize * row_len + strip_len <= start);
+-    let intersects_strips = hotspot_strips[lo..].first().is_some_and(|&s| (s as usize * row_len) < end);
++    let lo = hotspot_strips.partition_point(|&s| s as u64 * row_len as u64 + strip_len as u64 <= start);
++    let intersects_strips = hotspot_strips[lo..].first().is_some_and(|&s| (s as u64 * row_len as u64) < end);
+ 
+-    if !intersects_strips && end - start >= BLAKE3_CHUNK_LEN {
++    if !intersects_strips && end - start >= BLAKE3_CHUNK_LEN as u64 {
+         out_cvs.push(AuxiliaryCvLocation {
+             global_start: start,
+             global_end: end,
+             source,
+         });
+         CvType::Auxiliary { idx: out_cvs.len() - 1 }
+-    } else if end - start <= BLAKE3_CHUNK_LEN {
++    } else if end - start <= BLAKE3_CHUNK_LEN as u64 {
+         // end - start < BLAKE3_CHUNK_LEN or end - start == BLAKE3_CHUNK_LEN and intersects_strips
+         debug_assert!(start < end);
+-        let chunk_idx = start / BLAKE3_CHUNK_LEN;
++        let chunk_idx = start / BLAKE3_CHUNK_LEN as u64;
+         let mut is_first_in_chunk = true;
+         let mut msg_start = start;
+         while msg_start < end {
+             let mut is_auxiliary_msg = true;
+-            let block_len = (end - msg_start).min(BLAKE3_MSG_LEN);
+-            let is_last_in_chunk = msg_start + block_len == end;
++            let block_len = (end - msg_start).min(BLAKE3_MSG_LEN as u64) as usize;
++            let is_last_in_chunk = msg_start + block_len as u64 == end;
+             let flags = B3F_KEYED_HASH
+                 | (is_first_in_chunk as u8 * B3F_CHUNK_START)
                  | (is_last_in_chunk as u8 * (B3F_CHUNK_END | root_flag));
              let tweak = Blake3Tweak {
                  counter_low: chunk_idx as u32,
@@ -32,6 +198,26 @@
                  block_len: block_len as u32,
                  flags: flags.into(),
              };
+@@ -398,8 +404,8 @@
+             // Assumes row_len divisible by 64. Since row_len % 64 == 0, a 64-byte block contains at most one row.
+             // Here, we check whether one of the hotpot strings is part of the current block.
+             // The row this block falls in, and its byte offset within that row:
+-            let candidate_row = (msg_start / row_len) as u32;
+-            let offset_in_row = msg_start % row_len;
++            let candidate_row = (msg_start / row_len as u64) as u32;
++            let offset_in_row = (msg_start % row_len as u64) as usize;
+             if offset_in_row < strip_len {
+                 // This block is within the strip prefix of its row — check if that
+                 // row is one of the hotspot strips.
+@@ -440,7 +446,7 @@
+                 });
+             }
+             is_first_in_chunk = false;
+-            msg_start += block_len;
++            msg_start += block_len as u64;
+         }
+         CvType::Instruction {
+             idx: instructions.len() - 1,
 --- src/v2/circuit/circuit_utils.rs
 +++ src/v2/circuit/circuit_utils.rs
 @@ -288,7 +288,8 @@
@@ -44,9 +230,185 @@
              let key: FirstCircuitKey = bincode::deserialize(
                  chunk
                      .get(..key_size)
+--- src/v4/api/layout.rs
++++ src/v4/api/layout.rs
+@@ -33,10 +33,12 @@
+ pub fn check_lottery_layout(h: usize, w: usize) -> Result<()> {
+     ensure!(h >= MIN_TILE_ROWS, "h must be >= {MIN_TILE_ROWS} || h={h}");
+     ensure!(w >= MIN_TILE_COLS, "w must be >= {MIN_TILE_COLS} || w={w}");
+-    let tile_elems = h
+-        .checked_mul(w)
++    // h and w are u32 on the wire: in u64 their product never overflows, as on 64-bit.
++    let tile_elems = (h as u64)
++        .checked_mul(w as u64)
+         .ok_or_else(|| anyhow::anyhow!("h*w overflows usize || h={h} w={w}"))?;
+-    ensure!(tile_elems <= MAX_TILE_ELEMS, "h*w must be <= {MAX_TILE_ELEMS} || h={h} w={w}");
++    ensure!(tile_elems <= MAX_TILE_ELEMS as u64, "h*w must be <= {MAX_TILE_ELEMS} || h={h} w={w}");
++    let tile_elems = tile_elems as usize;
+     ensure!(
+         tile_elems >= JACKPOT_ENTRIES * MIN_SUBTILE_ELEMS,
+         "h*w must be >= {} || h={h} w={w}",
+--- src/v4/api/openings.rs
++++ src/v4/api/openings.rs
+@@ -228,7 +228,8 @@
+         let mut sibling_ranges: Vec<(usize, usize)> = cv_locs
+             .iter()
+             .filter(|loc| loc.source == source)
+-            .map(|loc| (loc.global_start, loc.global_end))
++            // Plain-proof openings only; the ZK verifier never builds a schedule.
++            .map(|loc| (usize::try_from(loc.global_start).expect("tree position fits usize"), usize::try_from(loc.global_end).expect("tree position fits usize")))
+             .collect();
+         sibling_ranges.sort_unstable();
+         debug_assert!(
+@@ -419,7 +420,7 @@
+                 // Fully opened: the compiler never emits auxiliary offsets messages.
+                 ProofSource::Offsets => anyhow::bail!("offsets tree cannot source auxiliary messages"),
+             };
+-            proof.extract_bytes(loc.global_start, 64).map(|b| b.try_into().unwrap())
++            proof.extract_bytes(usize::try_from(loc.global_start)?, 64).map(|b| b.try_into().unwrap())
+         })
+         .collect()
+ }
+@@ -461,7 +462,7 @@
+             };
+             ranges
+                 .iter()
+-                .find(|(s, e, _)| *s == loc.global_start && *e == loc.global_end)
++                .find(|(s, e, _)| *s as u64 == loc.global_start && *e as u64 == loc.global_end)
+                 .map(|&(_, _, h)| h)
+                 .ok_or_else(|| {
+                     anyhow::anyhow!(
 --- src/v4/circuit/chip/blake3/program.rs
 +++ src/v4/circuit/chip/blake3/program.rs
-@@ -637,7 +637,7 @@
+@@ -267,14 +267,14 @@
+ 
+ #[derive(Debug, Clone, Copy)]
+ pub struct AuxiliaryMsgLocation {
+-    pub global_start: usize, // index in the global matrix pointing to first byte in message
++    pub global_start: u64, // index in the global matrix pointing to first byte in message
+     pub source: ProofSource,
+ }
+ 
+ #[derive(Debug, Clone, Copy)]
+ pub struct AuxiliaryCvLocation {
+-    pub global_start: usize, // start index in the global matrix
+-    pub global_end: usize,   // end index in the global matrix (exclusive)
++    pub global_start: u64, // start index in the global matrix
++    pub global_end: u64,   // end index in the global matrix (exclusive)
+     pub source: ProofSource,
+ }
+ 
+@@ -299,8 +299,9 @@
+         let mut instructions = Vec::new();
+         let mut msgs: Vec<AuxiliaryMsgLocation> = vec![];
+         let mut cvs: Vec<AuxiliaryCvLocation> = vec![];
+-        let m = params.m() as usize;
+-        let total_b_cols = params.n() as usize;
++        // Tree byte positions reach 2^40, so row counts and positions are u64 whatever usize is.
++        let m = params.m() as u64;
++        let total_b_cols = params.n() as u64;
+ 
+         // Committed row stride and exposed strip prefix of the values trees:
+         // prequant commits 1 byte per int8 element and exposes full rows.
+@@ -312,7 +313,7 @@
+         fn section(
+             row_bytes: usize,
+             strip_bytes: usize,
+-            num_rows: usize,
++            num_rows: u64,
+             hotspots: &[u32],
+             source: ProofSource,
+             strip_idx_base: usize,
+@@ -323,7 +324,7 @@
+         ) -> usize {
+             let cv = recursive_compilation(
+                 0,
+-                hash_id.padded_len(num_rows * row_bytes),
++                padded_len_u64(hash_id, num_rows * row_bytes as u64),
+                 num_rows,
+                 row_bytes,
+                 hotspots,
+@@ -405,11 +406,11 @@
+             // Routing is jagged: `Rflat` holds exactly `O_{e-1}` u32 entries.
+             // We pad the entry count up to a multiple of 16 so the byte length tiles
+             // evenly into the 64-byte virtual rows the commitment uses below.
+-            let total_routing_entries = params.num_padded_routing_entries().expect("MoE params present");
+-            let full_routing_size = total_routing_entries * mem::size_of::<u32>();
++            let total_routing_entries = params.num_padded_routing_entries().expect("MoE params present") as u64;
++            let full_routing_size = total_routing_entries * mem::size_of::<u32>() as u64;
+             // Routing and offsets are flat byte strings with no natural row structure, so
+             // both sections below use virtual rows of one Blake3 block (64 bytes) each.
+-            let num_rows = full_routing_size / BLOCK_LEN;
++            let num_rows = full_routing_size / BLOCK_LEN as u64;
+             let hotspots = moe.opened_routing_blocks();
+             num_routing_strips = hotspots.len();
+             let routing_hash_id = params.moe().expect("MoE").hash_id_r;
+@@ -440,7 +441,7 @@
+             let idx = section(
+                 BLOCK_LEN,
+                 BLOCK_LEN,
+-                offsets_rows,
++                offsets_rows as u64,
+                 &all_rows,
+                 ProofSource::Offsets,
+                 0,
+@@ -577,11 +578,17 @@
+     }
+ }
+ 
++/// HashId::padded_len in u64.
++fn padded_len_u64(hash_id: HashId, raw_len: u64) -> u64 {
++    let chunk = hash_id.chunk_len() as u64;
++    raw_len.div_ceil(chunk) * chunk
++}
++
+ #[allow(clippy::too_many_arguments)]
+ fn recursive_compilation(
+-    start: usize,
+-    end: usize,
+-    num_rows: usize,
++    start: u64,
++    end: u64,
++    num_rows: u64,
+     row_len: usize,         // row length in bytes
+     hotspot_strips: &[u32], // sorted global row indices into the committed matrix
+     strip_len: usize,       // prefix length of each row exposed to the circuit
+@@ -592,7 +599,7 @@
+     out_msgs: &mut Vec<AuxiliaryMsgLocation>,
+     out_cvs: &mut Vec<AuxiliaryCvLocation>,
+ ) -> CvType {
+-    let chunk_len = hash_id.chunk_len();
++    let chunk_len = hash_id.chunk_len() as u64;
+     debug_assert!(strip_len <= row_len);
+     // Rows need only tile into whole dwords: a 64-byte block may straddle a row boundary
+     // (handled per dword below), but a dword may not.
+@@ -608,13 +615,13 @@
+     let is_b_matrix = matches!(source, ProofSource::B | ProofSource::BScales);
+     let key_source = if is_b_matrix { KeySource::KeyB } else { KeySource::KeyA };
+ 
+-    let is_root = start == 0 && end == hash_id.padded_len(num_rows * row_len);
++    let is_root = start == 0 && end == padded_len_u64(hash_id, num_rows * row_len as u64);
+     let root_flag = is_root as u8 * B3F_ROOT;
+ 
+     // Binary search: first strip whose byte range ends after `start`
+     // i.e. first s where s * row_len + strip_len > start
+-    let lo = hotspot_strips.partition_point(|&s| s as usize * row_len + strip_len <= start);
+-    let intersects_strips = hotspot_strips[lo..].first().is_some_and(|&s| (s as usize * row_len) < end);
++    let lo = hotspot_strips.partition_point(|&s| s as u64 * row_len as u64 + strip_len as u64 <= start);
++    let intersects_strips = hotspot_strips[lo..].first().is_some_and(|&s| (s as u64 * row_len as u64) < end);
+ 
+     if !intersects_strips && end - start >= chunk_len {
+         out_cvs.push(AuxiliaryCvLocation {
+@@ -630,14 +637,14 @@
+         let mut is_first_in_chunk = true;
+         let mut msg_start = start;
+         while msg_start < end {
+-            let block_len = (end - msg_start).min(BLAKE3_MSG_LEN);
+-            let is_last_in_chunk = msg_start + block_len == end;
++            let block_len = (end - msg_start).min(BLAKE3_MSG_LEN as u64) as usize;
++            let is_last_in_chunk = msg_start + block_len as u64 == end;
+             let flags = B3F_KEYED_HASH
+                 | (is_first_in_chunk as u8 * B3F_CHUNK_START)
                  | (is_last_in_chunk as u8 * (B3F_CHUNK_END | root_flag));
              let tweak = Blake3Tweak {
                  counter_low: chunk_idx as u32,
@@ -55,3 +417,30 @@
                  block_len: block_len as u32,
                  flags: flags.into(),
              };
+@@ -649,13 +656,13 @@
+             // exposed prefix of an opened (hotspot) row.
+             debug_assert_eq!(block_len % DWORD_SIZE, 0);
+             let mat_dwords: [Option<MatDwordId>; 8] = std::array::from_fn(|d| {
+-                let g = msg_start + d * DWORD_SIZE;
+-                if g + DWORD_SIZE > msg_start + block_len {
++                let g = msg_start + (d * DWORD_SIZE) as u64;
++                if g + DWORD_SIZE as u64 > msg_start + block_len as u64 {
+                     return None;
+                 }
+-                let offset_in_row = g % row_len;
++                let offset_in_row = (g % row_len as u64) as usize;
+                 (offset_in_row + DWORD_SIZE <= strip_len)
+-                    .then(|| hotspot_strips.binary_search(&((g / row_len) as u32)).ok())
++                    .then(|| hotspot_strips.binary_search(&((g / row_len as u64) as u32)).ok())
+                     .flatten()
+                     .map(|hotspot_idx| MatDwordId {
+                         is_b_strip: is_b_matrix,
+@@ -711,7 +718,7 @@
+                 out: HashOut::None,
+             });
+             is_first_in_chunk = false;
+-            msg_start += block_len;
++            msg_start += block_len as u64;
+         }
+         CvType::Instruction {
+             idx: instructions.len() - 1,
