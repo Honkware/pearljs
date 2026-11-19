@@ -46,14 +46,21 @@ function privateKey(): Uint8Array {
 }
 
 describeOyster('Oyster', () => {
+  const watching = deriveAccountFromSeed(mnemonicToSeed(OYSTER_MNEMONIC), network);
+  // The suite shares one Oyster, and files before this one may already have
+  // taken receive addresses from it, so the next index is read from Oyster.
+  let firstIndex: number;
   let firstAddress: string;
   beforeAll(async () => {
     await oyster.walletPassphrase(OYSTER_PASSPHRASE, 600);
+    const known = new Set(await oyster.call<string[]>('getaddressesbyaccount', ['default']));
+    firstIndex = 0;
+    while (known.has(watching.deriveAddress(firstIndex))) firstIndex += 1;
     firstAddress = await oyster.getNewAddress();
   });
 
-  it('gives the first BIP86 address pearljs derives from the same mnemonic', () => {
-    expect(firstAddress).toBe(deriveAccountFromSeed(mnemonicToSeed(OYSTER_MNEMONIC), network).deriveAddress(0));
+  it('gives the next BIP86 receive address pearljs derives from the same mnemonic', () => {
+    expect(firstAddress).toBe(watching.deriveAddress(firstIndex));
   });
 
   it('verifies a message pearljs signed', async () => {
@@ -71,7 +78,7 @@ describeOyster('Oyster', () => {
 
   it('verifies a message a pearljs account signed for an Oyster address', async () => {
     const account = deriveSigningAccountFromSeed(mnemonicToSeed(OYSTER_MNEMONIC), network);
-    const signature = account.signMessage(MESSAGE, { index: 0 });
+    const signature = account.signMessage(MESSAGE, { index: firstIndex });
     expect(await oyster.verifyMessage(firstAddress, signature, MESSAGE)).toBe(true);
   });
 
@@ -89,10 +96,11 @@ describeOyster('Oyster', () => {
   });
 
   it('receives a pearljs payment and lists it with amounts in grains', async () => {
-    expect(await oyster.getBalance()).toBe(0n);
-    expect(await oyster.listUnspent()).toEqual([]);
+    const balance = await oyster.getBalance();
+    const coins = (await oyster.listUnspent(0)).length;
+    expect(await oyster.getUnconfirmedBalance()).toBe(0n);
     const second = await oyster.getNewAddress('default');
-    expect(second).toBe(deriveAccountFromSeed(mnemonicToSeed(OYSTER_MNEMONIC), network).deriveAddress(1));
+    expect(second).toBe(watching.deriveAddress(firstIndex + 1));
     const payments = [
       { script: toOutputScript(firstAddress, network), value: 500_000_000n },
       { script: toOutputScript(second, network), value: 123_456_789n },
@@ -102,9 +110,9 @@ describeOyster('Oyster', () => {
 
     const unspent = await eventually(
       () => oyster.listUnspent(),
-      (list) => list.length === 2,
+      (list) => list.length === coins + 2,
     );
-    expect([...unspent].sort((a, b) => a.vout - b.vout)).toEqual([
+    expect(unspent.filter((utxo) => utxo.txid === txid).sort((a, b) => a.vout - b.vout)).toEqual([
       {
         txid,
         vout: 0,
@@ -126,11 +134,11 @@ describeOyster('Oyster', () => {
         spendable: true,
       },
     ]);
-    expect(await oyster.getBalance()).toBe(623_456_789n);
-    expect(await oyster.getBalance('default', 1)).toBe(623_456_789n);
-    // Not yet two blocks deep.
-    expect(await oyster.getBalance('*', 2)).toBe(0n);
-    expect(await oyster.listUnspent(2)).toEqual([]);
+    expect(await oyster.getBalance()).toBe(balance + 623_456_789n);
+    expect(await oyster.getBalance('default', 1)).toBe(balance + 623_456_789n);
+    // Not yet two blocks deep, unlike any coin Oyster held before.
+    expect(await oyster.getBalance('*', 2)).toBe(balance);
+    expect((await oyster.listUnspent(2)).filter((utxo) => utxo.txid === txid)).toEqual([]);
     expect(await oyster.listUnspent(0, 1)).toHaveLength(2);
     expect(await oyster.getUnconfirmedBalance()).toBe(0n);
     expect(await oyster.getUnconfirmedBalance('default')).toBe(0n);
