@@ -6,7 +6,12 @@
       "BASIC_FILTER_M",
       "BASIC_FILTER_P",
       "BASIC_FILTER_TYPE",
+      "BLOCKBOOK_MAX_HISTORY_OFFSET",
+      "BLOCKBOOK_MAX_PAGE_SIZE",
+      "BLOCKBOOK_MAX_TXS_PAGE_SIZE",
       "BLOCK_HEADER_SIZE",
+      "BlockbookClient",
+      "BlockbookWsClient",
       "CERTIFICATE_MAX_SIZE",
       "COINBASE_MATURITY",
       "DEFAULT_ANCESTOR_COUNT_LIMIT",
@@ -124,6 +129,7 @@
       "blockStrippedSize",
       "blockSubsidy",
       "blockVsize",
+      "blockbookBackend",
       "buildBasicFilter",
       "buildFilter",
       "buildPayment",
@@ -216,6 +222,7 @@
       "invoicePaymentFromJson",
       "invoicePaymentToJson",
       "invoiceToJson",
+      "isBlockbookNotFound",
       "isDisabledOpcode",
       "isDust",
       "isLimitedUserRefusal",
@@ -251,6 +258,7 @@
       "paidTo",
       "parseBlock",
       "parseBlockHeader",
+      "parseBlockbookJson",
       "parseMultiA",
       "parseP2mrControlBlock",
       "parsePearl",
@@ -363,6 +371,28 @@
       "BlockTemplateRequest",
       "BlockTemplateTransaction",
       "BlockWithTransactionsResult",
+      "BlockbookAccountInfoParams",
+      "BlockbookAddress",
+      "BlockbookAddressQuery",
+      "BlockbookAddressTx",
+      "BlockbookBackendOptions",
+      "BlockbookBalanceHistory",
+      "BlockbookBlock",
+      "BlockbookChain",
+      "BlockbookClientOptions",
+      "BlockbookDetails",
+      "BlockbookMempool",
+      "BlockbookNewBlock",
+      "BlockbookPaging",
+      "BlockbookStatus",
+      "BlockbookTx",
+      "BlockbookUtxo",
+      "BlockbookVin",
+      "BlockbookVout",
+      "BlockbookWsClientOptions",
+      "BlockbookWsInfo",
+      "BlockbookXpubAddress",
+      "BlockbookXpubQuery",
       "BlockchainInfo",
       "CallOptions",
       "CertificateVersion",
@@ -675,6 +705,15 @@
       "Watched"
     ]
   },
+  "backend-blockbook": {
+    "values": [
+      "blockbookBackend"
+    ],
+    "types": [
+      "BlockbookBackendOptions",
+      "BlockbookChain"
+    ]
+  },
   "backend-filters": {
     "values": [
       "connectPearld",
@@ -727,6 +766,39 @@
       "V4MoeStatement",
       "V4Operand",
       "V4Statement"
+    ]
+  },
+  "blockbook": {
+    "values": [
+      "BLOCKBOOK_MAX_HISTORY_OFFSET",
+      "BLOCKBOOK_MAX_PAGE_SIZE",
+      "BLOCKBOOK_MAX_TXS_PAGE_SIZE",
+      "BlockbookClient",
+      "BlockbookWsClient",
+      "isBlockbookNotFound",
+      "parseBlockbookJson"
+    ],
+    "types": [
+      "BlockbookAccountInfoParams",
+      "BlockbookAddress",
+      "BlockbookAddressQuery",
+      "BlockbookAddressTx",
+      "BlockbookBalanceHistory",
+      "BlockbookBlock",
+      "BlockbookClientOptions",
+      "BlockbookDetails",
+      "BlockbookMempool",
+      "BlockbookNewBlock",
+      "BlockbookPaging",
+      "BlockbookStatus",
+      "BlockbookTx",
+      "BlockbookUtxo",
+      "BlockbookVin",
+      "BlockbookVout",
+      "BlockbookWsClientOptions",
+      "BlockbookWsInfo",
+      "BlockbookXpubAddress",
+      "BlockbookXpubQuery"
     ]
   },
   "blockheader": {
@@ -1361,6 +1433,7 @@
       "SimulatedChain",
       "SimulatedRefusal",
       "TEST_MNEMONIC",
+      "simulatedBlockbook",
       "testAccount",
       "testAddress",
       "testKey",
@@ -1373,6 +1446,9 @@
       "MineOptions",
       "ReorgOptions",
       "SimulatedBlock",
+      "SimulatedBlockbook",
+      "SimulatedBlockbookSocket",
+      "SimulatedBlockbookWebSocket",
       "SimulatedChainOptions",
       "SimulatedCoin",
       "SimulatedEvent",
