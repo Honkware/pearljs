@@ -1,0 +1,1446 @@
+{
+  "commit": "1dd75a52e073b4a67079c7b6758228d71865ccea",
+  "jackpotChecks": [
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 16,
+      "jackpot": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffbff0300",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 16,
+      "jackpot": "00000000000000000000000000000000000000000000000000000000fcff0300",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 486604799,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "01000000000000000000000000000000000000000000000000000000fcff0300",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 486604799,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 16,
+      "jackpot": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffff7ff0700",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 16,
+      "jackpot": "00000000000000000000000000000000000000000000000000000000f8ff0700",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 486604799,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "01000000000000000000000000000000000000000000000000000000f8ff0700",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 486604799,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 32,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 32,
+      "jackpot": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffbff03",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 32,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000fcff03",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 486604799,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 32,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000fcff03",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 486604799,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 32,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 1,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 1,
+      "jackpot": "fffffffffffffffffffffffffffffffffffffffffffffffffffffeff00000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 1,
+      "jackpot": "0000000000000000000000000000000000000000000000000000ffff00000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 486604799,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 1,
+      "jackpot": "0100000000000000000000000000000000000000000000000000ffff00000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 486604799,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 1,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 65536,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 65536,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffff0000fffffeff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 65536,
+      "jackpot": "00000000000000000000000000000000000000000000000000000100fffffeff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 486604799,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 65536,
+      "jackpot": "01000000000000000000000000000000000000000000000000000100fffffeff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 486604799,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 65536,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 3,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 3,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffff96ff68000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 486604799,
+      "error": null,
+      "h": 3,
+      "jackpot": "000000000000000000000000000000000000000000000000000097ff68000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 486604799,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 3,
+      "jackpot": "010000000000000000000000000000000000000000000000000097ff68000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 486604799,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 3,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 16,
+      "jackpot": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffbff07",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000fcff07",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 503447551,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000fcff07",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 503447551,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 16,
+      "jackpot": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7ff0f",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000f8ff0f",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 503447551,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000f8ff0f",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 503447551,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 32,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 32,
+      "jackpot": "feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 32,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 32,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 32,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 1,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 1,
+      "jackpot": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffeff010000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 1,
+      "jackpot": "000000000000000000000000000000000000000000000000000000ffff010000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 503447551,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 1,
+      "jackpot": "010000000000000000000000000000000000000000000000000000ffff010000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 503447551,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 1,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 65536,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 65536,
+      "jackpot": "feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 65536,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 65536,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 65536,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 3,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 3,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffff96ffd10000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 503447551,
+      "error": null,
+      "h": 3,
+      "jackpot": "00000000000000000000000000000000000000000000000000000097ffd10000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 503447551,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 3,
+      "jackpot": "01000000000000000000000000000000000000000000000000000097ffd10000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 503447551,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 3,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffbfff3f0000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 16,
+      "jackpot": "000000000000000000000000000000000000000000000000000000c0ff3f0000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 470810608,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "010000000000000000000000000000000000000000000000000000c0ff3f0000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 470810608,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffff7fff7f0000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 16,
+      "jackpot": "00000000000000000000000000000000000000000000000000000080ff7f0000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 470810608,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "01000000000000000000000000000000000000000000000000000080ff7f0000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 470810608,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 32,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 32,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffbfff3f00",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 32,
+      "jackpot": "00000000000000000000000000000000000000000000000000000000c0ff3f00",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 470810608,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 32,
+      "jackpot": "01000000000000000000000000000000000000000000000000000000c0ff3f00",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 470810608,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 32,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 1,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 1,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffefff0f00000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 1,
+      "jackpot": "00000000000000000000000000000000000000000000000000f0ff0f00000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 470810608,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 1,
+      "jackpot": "01000000000000000000000000000000000000000000000000f0ff0f00000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 470810608,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 1,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 65536,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 65536,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffff0f00f0ffefff0f",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 65536,
+      "jackpot": "000000000000000000000000000000000000000000000000001000f0ffefff0f",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 470810608,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 65536,
+      "jackpot": "010000000000000000000000000000000000000000000000001000f0ffefff0f",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 470810608,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 65536,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 3,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 3,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffff6ff98f06000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 470810608,
+      "error": null,
+      "h": 3,
+      "jackpot": "0000000000000000000000000000000000000000000000000070f98f06000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 470810608,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 3,
+      "jackpot": "0100000000000000000000000000000000000000000000000070f98f06000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 470810608,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 3,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 16,
+      "jackpot": "feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 16,
+      "jackpot": "feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 32,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 32,
+      "jackpot": "feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 32,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 32,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 32,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 1,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 1,
+      "jackpot": "fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeff7f",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 1,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000ffff7f",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 545259519,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 1,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000ffff7f",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 545259519,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 1,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 65536,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 65536,
+      "jackpot": "feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 65536,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 65536,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 65536,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 3,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 3,
+      "jackpot": "feffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 3,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 3,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 545259519,
+      "error": null,
+      "h": 3,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 494927872,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000000000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 494927872,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 494927872,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000000000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 494927872,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 32,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 32,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 32,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 494927872,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 32,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000000000",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 494927872,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 32,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 1,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 1,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 1,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 494927872,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 1,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 494927872,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 1,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 65536,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 65536,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 65536,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 494927872,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 65536,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000000000",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 494927872,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 65536,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 3,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 3,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 494927872,
+      "error": null,
+      "h": 3,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 494927872,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 3,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 494927872,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 3,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 0,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000000000",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 0,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1024,
+      "w": 16
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 16,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 0,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000000000",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 0,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 16,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 4096,
+      "w": 8
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 32,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 32,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 32,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 0,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 32,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000000000",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 0,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 32,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 65536,
+      "w": 32
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 1,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 1,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 1,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 0,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 1,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000000000",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 0,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 1,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 1,
+      "w": 1
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 65536,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 65536,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 65536,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 0,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 65536,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000000000",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 0,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 65536,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 2,
+      "w": 65536
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 3,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 3,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 0,
+      "error": null,
+      "h": 3,
+      "jackpot": "0000000000000000000000000000000000000000000000000000000000000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 0,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 3,
+      "jackpot": "0100000000000000000000000000000000000000000000000000000000000000",
+      "k": 7,
+      "w": 5
+    },
+    {
+      "bits": 0,
+      "error": "Jackpot condition not satisfied: hash does not meet difficulty target",
+      "h": 3,
+      "jackpot": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "k": 7,
+      "w": 5
+    }
+  ],
+  "source": "github.com/pearl-research-labs/pearl zk-pow (fp8-scheme)"
+}
