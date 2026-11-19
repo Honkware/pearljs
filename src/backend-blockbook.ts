@@ -63,7 +63,9 @@ export interface BlockbookBackendOptions {
    * Download each block a transaction is said to be in, once, and check that
    * it hashes to the block hash given, that its merkle root commits to the
    * transaction, and its witness commitment, certificate binding and bits as
-   * pearld checks them before it verifies a proof. Default true.
+   * pearld checks them before it verifies a proof. Default true. When false,
+   * a transaction's block and height are the server's word, held only to the
+   * `crossCheck` servers, each asked where it places the transaction.
    */
   verifyBlocks?: boolean;
   /**
@@ -165,7 +167,8 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   const transactions = new Map<string, { tx: Transaction; hex: string }>();
   // Blocks by hash, once checked: the height they were claimed at, their time and txids.
   const blocks = new Map<string, { height: number; time: number; txids: Set<string> }>();
-  // Heights and hashes every cross-check server has confirmed, since the last reorganization seen.
+  // Heights and hashes every cross-check server has confirmed, and without verifyBlocks the placements they agree
+  // on, since the last reorganization seen.
   const confirmed = new Set<string>();
   let anchor: BlockRef | null = null;
 
@@ -275,6 +278,19 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
     return record;
   };
 
+  // Without the block, only the cross-check servers can say a transaction is in it: each must place it there too.
+  const placedAlike = async (txid: string, at: NonNullable<Listed['at']>): Promise<void> => {
+    const key = `${txid}@${at.height}:${at.hash}`;
+    if (confirmed.has(key)) return;
+    await Promise.all(others.map(async (_, i) => {
+      const theirs = await ask(i, (other) => other.getTransaction(txid).catch((err: unknown) => (isBlockbookNotFound(err) ? null : Promise.reject(err))));
+      if (theirs?.blockHeight !== at.height || theirs.blockHash !== at.hash) {
+        throw disagree(i, `places ${txid} ${theirs === null ? 'nowhere' : `at height ${String(theirs.blockHeight)} in block ${String(theirs.blockHash)}`}, where the server places it at height ${at.height} in ${at.hash}`);
+      }
+    }));
+    confirmed.add(key);
+  };
+
   // Where a transaction is, held to the block and the cross-check servers.
   const place = async (txid: string, at: NonNullable<Listed['at']>, upTo: BlockRef): Promise<BlockRef> => {
     if (at.height > upTo.height) throw bad(`places ${txid} at height ${at.height}, above its tip at ${upTo.height}`);
@@ -283,6 +299,8 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
       const block = await checkedBlock(at.hash, at.height);
       if (!block.txids.has(txid)) throw bad(`places ${txid} in block ${at.hash}, which does not hold it`);
       time = block.time;
+    } else {
+      await placedAlike(txid, at);
     }
     await confirmAt(at.height, at.hash);
     return time > 0 ? { height: at.height, hash: at.hash, time } : { height: at.height, hash: at.hash };

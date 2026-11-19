@@ -410,6 +410,32 @@ describe('cross-checked against other Blockbooks', () => {
     expect(checked.result).toBe(checked.txid);
   });
 
+  it('holds where a transaction is to the other servers when it does not download blocks', async () => {
+    const chain = new FakeChain({ network, premine: 4 });
+    const pending = chain.pay(r0, 8000n);
+    const tip = chain.tip;
+    const witness = serve(chain);
+    // A mempool payment shown in the tip block, a real block that does not hold it.
+    const confirming = serve(chain, {
+      current: (path, body) => (path === `api/v2/tx/${pending.getId()}` ? { ...(body as object), blockHeight: tip.height, blockHash: tip.hash, confirmations: 1 } : body),
+    });
+    expect(await confirming.backend({ verifyBlocks: false }).getTransaction(pending.getId())).toMatchObject({ block: { height: tip.height } });
+    await expect(confirming.backend({ verifyBlocks: false, crossCheck: [witness.client] }).getTransaction(pending.getId())).rejects.toMatchObject({ code: 'CROSS_CHECK_FAILED' });
+    // A confirmed payment moved to an older block in an address's history.
+    chain.mine(1);
+    const older = chain.blocks[2]!;
+    const moving = serve(chain, {
+      current: (path, body) => {
+        if (!path.startsWith(`api/v2/address/${r0}`)) return body;
+        const reply = body as { transactions?: { blockHash: string; blockHeight: number }[] };
+        return { ...reply, transactions: reply.transactions?.map((tx) => ({ ...tx, blockHash: older.hash, blockHeight: older.height })) };
+      },
+    });
+    expect((await moving.backend({ verifyBlocks: false }).getHistory(r0))[0]!.block).toMatchObject({ height: older.height });
+    await expect(moving.backend({ verifyBlocks: false, crossCheck: [witness.client] }).getHistory(r0)).rejects.toMatchObject({ code: 'CROSS_CHECK_FAILED' });
+    expect((await serve(chain).backend({ verifyBlocks: false, crossCheck: [witness.client] }).getHistory(r0))[0]!.block).toMatchObject({ height: chain.height, hash: chain.tip.hash });
+  });
+
   it('reads no further than the lowest server, and fails when they are too far apart', async () => {
     const a = setup();
     const chainB = new FakeChain({ network, premine: 4 });
