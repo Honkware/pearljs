@@ -130,7 +130,7 @@ export type RecoveryReasonCode =
   | 'P2MR_NOT_SEEN'
   /** Addresses were used, and everything they held has been spent. */
   | 'SPENT'
-  /** No address of any variant has ever been paid. */
+  /** No address of any variant has ever been paid, and the P2MR addresses given hold nothing. */
   | 'NO_ACTIVITY';
 
 /** One finding of a diagnosis, in plain words. */
@@ -364,7 +364,7 @@ function describe(variant: DerivationVariant): string {
   }
 }
 
-function buildReport(network: PearlNetwork, gap: number, variants: VariantReport[], p2mrUnseen: string[]): RecoveryReport {
+function buildReport(network: PearlNetwork, gap: number, variants: VariantReport[], p2mr: { unseen: string[]; balance: WalletBalance }): RecoveryReport {
   const reasons: RecoveryReason[] = [];
   const used = (report: VariantReport): number => report.receive.used.length + report.change.used.length;
   const active = variants.filter((report) => used(report) > 0);
@@ -390,20 +390,20 @@ function buildReport(network: PearlNetwork, gap: number, variants: VariantReport
       });
     }
   }
-  const balance = addBalances(variants.map((report) => report.balance));
+  const balance = addBalances([...variants.map((report) => report.balance), p2mr.balance]);
   if (balance.immature > 0n) {
     reasons.push({ code: 'IMMATURE_COINBASE', message: `${formatPearl(balance.immature)} PRL of coinbase outputs needs ${network.coinbaseMaturity} confirmations before it counts as spendable` });
   }
   if (balance.unconfirmed > 0n) {
     reasons.push({ code: 'UNCONFIRMED', message: `${formatPearl(balance.unconfirmed)} PRL is in the mempool and not yet in a block` });
   }
-  if (p2mrUnseen.length > 0) {
-    reasons.push({ code: 'P2MR_NOT_SEEN', message: `the backend could not answer for ${p2mrUnseen.length} P2MR address(es); pearld's address index holds Taproot addresses only, so use a backend that scans block filters`, addresses: p2mrUnseen });
+  if (p2mr.unseen.length > 0) {
+    reasons.push({ code: 'P2MR_NOT_SEEN', message: `the backend could not answer for ${p2mr.unseen.length} P2MR address(es); pearld's address index holds Taproot addresses only, so use a backend that scans block filters`, addresses: p2mr.unseen });
   }
   if (active.length > 0 && total(balance) === 0n) {
     reasons.push({ code: 'SPENT', message: 'addresses of this seed were paid, and everything they held has since been spent' });
   }
-  if (active.length === 0) {
+  if (active.length === 0 && total(p2mr.balance) === 0n) {
     reasons.push({
       code: 'NO_ACTIVITY',
       message: `no address of any variant has been paid within ${gap} addresses; check the phrase and network, and that the backend has caught up with the chain`,
@@ -446,9 +446,7 @@ async function run(
     );
   }
   const p2mr = await checkP2mr(backend, options.p2mrAddresses ?? []);
-  const report = buildReport(backend.network, gap, reports, p2mr.unseen);
-  report.balance = addBalances([report.balance, p2mr.balance]);
-  return report;
+  return buildReport(backend.network, gap, reports, p2mr);
 }
 
 /**

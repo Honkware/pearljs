@@ -246,6 +246,29 @@ describe('diagnoseSeed', () => {
     expect(report.reasons[0]!.addresses).toEqual([p2mr]);
   });
 
+  it('counts coins on the P2MR addresses it is given before deciding there is no activity', async () => {
+    const { chain } = chainWithFunds();
+    const p2mr = vectors.addresses.find((item) => item.network === 'regtest' && item.kind === 'p2mr')!.address;
+    chain.pay(p2mr, parsePearl('5'));
+    chain.mine();
+    const report = await diagnoseSeed(ABANDON, chain, { gap: 5, accounts: 1, otherCoinType: false, p2mrAddresses: [p2mr] });
+    expect(report.balance.confirmed).toBe(parsePearl('5'));
+    expect(report.reasons).toEqual([]);
+
+    const spent = new SimulatedChain();
+    const main = deriveAccountFromSeed(mnemonicToSeed(ABANDON), spent.network, 0);
+    spent.pay(main.deriveAddress(0), parsePearl('1'));
+    spent.mine();
+    spent.pay(p2mr, parsePearl('2'));
+    const key = bip32.fromSeed(mnemonicToSeed(ABANDON)).derivePath("m/86'/1'/0'/0/0").privateKey!;
+    const sweep = sweepKey(key, { network: spent.network, utxos: await spent.getUtxos([main.deriveAddress(0)]), destination: spent.faucet.address, feeRate: 2000n });
+    spent.accept(sweep.transaction);
+    spent.mine();
+    const after = await diagnoseSeed(ABANDON, spent, { gap: 5, accounts: 1, otherCoinType: false, p2mrAddresses: [p2mr] });
+    expect(after.balance.confirmed).toBe(parsePearl('2'));
+    expect(after.reasons.map((reason) => reason.code)).toEqual([]);
+  });
+
   it('sends only addresses to the backend', async () => {
     const { chain } = chainWithFunds();
     const asked: string[] = [];
