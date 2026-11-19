@@ -1,0 +1,9 @@
+{
+  "source": "Coinbase input scripts of mainnet blocks, from pearld getblock verbosity 2 on 2026-11-19. Each puts its tag, or an 8-byte extra nonce before it, as raw bytes rather than as a push.",
+  "scripts": [
+    { "height": 52427, "hex": "03cbcc00002f503253482f706561726c642f", "tag": "/P2SH/pearld/" },
+    { "height": 59630, "hex": "03eee800b1900d116472eb8a0d2f503253482f706561726c642f", "tag": "/P2SH/pearld/" },
+    { "height": 59639, "hex": "03f7e80004b3415a6a2f706561726c2d706f6f6c2f", "tag": "/pearl-pool/" },
+    { "height": 63200, "hex": "03e0f60014961c3891ede0020d2f503253482f706561726c642f", "tag": "/P2SH/pearld/" }
+  ]
+}

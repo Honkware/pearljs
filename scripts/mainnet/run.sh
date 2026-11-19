@@ -7,4 +7,4 @@ PEARLD_PASS="$(sed -n 's/^PEARLD_PASS=//p' "$HOME/pearl-work/mainnet/secrets.env
 export PEARLD_PASS
 script="$1"; shift
 case "$script" in /*) ;; *) script="$here/$script" ;; esac
-exec node "$script" "$@"
+exec node --max-old-space-size=24576 "$script" "$@"

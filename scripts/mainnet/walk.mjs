@@ -7,10 +7,14 @@
 //
 //   scripts/mainnet/run.sh walk.mjs [--to HEIGHT]
 //
+// run.sh gives node a 24 GB heap: past height 66000 the UTXO set holds
+// millions of small outputs.
+//
 // Findings go to failures.jsonl; each refused or mis-hashed block is saved
 // raw under test-mainnet/fixtures/.
 
-import { writeFileSync, appendFileSync, existsSync, readFileSync, renameSync } from 'node:fs';
+import { writeFileSync, appendFileSync, existsSync, renameSync, openSync, writeSync, closeSync, createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -35,7 +39,7 @@ const { OPCODE_NAMES } = await dist('opcodes');
 const argTo = process.argv.indexOf('--to');
 const STOP_AT = argTo > 0 ? Number(process.argv[argTo + 1]) : Infinity;
 const RANGE = 10;
-const CHECKPOINT = 500;
+const CHECKPOINT = 2000;
 const STATE = join(OUT, 'walk-state.json');
 const UTXO = join(OUT, 'walk-utxo.jsonl');
 const FAILURES = join(OUT, 'failures.jsonl');
@@ -66,7 +70,8 @@ const utxo = new Map();
 if (state === null) {
   state = { next: 0, prevHash: null, timestamps: [], prevBits: null, tallies: freshTallies(), started: new Date().toISOString(), seconds: 0, bytes: 0, leafSeen: [] };
 } else if (existsSync(UTXO)) {
-  for (const line of readFileSync(UTXO, 'utf8').split('\n')) {
+  // Line by line: the set outgrows the longest string V8 can hold.
+  for await (const line of createInterface({ input: createReadStream(UTXO), crlfDelay: Infinity })) {
     if (line === '') continue;
     const [key, value, script, height, coinbase] = JSON.parse(line);
     utxo.set(key, { value: BigInt(value), script, height, coinbase });
@@ -77,9 +82,17 @@ const leafSeen = new Set(state.leafSeen);
 const bump = (map, key, by = 1) => { map[key] = (map[key] ?? 0) + by; };
 
 function save() {
-  const lines = [];
-  for (const [key, u] of utxo) lines.push(JSON.stringify([key, u.value.toString(), u.script, u.height, u.coinbase]));
-  writeFileSync(`${UTXO}.tmp`, `${lines.join('\n')}\n`);
+  const fd = openSync(`${UTXO}.tmp`, 'w');
+  let lines = [];
+  for (const [key, u] of utxo) {
+    lines.push(JSON.stringify([key, u.value.toString(), u.script, u.height, u.coinbase]));
+    if (lines.length === 20000) {
+      writeSync(fd, `${lines.join('\n')}\n`);
+      lines = [];
+    }
+  }
+  if (lines.length > 0) writeSync(fd, `${lines.join('\n')}\n`);
+  closeSync(fd);
   state.leafSeen = [...leafSeen];
   writeJson(`${STATE}.next`, state);
   renameSync(`${UTXO}.tmp`, UTXO);
