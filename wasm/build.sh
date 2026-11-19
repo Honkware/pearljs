@@ -43,6 +43,8 @@ cd "$stage/wasm"
 sysroot=$(rustc --print sysroot)
 cargo_home=$(cd "${CARGO_HOME:-$HOME/.cargo}" && pwd -P)
 sep=$(printf '\037')
+# ahash takes compile-time random keys from const-random unless this seeds them.
+export CONST_RANDOM_SEED=pearljs-verify-proof
 CARGO_ENCODED_RUSTFLAGS="--cfg${sep}getrandom_backend=\"wasm_js\"${sep}--remap-path-prefix=$cargo_home=/cargo${sep}--remap-path-prefix=$sysroot=/rustc" \
   cargo build --locked --release --target wasm32-unknown-unknown
 rm -rf target/bindgen
