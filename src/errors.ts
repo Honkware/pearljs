@@ -176,7 +176,11 @@ export type PearlErrorCode =
   | 'WALLET_TRANSACTION_KNOWN'
   | 'WALLET_BACKUP_INVALID'
   | 'WALLET_NOT_PREPARED'
-  | 'WALLET_CLOSED';
+  | 'WALLET_CLOSED'
+  // Mining
+  | 'MINING_TEMPLATE_INVALID'
+  | 'JACKPOT_ABOVE_TARGET'
+  | 'GATEWAY_MESSAGE_INVALID';
 
 /** What toJSON returns and fromJSON reads. */
 export interface PearlErrorJson {
