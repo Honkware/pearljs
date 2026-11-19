@@ -3,7 +3,7 @@
 // parses, its merkle root and witness commitment hold, its certificate binds
 // the header and has the version and kind checkCertificateRules wants at that
 // height. Every 500th block and the 20 blocks around the FP8 fork also go
-// through verifyBlockProof, and their raw bytes through parseBlock and back.
+// through verifyBlockProof, each in a fresh worker (verify-one.mjs), and their raw bytes through parseBlock and back.
 // The node accepted every block it hands over, so any failure here is a
 // disagreement between pearljs and pearld.
 //
@@ -26,8 +26,8 @@ import {
   serializeBlock,
   testnet2,
 } from 'pearljs';
-import { verifyBlockProof } from 'pearljs/verify-proof';
 import { client, nodeDir } from './node.mjs';
+import { verifyInWorker } from './verify-one.mjs';
 
 const dir = join(nodeDir, 'check');
 mkdirSync(dir, { recursive: true });
@@ -96,8 +96,8 @@ for await (const event of follower) {
     // V1 proofs go through pearld's own V1 verifier, which verify-proof does not carry.
     if (version !== 1) {
       const started = Date.now();
-      const verdict = await verifyBlockProof(block);
-      state.proofs[verdict.outcome]++;
+      const verdict = await verifyInWorker(hex);
+      state.proofs[verdict.outcome] = (state.proofs[verdict.outcome] ?? 0) + 1;
       record({ kind: 'proof', height, hash, version, ms: Date.now() - started, ...verdict });
     }
   }
