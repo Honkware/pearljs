@@ -38,7 +38,7 @@ import { deriveAccountFromSeed, deriveSigningAccountFromSeed, importWatchOnlyAcc
 import type { KeyOrigin, PearlAccount, PearlSigningAccount } from './keys.js';
 import { createKeystore, openKeystore } from './keystore.js';
 import { MAX_UNLOCK_TIMEOUT_MS } from './keystore.js';
-import type { EncryptedKeystore, Keystore, KeystoreOptions, UnlockOptions } from './keystore.js';
+import type { EncryptedKeystore, ExportSessionOptions, Keystore, KeystoreOptions, KeystoreSession, UnlockOptions } from './keystore.js';
 import { generateMnemonic, mnemonicToSeed, validateMnemonic, normalizeMnemonic } from './mnemonic.js';
 import type { PearlNetwork } from './networks.js';
 import { replacementFee, signalsReplacement } from './rbf.js';
@@ -243,6 +243,8 @@ export interface CreateWalletOptions extends WalletConnection {
   reorgDepth?: number;
   /** scrypt cost for the keystore. */
   kdf?: KeystoreOptions['kdf'];
+  /** Lets the new wallet, while it stays unlocked, export a session (exportSession). */
+  allowSessionExport?: boolean;
 }
 
 /** Brings stored records from an older schema version up to this one. */
@@ -274,6 +276,8 @@ export interface RestoreWalletOptions extends WalletConnection {
   gapLimit?: number;
   /** As for create: how long the restored wallet stays unlocked. */
   unlockTimeout?: number | null;
+  /** As for create. */
+  allowSessionExport?: boolean;
 }
 
 /** Which of the wallet's outputs a send may spend. */
@@ -909,7 +913,7 @@ export class PearlWallet {
       if (options.watchOnlyOrigin !== undefined) throw new WalletError('WALLET_WATCH_ONLY', 'watchOnlyOrigin goes with watchOnly');
       if (options.passphrase === undefined) throw new KeystoreError('KEYSTORE_INVALID', 'a wallet with keys needs a passphrase to encrypt them; pass watchOnly for a wallet without keys');
       if (options.mnemonic !== undefined && options.seed !== undefined) throw new PearlError('SEED_INVALID', 'give a mnemonic or a seed, not both');
-      const keystore = await createKeystore(options.passphrase, options.kdf === undefined ? {} : { kdf: options.kdf });
+      const keystore = await createKeystore(options.passphrase, { ...(options.kdf === undefined ? {} : { kdf: options.kdf }), allowSessionExport: options.allowSessionExport === true });
       let seed: Uint8Array;
       if (options.seed !== undefined) {
         seed = Uint8Array.from(options.seed);
@@ -1035,7 +1039,7 @@ export class PearlWallet {
     }
     await options.store.batch((await scratchStore.list('')).map(([key, value]) => ({ type: 'set', key, value })));
     const wallet = await PearlWallet.open(options);
-    if (timeout !== 0) await wallet.unlock(options.passphrase, timeout === null ? {} : { timeout });
+    if (timeout !== 0) await wallet.unlock(options.passphrase, { ...(timeout === null ? {} : { timeout }), allowSessionExport: options.allowSessionExport === true });
     return wallet;
   }
 
@@ -1058,6 +1062,39 @@ export class PearlWallet {
   async unlock(passphrase: string | Uint8Array, options: UnlockOptions = {}): Promise<void> {
     const keystore = this.#requireKeystore();
     await keystore.unlock(passphrase, options);
+    await this.#afterUnlock(keystore);
+  }
+
+  /**
+   * Unlocks from a session that exportSession made, in this process or an
+   * earlier one, without the passphrase or scrypt. The keystore checks its
+   * set of secrets and the wallet its accounts, imported addresses and XMSS
+   * keys, as unlock does. KEYSTORE_SESSION_STALE after a passphrase change
+   * or for another wallet's session, KEYSTORE_SESSION_INVALID for a session
+   * its key does not open. Changing the passphrase still needs the old one.
+   */
+  async unlockWithSession(session: KeystoreSession, options: UnlockOptions = {}): Promise<void> {
+    const keystore = this.#requireKeystore();
+    await keystore.unlockWithSession(session, options);
+    await this.#afterUnlock(keystore);
+  }
+
+  /**
+   * The keystore's data key wrapped under a new session key, for
+   * unlockWithSession after the process restarts (an extension's service
+   * worker). Needs the wallet unlocked with allowSessionExport. A session
+   * opens this wallet's secrets until the passphrase changes, whether the
+   * wallet is locked or not: delete the stored copy on lock. See
+   * docs/browsers-and-bundlers.md and docs/security.md.
+   */
+  async exportSession(options?: { keyFormat?: 'cryptokey' }): Promise<KeystoreSession<CryptoKey>>;
+  async exportSession(options: { keyFormat: 'bytes' }): Promise<KeystoreSession<Uint8Array>>;
+  async exportSession(options?: ExportSessionOptions): Promise<KeystoreSession>;
+  async exportSession(options: ExportSessionOptions = {}): Promise<KeystoreSession> {
+    return this.#requireUnlocked().exportSession(options);
+  }
+
+  async #afterUnlock(keystore: Keystore): Promise<void> {
     // In turn with the wallet's operations, so it checks a state none of them is half way through changing.
     await this.#enqueue(async () => (keystore.locked ? undefined : this.#authenticate()));
     this.#changed();

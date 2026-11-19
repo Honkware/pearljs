@@ -21,6 +21,17 @@
 // whose bytes live in the WebCrypto implementation rather than the
 // JavaScript heap. Secrets are decrypted for one use and overwritten after
 // it. Locking drops the CryptoKey.
+//
+// A session lets a process that lost its memory (an extension's service
+// worker, stopped when idle) unlock again without the passphrase or scrypt:
+// the data key wrapped under a fresh random session key, which the
+// application keeps where its platform keeps short-lived secrets. The wrap
+// is bound to the keystore as it is (KDF parameters, salt and wrapped data
+// key), so a passphrase change or another keystore makes the session stale,
+// and the unwrapped key must still open the tag over the set of secrets.
+// Exporting needs the data key as a second, wrappable CryptoKey, held only
+// when the unlock asked for it (allowSessionExport); wrapKey and unwrapKey
+// move the data key without its bytes reaching the JavaScript heap.
 
 /**
  * An encrypted keystore: a mnemonic, seed, WIF keys and XMSS seeds under a
@@ -96,6 +107,32 @@ export const MAX_UNLOCK_TIMEOUT_MS = 2 ** 31 - 1;
 export interface UnlockOptions {
   /** Lock again after this many milliseconds, at most MAX_UNLOCK_TIMEOUT_MS. Stays unlocked until lock() unless given. */
   timeout?: number;
+  /** Keep a wrappable copy of the data key until lock, so exportSession works. Off unless given. */
+  allowSessionExport?: boolean;
+}
+
+/**
+ * The data key of one keystore wrapped under a session key, from
+ * exportSession. Whoever holds all of it, with the keystore, can read every
+ * secret until the passphrase changes; it does not reveal the passphrase.
+ * Everything but `key` is JSON. `key` is a non-extractable CryptoKey (keep
+ * it in IndexedDB, which stores it without exposing its bytes) or 32 bytes
+ * (for storage that holds only JSON, such as chrome.storage.session).
+ */
+export interface KeystoreSession<Key extends CryptoKey | Uint8Array = CryptoKey | Uint8Array> {
+  format: 'pearljs-keystore-session';
+  version: 1;
+  /** SHA-256, hex, over the keystore's KDF parameters, salt and wrapped data key: what the session is bound to. */
+  keystore: string;
+  /** The data key under `key`, AES-256-GCM, with `keystore` as associated data. */
+  wrapped: EncryptedBox;
+  key: Key;
+}
+
+/** Options for exportSession. */
+export interface ExportSessionOptions {
+  /** 'cryptokey' (the default) for a non-extractable CryptoKey, 'bytes' for the session key's 32 bytes. */
+  keyFormat?: 'cryptokey' | 'bytes';
 }
 
 const encoder = new TextEncoder();
@@ -154,6 +191,28 @@ function macAad(context: string, message: string): Uint8Array {
   return encoder.encode(`${AAD_PREFIX}:mac:${context}:${message}`);
 }
 
+async function sessionBinding(data: EncryptedKeystore): Promise<string> {
+  const bound = encoder.encode(`${AAD_PREFIX}:session:${new TextDecoder().decode(keyAad(data.kdf))}:${data.key.nonce}:${data.key.ciphertext}`);
+  return toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', buf(bound))));
+}
+
+function sessionAad(binding: string): Uint8Array {
+  return encoder.encode(`${AAD_PREFIX}:session:${binding}`);
+}
+
+const SESSION_INVALID = 'the session is not a pearljs keystore session, or its key does not open it';
+
+async function sessionKey(key: unknown): Promise<CryptoKey> {
+  if (typeof CryptoKey !== 'undefined' && key instanceof CryptoKey) {
+    const algorithm = key.algorithm as AesKeyAlgorithm;
+    if (key.type !== 'secret' || algorithm.name !== 'AES-GCM' || algorithm.length !== 256 || !key.usages.includes('unwrapKey')) throw new KeystoreError('KEYSTORE_SESSION_INVALID', 'the session key must be an AES-256-GCM key that can unwrap');
+    return key;
+  }
+  if (!(key instanceof Uint8Array) || key.length !== KEY_BYTES) throw new KeystoreError('KEYSTORE_SESSION_INVALID', 'the session key must be a CryptoKey or 32 bytes');
+  // A copy, wiped by importAesKey: the caller's bytes are the caller's to keep or wipe.
+  return importAesKey(Uint8Array.from(key), ['unwrapKey']);
+}
+
 const EMPTY = new Uint8Array(0);
 const TAMPERED_SET = 'the keystore set of secrets failed authentication: a secret was added, removed or replaced outside the keystore, or the keystore was damaged';
 
@@ -167,6 +226,17 @@ function checkTimeout(timeout: number | undefined): void {
 async function importAesKey(raw: Uint8Array, usages: KeyUsage[]): Promise<CryptoKey> {
   try {
     return await crypto.subtle.importKey('raw', buf(raw), 'AES-GCM', false, usages);
+  } finally {
+    raw.fill(0);
+  }
+}
+
+// The data key as a non-extractable key for use and, if asked for, an extractable one whose only purpose is wrapKey. Wipes raw.
+async function importDataKey(raw: Uint8Array, wrappable: boolean): Promise<[CryptoKey, CryptoKey | null]> {
+  try {
+    // WebCrypto refuses a secret key with no usages; 'encrypt' is the least this copy can be given.
+    const exportable = wrappable ? await crypto.subtle.importKey('raw', buf(raw), 'AES-GCM', true, ['encrypt']) : null;
+    return [await importAesKey(raw, ['encrypt', 'decrypt']), exportable];
   } finally {
     raw.fill(0);
   }
@@ -234,6 +304,8 @@ function parseKeystore(data: unknown): EncryptedKeystore {
 export class Keystore {
   #data: EncryptedKeystore;
   #key: CryptoKey | null = null;
+  // The data key again, extractable, for exportSession; null unless the unlock allowed sessions.
+  #wrappable: CryptoKey | null = null;
   #timer: ReturnType<typeof setTimeout> | null = null;
   #random: (length: number) => Uint8Array;
   #listeners = new Set<() => void>();
@@ -243,9 +315,10 @@ export class Keystore {
   #changes: Promise<unknown> = Promise.resolve();
 
   /** @internal Use createKeystore or openKeystore. */
-  constructor(data: EncryptedKeystore, key: CryptoKey | null, random: (length: number) => Uint8Array) {
+  constructor(data: EncryptedKeystore, key: CryptoKey | null, random: (length: number) => Uint8Array, wrappable: CryptoKey | null = null) {
     this.#data = data;
     this.#key = key;
+    this.#wrappable = wrappable;
     this.#random = random;
   }
 
@@ -286,11 +359,82 @@ export class Keystore {
       raw.fill(0);
       throw new KeystoreError('KEYSTORE_TAMPERED', 'the keystore data key has the wrong length');
     }
-    const key = await importAesKey(raw, ['encrypt', 'decrypt']);
+    const [key, wrappable] = await importDataKey(raw, options.allowSessionExport === true);
+    await this.#finishUnlock(generation, data, key, wrappable, timeout);
+  }
+
+  /**
+   * Unlocks from a session that exportSession made, without the passphrase
+   * and without scrypt, and checks the set of secrets as unlock does.
+   * Rejects with KEYSTORE_SESSION_STALE when the session belongs to another
+   * keystore or to this one before a passphrase change; with
+   * KEYSTORE_SESSION_INVALID when it is malformed or its key does not open
+   * it; and with KEYSTORE_TAMPERED and KEYSTORE_LOCKED as unlock does.
+   */
+  async unlockWithSession(session: KeystoreSession, options: UnlockOptions = {}): Promise<void> {
+    const { timeout } = options;
+    checkTimeout(timeout);
+    const generation = this.#generation;
+    const data = this.#data;
+    const value = session as Partial<KeystoreSession> | null;
+    if (value === null || typeof value !== 'object' || value.format !== 'pearljs-keystore-session' || value.version !== 1 || typeof value.keystore !== 'string') throw new KeystoreError('KEYSTORE_SESSION_INVALID', SESSION_INVALID);
+    const wrapped = value.wrapped as Partial<EncryptedBox> | undefined;
+    if (wrapped === null || typeof wrapped !== 'object' || typeof wrapped.nonce !== 'string' || typeof wrapped.ciphertext !== 'string') throw new KeystoreError('KEYSTORE_SESSION_INVALID', SESSION_INVALID);
+    const binding = await sessionBinding(data);
+    if (value.keystore !== binding) throw new KeystoreError('KEYSTORE_SESSION_STALE', 'the session belongs to another keystore, or to this one before its passphrase changed; unlock with the passphrase');
+    const unwrapping = await sessionKey(value.key);
+    let nonce: Uint8Array;
+    let ciphertext: Uint8Array;
+    try {
+      nonce = fromHex(wrapped.nonce, 'session nonce', NONCE_BYTES);
+      ciphertext = fromHex(wrapped.ciphertext, 'session ciphertext', KEY_BYTES + TAG_BYTES);
+    } catch {
+      throw new KeystoreError('KEYSTORE_SESSION_INVALID', SESSION_INVALID);
+    }
+    const params = { name: 'AES-GCM', iv: buf(nonce), additionalData: buf(sessionAad(binding)) };
+    let key: CryptoKey;
+    let wrappable: CryptoKey | null = null;
+    try {
+      key = await crypto.subtle.unwrapKey('raw', buf(ciphertext), unwrapping, params, 'AES-GCM', false, ['encrypt', 'decrypt']);
+      if (options.allowSessionExport === true) wrappable = await crypto.subtle.unwrapKey('raw', buf(ciphertext), unwrapping, params, 'AES-GCM', true, ['encrypt']);
+    } catch {
+      throw new KeystoreError('KEYSTORE_SESSION_INVALID', SESSION_INVALID);
+    }
+    await this.#finishUnlock(generation, data, key, wrappable, timeout);
+  }
+
+  /**
+   * The data key wrapped under a new random session key, for
+   * unlockWithSession in a later process. Needs the keystore unlocked with
+   * allowSessionExport (KEYSTORE_SESSION_DISABLED otherwise). Each call
+   * makes a new session key; a session stays usable until the passphrase
+   * changes, and locking does not end it, so delete the stored session
+   * when the application locks. The session key is the only secret in it.
+   */
+  async exportSession(options?: { keyFormat?: 'cryptokey' }): Promise<KeystoreSession<CryptoKey>>;
+  async exportSession(options: { keyFormat: 'bytes' }): Promise<KeystoreSession<Uint8Array>>;
+  async exportSession(options?: ExportSessionOptions): Promise<KeystoreSession>;
+  async exportSession(options: ExportSessionOptions = {}): Promise<KeystoreSession> {
+    const format = options.keyFormat ?? 'cryptokey';
+    if (format !== 'cryptokey' && format !== 'bytes') throw new TypeError("keyFormat must be 'cryptokey' or 'bytes'");
+    this.#unlocked();
+    const wrappable = this.#wrappable;
+    if (wrappable === null) throw new KeystoreError('KEYSTORE_SESSION_DISABLED', 'this unlock did not allow sessions; unlock with allowSessionExport');
+    const binding = await sessionBinding(this.#data);
+    const session = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, format === 'bytes', ['wrapKey', 'unwrapKey']);
+    const nonce = this.#random(NONCE_BYTES);
+    if (!(nonce instanceof Uint8Array) || nonce.length !== NONCE_BYTES) throw new RangeError('random source returned the wrong length');
+    const wrapped = new Uint8Array(await crypto.subtle.wrapKey('raw', wrappable, session, { name: 'AES-GCM', iv: buf(nonce), additionalData: buf(sessionAad(binding)) }));
+    const key = format === 'bytes' ? new Uint8Array(await crypto.subtle.exportKey('raw', session)) : session;
+    return { format: 'pearljs-keystore-session', version: 1, keystore: binding, wrapped: { nonce: toHex(nonce), ciphertext: toHex(wrapped) }, key };
+  }
+
+  async #finishUnlock(generation: number, data: EncryptedKeystore, key: CryptoKey, wrappable: CryptoKey | null, timeout: number | undefined): Promise<void> {
     await open(key, data.manifest, manifestAad(data.secrets), 'KEYSTORE_TAMPERED', TAMPERED_SET);
     // The work above takes a second or so, in which lock() may have been called or the keystore changed: neither is undone here.
     if (generation !== this.#generation || data !== this.#data) throw new KeystoreError('KEYSTORE_LOCKED', 'the keystore was locked or changed while it was unlocking; it stays as that left it');
     this.#key = key;
+    this.#wrappable = wrappable;
     this.#schedule(timeout);
   }
 
@@ -301,6 +445,7 @@ export class Keystore {
     this.#timer = null;
     const wasUnlocked = this.#key !== null;
     this.#key = null;
+    this.#wrappable = null;
     if (wasUnlocked) for (const listener of this.#listeners) listener();
   }
 
@@ -328,11 +473,12 @@ export class Keystore {
       const kek = await deriveKek(newPassphrase, kdf);
       const raw = Uint8Array.from(this.#random(KEY_BYTES));
       let key: CryptoKey;
+      let wrappable: CryptoKey | null;
       let wrapped: EncryptedBox;
       try {
         if (raw.length !== KEY_BYTES) throw new RangeError('random source returned the wrong length');
         wrapped = await seal(kek, raw, keyAad(kdf), this.#random);
-        key = await importAesKey(raw, ['encrypt', 'decrypt']);
+        [key, wrappable] = await importDataKey(raw, this.#wrappable !== null);
       } finally {
         raw.fill(0);
       }
@@ -347,7 +493,10 @@ export class Keystore {
       }
       const manifest = await seal(key, EMPTY, manifestAad(secrets), this.#random);
       this.#data = { ...data, kdf, key: wrapped, secrets, manifest };
-      if (this.#key !== null) this.#key = key;
+      if (this.#key !== null) {
+        this.#key = key;
+        this.#wrappable = wrappable;
+      }
     });
   }
 
@@ -451,8 +600,8 @@ function newKdf(options: KeystoreOptions, random: (length: number) => Uint8Array
   return kdf;
 }
 
-/** Makes an empty keystore under passphrase, unlocked. */
-export async function createKeystore(passphrase: string | Uint8Array, options: KeystoreOptions = {}): Promise<Keystore> {
+/** Makes an empty keystore under passphrase, unlocked; allowSessionExport as unlock takes it. */
+export async function createKeystore(passphrase: string | Uint8Array, options: KeystoreOptions & Pick<UnlockOptions, 'allowSessionExport'> = {}): Promise<Keystore> {
   const random = options.random ?? defaultRandom;
   const kdf = newKdf(options, random);
   const kek = await deriveKek(passphrase, kdf);
@@ -460,10 +609,10 @@ export async function createKeystore(passphrase: string | Uint8Array, options: K
   try {
     if (raw.length !== KEY_BYTES) throw new RangeError('random source returned the wrong length');
     const wrapped = await seal(kek, raw, keyAad(kdf), random);
-    const key = await importAesKey(raw, ['encrypt', 'decrypt']);
+    const [key, wrappable] = await importDataKey(raw, options.allowSessionExport === true);
     const manifest = await seal(key, EMPTY, manifestAad({}), random);
     const data: EncryptedKeystore = { format: 'pearljs-keystore', version: 1, kdf, cipher: 'aes-256-gcm', key: wrapped, secrets: {}, manifest };
-    return new Keystore(data, key, random);
+    return new Keystore(data, key, random, wrappable);
   } finally {
     raw.fill(0);
   }

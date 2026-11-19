@@ -494,6 +494,7 @@
       "EncryptedBox",
       "EncryptedKeystore",
       "ExecuteScriptOptions",
+      "ExportSessionOptions",
       "FallbackOptions",
       "FeeAndVsize",
       "FeeGuardOptions",
@@ -547,6 +548,7 @@
       "KeyPathSignerAsync",
       "KeystoreKdf",
       "KeystoreOptions",
+      "KeystoreSession",
       "LeafKind",
       "ListSinceBlockResult",
       "ListUnspentResult",
@@ -1157,8 +1159,10 @@
     "types": [
       "EncryptedBox",
       "EncryptedKeystore",
+      "ExportSessionOptions",
       "KeystoreKdf",
       "KeystoreOptions",
+      "KeystoreSession",
       "SecretKind",
       "UnlockOptions"
     ]
