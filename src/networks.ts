@@ -57,6 +57,12 @@ export interface PearlNetwork {
   readonly targetSpacing: number;
   /** WTEMAHalfLife of the per-block difficulty filter, in seconds. */
   readonly wtemaHalfLife: number;
+  /** PoWNoRetargeting: every block takes powLimitBits, as on regtest and simnet. */
+  readonly powNoRetargeting: boolean;
+  /** ReduceMinDifficulty: a block more than minDiffReductionTime after its parent may take powLimitBits. */
+  readonly reduceMinDifficulty: boolean;
+  /** MinDiffReductionTime in seconds, read only when reduceMinDifficulty is set. */
+  readonly minDiffReductionTime: number;
   /** The highest target a block may have. */
   readonly powLimit: bigint;
   /** powLimit in compact form, the bits getdifficulty divides by. */
@@ -139,6 +145,9 @@ export const mainnet: PearlNetwork = frozen({
   dnsSeeds: seeds('pearlnetwork.net'),
   targetSpacing: TARGET_SPACING,
   wtemaHalfLife: WTEMA_HALF_LIFE,
+  powNoRetargeting: false,
+  reduceMinDifficulty: false,
+  minDiffReductionTime: 0,
   powLimit: PUBLIC_POW_LIMIT,
   powLimitBits: 0x1b00ffff,
   coinbaseMaturity: COINBASE_MATURITY,
@@ -162,6 +171,9 @@ export const testnet: PearlNetwork = frozen({
   dnsSeeds: seeds('testnet.pearlnetwork.net'),
   targetSpacing: TARGET_SPACING,
   wtemaHalfLife: WTEMA_HALF_LIFE,
+  powNoRetargeting: false,
+  reduceMinDifficulty: true,
+  minDiffReductionTime: 4 * 60 * 60,
   powLimit: PUBLIC_POW_LIMIT,
   powLimitBits: 0x1b00ffff,
   coinbaseMaturity: COINBASE_MATURITY,
@@ -186,6 +198,9 @@ export const testnet2: PearlNetwork = frozen({
   dnsSeeds: seeds('testnet2.pearlnetwork.net'),
   targetSpacing: TARGET_SPACING,
   wtemaHalfLife: WTEMA_HALF_LIFE,
+  powNoRetargeting: false,
+  reduceMinDifficulty: true,
+  minDiffReductionTime: 4 * 60 * 60,
   powLimit: PUBLIC_POW_LIMIT,
   powLimitBits: 0x1b00ffff,
   coinbaseMaturity: COINBASE_MATURITY,
@@ -209,6 +224,9 @@ export const regtest: PearlNetwork = frozen({
   dnsSeeds: [],
   targetSpacing: TARGET_SPACING,
   wtemaHalfLife: WTEMA_HALF_LIFE,
+  powNoRetargeting: true,
+  reduceMinDifficulty: true,
+  minDiffReductionTime: 2 * TARGET_SPACING,
   powLimit: LOCAL_POW_LIMIT,
   powLimitBits: 0x1e010000,
   coinbaseMaturity: COINBASE_MATURITY,
@@ -234,6 +252,9 @@ export const simnet: PearlNetwork = frozen({
   dnsSeeds: [],
   targetSpacing: TARGET_SPACING,
   wtemaHalfLife: WTEMA_HALF_LIFE,
+  powNoRetargeting: true,
+  reduceMinDifficulty: true,
+  minDiffReductionTime: 2 * TARGET_SPACING,
   powLimit: LOCAL_POW_LIMIT,
   powLimitBits: 0x1e010000,
   coinbaseMaturity: COINBASE_MATURITY,

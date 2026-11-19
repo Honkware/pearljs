@@ -101,6 +101,47 @@ export function targetToBits(target: bigint): number {
   return bits;
 }
 
+/** The last block of a chain, as nextBlockBits reads it. Times are Unix seconds. */
+export interface DifficultyParent {
+  /** The block's compact bits. */
+  readonly bits: number;
+  /** The block's timestamp. */
+  readonly timestamp: number;
+  /** The timestamp of the block before it, or null when it is the genesis block. */
+  readonly parentTimestamp: number | null;
+}
+
+/**
+ * calcNextRequiredDifficulty: the bits a block with timestamp `time` must
+ * carry on top of `last`, or on an empty chain when `last` is null. Pearl
+ * retargets every block (WTEMA): the target moves by (t - targetSpacing) /
+ * wtemaHalfLife of itself, where t is the time `last` took after its parent,
+ * dividing as Go's big.Int does (rounding down), then stays within 1 and
+ * powLimit. On a network with powNoRetargeting every block takes
+ * powLimitBits, and with reduceMinDifficulty so does a block more than
+ * minDiffReductionTime after `last`.
+ */
+export function nextBlockBits(network: PearlNetwork, last: DifficultyParent | null, time: number): number {
+  for (const [name, value] of [['time', time], ['last.timestamp', last?.timestamp ?? 0], ['last.parentTimestamp', last?.parentTimestamp ?? 0]] as const) {
+    if (!Number.isSafeInteger(value)) throw new RangeError(`${name} must be a whole number of seconds, got ${value}`);
+  }
+  if (!Number.isSafeInteger(network.wtemaHalfLife) || network.wtemaHalfLife <= 0) {
+    throw new RangeError(`wtemaHalfLife must be a positive number of seconds, got ${network.wtemaHalfLife}`);
+  }
+  if (last === null || network.powNoRetargeting) return network.powLimitBits;
+  const oldTarget = bitsToTarget(last.bits);
+  if (network.reduceMinDifficulty && time > last.timestamp + network.minDiffReductionTime) return network.powLimitBits;
+  if (last.parentTimestamp === null) return last.bits;
+  const adjustment = BigInt(last.timestamp - last.parentTimestamp - network.targetSpacing) * oldTarget;
+  const halfLife = BigInt(network.wtemaHalfLife);
+  // big.Int.Div rounds toward negative infinity for a positive divisor; BigInt division truncates.
+  const quotient = adjustment / halfLife - (adjustment % halfLife < 0n ? 1n : 0n);
+  let target = oldTarget + quotient;
+  if (target > network.powLimit) target = network.powLimit;
+  if (target <= 0n) target = 1n;
+  return targetToBits(target);
+}
+
 /** CalcWork: the work a block with these bits adds to its chain, 2^256 / (target + 1). */
 export function workForBits(bits: number): bigint {
   const target = bitsToTarget(bits);

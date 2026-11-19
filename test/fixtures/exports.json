@@ -292,6 +292,7 @@
       "multiAScript",
       "multiAStack",
       "networks",
+      "nextBlockBits",
       "noiseSeeds",
       "normalizeMnemonic",
       "openIndexedDbStore",
@@ -487,6 +488,7 @@
       "DerivationRecord",
       "DerivationSource",
       "DerivationVariant",
+      "DifficultyParent",
       "DiscoveredAddress",
       "DiscoveredChain",
       "DiscoveryOptions",
@@ -963,12 +965,15 @@
       "blockSubsidy",
       "checkCertificateRules",
       "difficultyForBits",
+      "nextBlockBits",
       "requiredCertVersion",
       "targetToBits",
       "totalSupply",
       "workForBits"
     ],
-    "types": []
+    "types": [
+      "DifficultyParent"
+    ]
   },
   "crypto": {
     "values": [

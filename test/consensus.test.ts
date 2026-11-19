@@ -1,7 +1,8 @@
 // Consensus data against Pearl's own functions run in generate.go: the
 // chaincfg params of each network, CheckCertificateRules around every fork
 // height, CalcBlockSubsidy and its running total, CompactToBig, BigToCompact
-// and CalcWork, and getdifficulty's ratio.
+// and CalcWork, and getdifficulty's ratio. The difficulty rule is checked
+// against calcNextRequiredDifficulty run by vectors/difficulty_test.go.
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -13,6 +14,7 @@ import {
   EMISSION_LIMIT,
   MAX_GRAIN,
   networks,
+  nextBlockBits,
   requiredCertVersion,
   targetToBits,
   totalSupply,
@@ -20,6 +22,7 @@ import {
 } from '../src/index.js';
 import type { CertificateVersion, PearlCertificate } from '../src/index.js';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
+import difficulty from '../vectors/difficulty.json' with { type: 'json' };
 import { masterNetworkNamed, networkNamed } from './vector-helpers.js';
 
 const certificate = (version: number, size: number): PearlCertificate => ({
@@ -136,6 +139,33 @@ describe('compact bits', () => {
   it('refuses bits outside uint32', () => {
     expect(() => bitsToTarget(-1)).toThrow(RangeError);
     expect(() => bitsToTarget(2 ** 32)).toThrow(RangeError);
+  });
+});
+
+describe('nextBlockBits', () => {
+  it('covers every network', () => {
+    expect(difficulty.networks.map((item) => item.name).sort()).toEqual(Object.keys(networks).sort());
+  });
+
+  for (const expected of difficulty.networks) {
+    const network = networkNamed(expected.name);
+
+    it(`reads the retargeting params of chaincfg for ${expected.name}`, () => {
+      expect(network.powNoRetargeting).toBe(expected.powNoRetargeting);
+      expect(network.reduceMinDifficulty).toBe(expected.reduceMinDifficulty);
+      expect(network.minDiffReductionTime).toBe(expected.minDiffReductionTime);
+    });
+
+    it.each(expected.cases.map((item) => [item.name, item] as const))(`gives Pearl's bits on ${expected.name} for %s`, (_name, item) => {
+      expect(nextBlockBits(network, item.last, item.time)).toBe(item.bits);
+    });
+  }
+
+  it('refuses times that are not whole seconds and a half-life of 0', () => {
+    const last = { bits: networks.mainnet.powLimitBits, timestamp: 100, parentTimestamp: 0 };
+    expect(() => nextBlockBits(networks.mainnet, last, 1.5)).toThrow(RangeError);
+    expect(() => nextBlockBits(networks.mainnet, { ...last, parentTimestamp: Number.NaN }, 200)).toThrow(RangeError);
+    expect(() => nextBlockBits({ ...networks.mainnet, wtemaHalfLife: 0 }, last, 200)).toThrow(RangeError);
   });
 });
 

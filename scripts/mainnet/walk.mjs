@@ -113,20 +113,6 @@ function fail(height, kind, detail, raw) {
 const msg = (error) => `${error?.code ?? error?.name ?? 'Error'}: ${error?.message ?? error}`;
 const displayHex = (bytes) => hex(Uint8Array.from(bytes).reverse());
 
-// Pearl's calcNextRequiredDifficulty (WTEMA), with Go's Euclidean big.Int Div.
-function wtema(prevBits, prevTime, prevPrevTime) {
-  if (prevPrevTime === null) return prevBits;
-  const old = consensus.bitsToTarget(prevBits);
-  const num = BigInt(prevTime - prevPrevTime - mainnet.targetSpacing) * old;
-  const half = BigInt(mainnet.wtemaHalfLife);
-  let q = num / half;
-  if (num % half !== 0n && num < 0n) q -= 1n;
-  let target = old + q;
-  if (target > mainnet.powLimit) target = mainnet.powLimit;
-  if (target <= 0n) target = 1n;
-  return consensus.targetToBits(target);
-}
-
 function leafOpcodes(script) {
   try {
     for (const chunk of tools.decompileScript(script)) {
@@ -226,7 +212,8 @@ function processBlock(height, hash, raw, verbose) {
     const prevTime = state.timestamps.at(-1);
     T.timestampChecked += 1;
     if (header.timestamp < prevTime + 1) fail(height, 'timestamp', { time: header.timestamp, prevTime });
-    const want = wtema(state.prevBits, prevTime, state.timestamps.length >= 2 ? state.timestamps.at(-2) : null);
+    const parentTimestamp = state.timestamps.length >= 2 ? state.timestamps.at(-2) : null;
+    const want = consensus.nextBlockBits(mainnet, { bits: state.prevBits, timestamp: prevTime, parentTimestamp }, header.timestamp);
     T.wtemaChecked += 1;
     if (want !== header.bits) {
       T.wtemaMismatch += 1;
