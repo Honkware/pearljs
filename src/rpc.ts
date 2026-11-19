@@ -63,6 +63,13 @@ export const DESKTOP_OYSTER_URL = 'http://127.0.0.1:8335';
 export const DEFAULT_RPC_TIMEOUT = 60_000;
 
 /**
+ * Requests a client has in flight at once unless told otherwise. pearld
+ * answers HTTP 503 to any past its --rpcmaxclients (10 by default), so this
+ * leaves room for other clients of the same node.
+ */
+export const DEFAULT_MAX_CONCURRENT_REQUESTS = 4;
+
+/**
  * The largest reply a client reads, in bytes, unless told otherwise: 64 MiB.
  * pearld reads requests of up to 16 MB (maxRequestSize, 4 * MaxBlockPayload),
  * and its largest ordinary reply, getblock with verbosity 2 for a block at
@@ -127,6 +134,11 @@ export interface RpcClientOptions extends Omit<HttpTransportOptions, 'url'> {
    * sign, create addresses or change server state are never retried.
    */
   readonly retry?: boolean | number | RetryOptions;
+  /**
+   * Requests in flight at once; the rest wait their turn. Default
+   * DEFAULT_MAX_CONCURRENT_REQUESTS, 0 for no limit.
+   */
+  readonly maxConcurrentRequests?: number;
   /**
    * Send calls made close together as one JSON-RPC batch. pearld accepts
    * batches; Oyster does not, and OysterClient refuses the option. A call
@@ -464,12 +476,17 @@ export class JsonRpcClient implements Rpc {
   readonly #transport: RpcTransport;
   readonly #retry: Required<RetryOptions> | null;
   readonly #batch: Required<BatchOptions> | null;
+  readonly #maxConcurrent: number;
+  #inFlight = 0;
+  readonly #waiting: (() => void)[] = [];
   #queue: Queued[] = [];
   #flushTimer: ReturnType<typeof setTimeout> | undefined;
   #id = 0;
 
   constructor(options: RpcClientOptions) {
-    const { url, transport, retry = false, batch = false, ...http } = options;
+    const { url, transport, retry = false, batch = false, maxConcurrentRequests = DEFAULT_MAX_CONCURRENT_REQUESTS, ...http } = options;
+    if (!Number.isSafeInteger(maxConcurrentRequests) || maxConcurrentRequests < 0) throw new RangeError('maxConcurrentRequests must be a whole number, 0 for no limit');
+    this.#maxConcurrent = maxConcurrentRequests;
     if ((url === undefined) === (transport === undefined)) throw new TypeError('give either url or transport');
     this.#transport = transport ?? httpTransport({ ...http, url: url! });
     this.#retry =
@@ -502,14 +519,31 @@ export class JsonRpcClient implements Rpc {
   }
 
   async #send(body: string, info: RpcRequestInfo, idempotent: boolean): Promise<string> {
-    const retry = idempotent ? this.#retry : null;
     for (let attempt = 0; ; attempt++) {
       try {
-        return await this.#transport.send(body, info);
+        return await this.#limited(() => this.#transport.send(body, info));
       } catch (err) {
+        // A 503 is pearld's --rpcmaxclients turning the request away unread, so a read is retried even without `retry`.
+        const retry = !idempotent ? null : this.#retry ?? (isBusy(err) ? BUSY_RETRY : null);
         if (retry === null || attempt >= retry.retries || info.signal?.aborted || !isTransient(err)) throw err;
         await new Promise((resolve) => setTimeout(resolve, Math.min(retry.maxDelay, retry.delay * 2 ** attempt)));
       }
+    }
+  }
+
+  async #limited(run: () => Promise<string>): Promise<string> {
+    if (this.#maxConcurrent > 0 && this.#inFlight >= this.#maxConcurrent) {
+      await new Promise<void>((resolve) => this.#waiting.push(resolve));
+    } else {
+      this.#inFlight++;
+    }
+    try {
+      return await run();
+    } finally {
+      // The slot passes straight to the next waiter, so the count stays put.
+      const next = this.#waiting.shift();
+      if (next === undefined) this.#inFlight--;
+      else next();
     }
   }
 
@@ -558,6 +592,12 @@ export class JsonRpcClient implements Rpc {
       },
     );
   }
+}
+
+const BUSY_RETRY: Required<RetryOptions> = { retries: 2, delay: 250, maxDelay: 5000 };
+
+function isBusy(err: unknown): boolean {
+  return err instanceof PearlRpcError && err.kind === 'http' && err.status === 503;
 }
 
 function isTransient(err: unknown): boolean {

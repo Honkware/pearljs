@@ -4,6 +4,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_MAX_CONCURRENT_REQUESTS,
   DESKTOP_OYSTER_URL,
   JsonRpcClient,
   OysterClient,
@@ -1095,6 +1096,52 @@ describe('transport options', () => {
     const plain = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: flaky });
     await rejection(plain.getBlockCount());
     expect(attempts).toBe(1);
+  });
+
+  it('retries a read that pearld turned away with 503 even without retry, and nothing else', async () => {
+    let attempts = 0;
+    const busy = (status: number) => (async (_url: string, init: RequestInit) => {
+      attempts++;
+      const { id, method } = JSON.parse(init.body as string) as { id: number; method: string };
+      // pearld's limitConnections when --rpcmaxclients requests are already in flight.
+      if (attempts < 3) return new Response('503 Too busy.  Try again later.\n', { status });
+      return new Response(fixture(method === 'getblockcount' ? 'getblockcount' : 'sendrawtransaction').body.replace(/"id":\d+}/, `"id":${id}}`));
+    }) as unknown as typeof fetch;
+    const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: busy(503) });
+    expect(await client.getBlockCount()).toBe(321);
+    expect(attempts).toBe(3);
+
+    attempts = 0;
+    expect(await rejection(client.sendRawTransaction('00'))).toMatchObject({ kind: 'http', status: 503 });
+    expect(attempts).toBe(1);
+
+    attempts = 0;
+    expect(await rejection(new PearldClient({ url: 'https://127.0.0.1:18334', fetch: busy(500) }).getBlockCount())).toMatchObject({ status: 500 });
+    expect(attempts).toBe(1);
+  });
+
+  it('keeps at most maxConcurrentRequests requests in flight, four unless told', async () => {
+    const peak = async (options: { maxConcurrentRequests?: number }): Promise<number> => {
+      let inFlight = 0;
+      let most = 0;
+      const slow = (async (_url: string, init: RequestInit) => {
+        inFlight++;
+        most = Math.max(most, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight--;
+        const { id } = JSON.parse(init.body as string) as { id: number };
+        return new Response(fixture('getblockcount').body.replace(/"id":\d+}/, `"id":${id}}`));
+      }) as unknown as typeof fetch;
+      const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: slow, ...options });
+      const counts = await Promise.all(Array.from({ length: 12 }, () => client.getBlockCount()));
+      expect(counts).toEqual(Array(12).fill(321));
+      return most;
+    };
+    expect(DEFAULT_MAX_CONCURRENT_REQUESTS).toBe(4);
+    expect(await peak({})).toBe(4);
+    expect(await peak({ maxConcurrentRequests: 1 })).toBe(1);
+    expect(await peak({ maxConcurrentRequests: 0 })).toBe(12);
+    expect(() => new PearldClient({ url: 'https://127.0.0.1:18334', maxConcurrentRequests: -1 })).toThrow(RangeError);
   });
 
   it('does not retry an RPC error or a refused password', async () => {
