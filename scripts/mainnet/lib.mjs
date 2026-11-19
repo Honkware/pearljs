@@ -192,7 +192,17 @@ export async function gatedFetch(_url, init) {
   }
   return rpcGate.run(async () => {
     for (let attempt = 0; ; attempt++) {
-      const res = await withSlot(() => post(init.body));
+      let res;
+      try {
+        res = await withSlot(() => post(init.body));
+      } catch (error) {
+        // The node sometimes stops accepting connections for a while under the dashboard's indexer.
+        if (attempt < 20 && /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|timed out/.test(String(error))) {
+          await sleep(1000 * 2 ** Math.min(attempt, 5));
+          continue;
+        }
+        throw error;
+      }
       rpcStats.requests += 1;
       if (res.status === 503 && attempt < 12) {
         rpcStats.retries503 += 1;
