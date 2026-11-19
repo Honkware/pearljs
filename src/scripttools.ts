@@ -7,14 +7,16 @@
 // so a reserved or unknown opcode makes a leaf fail instead of succeed.
 
 /**
- * Compile and decompile scripts, Pearl's one-line disassembly, and script
- * number decoding.
+ * Compile and decompile scripts, Pearl's one-line disassembly, script
+ * number decoding, and hash timelock leaves.
  *
  * @module
  */
 
 import { OP_CODES, OPCODE_NAMES } from './opcodes.js';
-import { scriptPush } from './script.js';
+import { checksigScript, cltvScript, csvScript, scriptPush } from './script.js';
+import { hash160, sha256 } from './crypto.js';
+import type { ScriptPathStack } from './transaction.js';
 import { toHex } from './internal/bytes.js';
 import { PearlError } from './errors.js';
 
@@ -308,4 +310,172 @@ const DISABLED_IN_TAPSCRIPT = new Set<number>([
 /** Whether executing this opcode in a Pearl tapscript leaf fails as disabled. */
 export function isDisabledOpcode(opcode: number): boolean {
   return DISABLED_IN_TAPSCRIPT.has(opcode);
+}
+
+/** The preimage length an HTLC claim leaf demands, so that a 32-byte secret on another chain matches. */
+export const HTLC_PREIMAGE_LENGTH = 32;
+
+/** The lock on an HTLC's refund leaf: an absolute CLTV locktime, or a CSV sequence from encodeSequence. */
+export type HtlcTimelock = { locktime: number } | { sequence: number };
+
+/** What htlcLeaves builds from. */
+export interface HtlcOptions {
+  /** SHA-256 of the preimage (32 bytes), or its HASH160 (20 bytes). */
+  hash: Uint8Array;
+  /** x-only key that claims with the preimage. */
+  claimKey: Uint8Array;
+  /** x-only key that takes the coins back once the lock has passed. */
+  refundKey: Uint8Array;
+  timelock: HtlcTimelock;
+}
+
+/** A leaf htlcLeaves builds, read back. */
+export type HtlcLeaf =
+  | { kind: 'claim'; hashType: 'sha256' | 'hash160'; hash: Uint8Array; key: Uint8Array }
+  | { kind: 'refund'; timelock: HtlcTimelock; key: Uint8Array };
+
+function checkKey(key: Uint8Array, name: string): void {
+  if (!(key instanceof Uint8Array) || key.length !== 32) throw new PearlError('KEY_INVALID', `${name} must be a 32-byte x-only key`);
+}
+
+function hashOpcode(hash: Uint8Array): number {
+  if (hash instanceof Uint8Array && hash.length === 32) return OP_CODES.OP_SHA256;
+  if (hash instanceof Uint8Array && hash.length === 20) return OP_CODES.OP_HASH160;
+  throw new PearlError('SCRIPT_INVALID', 'hash must be a 32-byte SHA-256 or a 20-byte HASH160');
+}
+
+/**
+ * OP_SIZE 32 OP_EQUALVERIFY OP_SHA256 <hash> OP_EQUALVERIFY followed by
+ * script, usually a checksigScript: the script runs only for a 32-byte
+ * preimage of hash. A 20-byte hash is checked with OP_HASH160 instead.
+ */
+export function hashlockScript(hash: Uint8Array, script: Uint8Array): Uint8Array {
+  const prefix = compileScript([OP_CODES.OP_SIZE, Uint8Array.of(HTLC_PREIMAGE_LENGTH), OP_CODES.OP_EQUALVERIFY, hashOpcode(hash), hash, OP_CODES.OP_EQUALVERIFY]);
+  const out = new Uint8Array(prefix.length + script.length);
+  out.set(prefix, 0);
+  out.set(script, prefix.length);
+  return out;
+}
+
+/**
+ * The two leaves of a hash timelock contract: `claim`, which claimKey spends
+ * with the preimage of hash, and `refund`, which refundKey spends once the
+ * CLTV locktime or CSV sequence has passed. Put both in one tree,
+ * assembleScriptTree([claim, refund]), in a P2TR or a P2MR output.
+ */
+export function htlcLeaves(options: HtlcOptions): { claim: Uint8Array; refund: Uint8Array } {
+  checkKey(options.claimKey, 'claimKey');
+  checkKey(options.refundKey, 'refundKey');
+  const { timelock } = options;
+  const tail = checksigScript(options.refundKey);
+  let refund: Uint8Array;
+  if ('locktime' in timelock) refund = cltvScript(timelock.locktime, tail);
+  else if ('sequence' in timelock) refund = csvScript(timelock.sequence, tail);
+  else throw new TypeError('timelock must be { locktime } or { sequence }');
+  return { claim: hashlockScript(options.hash, checksigScript(options.claimKey)), refund };
+}
+
+function pushedNumber(chunk: ScriptChunk | undefined): number | null {
+  if (chunk === undefined) return null;
+  if (chunk === OP_CODES.OP_0) return 0;
+  if (typeof chunk === 'number') return chunk >= OP_CODES.OP_1 && chunk <= OP_CODES.OP_16 ? chunk - OP_CODES.OP_1 + 1 : null;
+  try {
+    return Number(decodeScriptNumber(chunk, { maxLength: 5 }));
+  } catch {
+    return null;
+  }
+}
+
+/** Reads a leaf htlcLeaves builds, or returns null for any other script. */
+export function parseHtlcLeaf(script: Uint8Array): HtlcLeaf | null {
+  const { tokens, error } = tokenize(script);
+  if (error !== null) return null;
+  const chunks: ScriptChunk[] = tokens.map((token) => token.data ?? token.opcode);
+  const key = chunks[chunks.length - 2];
+  if (chunks[chunks.length - 1] !== OP_CODES.OP_CHECKSIG || !(key instanceof Uint8Array) || key.length !== 32) return null;
+  if (chunks.length === 8) {
+    const [size, length, verify, op, hash, verify2] = chunks;
+    if (size !== OP_CODES.OP_SIZE || !(length instanceof Uint8Array) || length.length !== 1 || length[0] !== HTLC_PREIMAGE_LENGTH) return null;
+    if (verify !== OP_CODES.OP_EQUALVERIFY || verify2 !== OP_CODES.OP_EQUALVERIFY || !(hash instanceof Uint8Array)) return null;
+    if (op === OP_CODES.OP_SHA256 && hash.length === 32) return { kind: 'claim', hashType: 'sha256', hash, key };
+    if (op === OP_CODES.OP_HASH160 && hash.length === 20) return { kind: 'claim', hashType: 'hash160', hash, key };
+    return null;
+  }
+  if (chunks.length === 5 && chunks[2] === OP_CODES.OP_DROP) {
+    const value = pushedNumber(chunks[0]);
+    if (value === null || value < 0) return null;
+    // Only the encoding the builders write counts, so a parsed leaf rebuilds to the same bytes.
+    const rebuilt = chunks[1] === OP_CODES.OP_CHECKLOCKTIMEVERIFY ? { locktime: value } : chunks[1] === OP_CODES.OP_CHECKSEQUENCEVERIFY ? { sequence: value } : null;
+    if (rebuilt === null) return null;
+    try {
+      const again = 'locktime' in rebuilt ? cltvScript(value, checksigScript(key)) : csvScript(value, checksigScript(key));
+      if (toHex(again) !== toHex(script)) return null;
+    } catch {
+      return null;
+    }
+    return { kind: 'refund', timelock: rebuilt, key };
+  }
+  return null;
+}
+
+function parseOrThrow(leaf: Uint8Array): HtlcLeaf {
+  const parsed = parseHtlcLeaf(leaf);
+  if (parsed === null) throw new PearlError('SCRIPT_INVALID', 'not an HTLC claim or refund leaf');
+  return parsed;
+}
+
+/**
+ * The witness items before the leaf script for spending an HTLC leaf, for
+ * finalizeScriptPathInput's `stack`: the claim key's signature and the
+ * preimage for the claim leaf, the refund key's signature for the refund
+ * leaf.
+ *
+ * Throws PREIMAGE_INVALID for a claim without a preimage of the leaf's hash,
+ * and SCRIPT_INVALID for a leaf htlcLeaves does not build.
+ */
+export function htlcStack(leaf: Uint8Array, options: { preimage?: Uint8Array } = {}): ScriptPathStack {
+  const parsed = parseOrThrow(leaf);
+  if (parsed.kind === 'refund') return (signatureFor) => [signatureFor(parsed.key)];
+  const { preimage } = options;
+  if (!(preimage instanceof Uint8Array) || preimage.length !== HTLC_PREIMAGE_LENGTH || toHex(htlcHash(preimage, parsed.hashType)) !== toHex(parsed.hash)) {
+    throw new PearlError('PREIMAGE_INVALID', `the claim leaf needs the ${HTLC_PREIMAGE_LENGTH}-byte preimage of its hash`);
+  }
+  const copy = Uint8Array.from(preimage);
+  return (signatureFor) => [signatureFor(parsed.key), copy];
+}
+
+/**
+ * Sizes of the witness items before the leaf script when spending an HTLC
+ * leaf, for estimateVsize's `stack`: a signature (65 bytes for a sighash
+ * other than SIGHASH_DEFAULT) and, for the claim leaf, the preimage.
+ */
+export function htlcStackSizes(leaf: Uint8Array, sighashType = 0): number[] {
+  const signature = sighashType === 0 ? 64 : 65;
+  return parseOrThrow(leaf).kind === 'claim' ? [signature, HTLC_PREIMAGE_LENGTH] : [signature];
+}
+
+function htlcHash(preimage: Uint8Array, hashType: 'sha256' | 'hash160'): Uint8Array {
+  return hashType === 'sha256' ? sha256(preimage) : hash160(preimage);
+}
+
+/**
+ * Finds the preimage of hash in the witnesses of a transaction that claimed
+ * an HTLC: the secret a swap counterparty learns from the claim and uses on
+ * the other chain. Returns it with the input that revealed it, or null when
+ * no witness item hashes to it. Takes a 32-byte SHA-256 or a 20-byte HASH160.
+ */
+export function extractHtlcPreimage(
+  tx: { ins: readonly { witness: readonly Uint8Array[] }[] },
+  hash: Uint8Array,
+): { preimage: Uint8Array; inputIndex: number } | null {
+  const hashType = hashOpcode(hash) === OP_CODES.OP_SHA256 ? 'sha256' : 'hash160';
+  const want = toHex(hash);
+  for (const [inputIndex, input] of tx.ins.entries()) {
+    for (const item of input.witness) {
+      if (item.length === HTLC_PREIMAGE_LENGTH && toHex(htlcHash(item, hashType)) === want) {
+        return { preimage: Uint8Array.from(item), inputIndex };
+      }
+    }
+  }
+  return null;
 }
