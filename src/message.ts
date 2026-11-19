@@ -194,6 +194,12 @@ export interface SignMessageOptions {
 export interface VerifyMessageOptions {
   /** The format the signature must be in, or 'any' for any of them. Default 'oyster'. */
   format?: MessageFormat | 'any';
+  /**
+   * Accept a key-path signature with any Taproot sighash type, as Oyster's
+   * verifymessage does. Off by default: with SIGHASH_NONE an Oyster-format
+   * signature commits to no output, so it verifies for every message.
+   */
+  anySighashType?: boolean;
 }
 
 // BIP340 recommends fresh auxiliary randomness for every signature, as a
@@ -279,7 +285,7 @@ export function signMessage(privateKey: Uint8Array, message: string, options: Si
   return toBase64(serializeWitness([signature]));
 }
 
-function verifyWitness(program: Uint8Array, signature: string, message: string, format: 'oyster' | 'bip322'): boolean {
+function verifyWitness(program: Uint8Array, signature: string, message: string, format: 'oyster' | 'bip322', anySighashType: boolean): boolean {
   let witness: Uint8Array[];
   try {
     messageBytes(message, format === 'oyster');
@@ -302,6 +308,7 @@ function verifyWitness(program: Uint8Array, signature: string, message: string, 
   if (sig.length === 65) {
     hashType = sig[64]!;
     if (hashType === Transaction.SIGHASH_DEFAULT) return false;
+    if (!anySighashType && hashType !== Transaction.SIGHASH_ALL) return false;
     try {
       assertTaprootSighashType(hashType);
     } catch {
@@ -355,8 +362,10 @@ function verifyLegacy(program: Uint8Array, signature: string, message: string): 
  * another network or is P2MR, a signature that is not base64 or not a
  * witness stack, a message that could not have been signed (an Oyster
  * message over 80 bytes, a lone surrogate), an address whose program is not
- * a point on the curve, and a script-path signature, which Oyster's script
- * engine could accept and pearljs does not evaluate. It throws only for a
+ * a point on the curve, a script-path signature, which Oyster's script
+ * engine could accept and pearljs does not evaluate, and a signature with a
+ * sighash type other than SIGHASH_DEFAULT or SIGHASH_ALL unless
+ * `anySighashType` is set. It throws only for a
  * mistake in the calling code: a TypeError when address, signature or
  * message is not a string, network is not a PearlNetwork, or the format is
  * unknown.
@@ -369,11 +378,12 @@ export function verifyMessage(
   options: VerifyMessageOptions = {},
 ): boolean {
   const format = formatOf(options.format, true);
-  if (format === 'any') return messageSignatureFormat(address, signature, message, network) !== undefined;
-  return verifyIn(format, address, signature, message, network);
+  const anySighashType = options.anySighashType === true;
+  if (format === 'any') return MESSAGE_FORMATS.some((each) => verifyIn(each, address, signature, message, network, anySighashType));
+  return verifyIn(format, address, signature, message, network, anySighashType);
 }
 
-function verifyIn(format: MessageFormat, address: string, signature: string, message: string, network: PearlNetwork): boolean {
+function verifyIn(format: MessageFormat, address: string, signature: string, message: string, network: PearlNetwork, anySighashType = false): boolean {
   if (typeof address !== 'string') throw new TypeError('address must be a string');
   if (typeof signature !== 'string') throw new TypeError('signature must be a base64 string');
   if (typeof message !== 'string') throw new TypeError('message must be a string');
@@ -389,7 +399,7 @@ function verifyIn(format: MessageFormat, address: string, signature: string, mes
     if (err instanceof PearlError) return false;
     throw err;
   }
-  return format === 'legacy' ? verifyLegacy(program, signature, message) : verifyWitness(program, signature, message, format);
+  return format === 'legacy' ? verifyLegacy(program, signature, message) : verifyWitness(program, signature, message, format, anySighashType);
 }
 
 /**

@@ -1552,6 +1552,316 @@
       "legacyRecoveredCompressed": true
     }
   ],
+  "messageSighashes": [
+    {
+      "name": "oyster-0x00-same-message",
+      "format": "oyster",
+      "hashType": 0,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUDr/Ho9AGWNr9Yrymq5xeBCsSgKFgsa8dypEsVTYnw3su4zzhXYWqF6h/y94GG1NcQTXG01aNiqfnrS21JEZyIG",
+      "pearlValid": true,
+      "pearljsValid": true
+    },
+    {
+      "name": "oyster-0x00-other-message",
+      "format": "oyster",
+      "hashType": 0,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUDr/Ho9AGWNr9Yrymq5xeBCsSgKFgsa8dypEsVTYnw3su4zzhXYWqF6h/y94GG1NcQTXG01aNiqfnrS21JEZyIG",
+      "pearlValid": false,
+      "pearljsValid": false
+    },
+    {
+      "name": "oyster-0x01-same-message",
+      "format": "oyster",
+      "hashType": 1,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUG/eAgD4tMYXehNOBHrRad60BwuUeQnPf9VVYlBcRAMbyJZDmM100YhMP8MxdwvlXNJs1DGoDlAmv5MgGGoHRFdAQ==",
+      "pearlValid": true,
+      "pearljsValid": true
+    },
+    {
+      "name": "oyster-0x01-other-message",
+      "format": "oyster",
+      "hashType": 1,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUG/eAgD4tMYXehNOBHrRad60BwuUeQnPf9VVYlBcRAMbyJZDmM100YhMP8MxdwvlXNJs1DGoDlAmv5MgGGoHRFdAQ==",
+      "pearlValid": false,
+      "pearljsValid": false
+    },
+    {
+      "name": "oyster-0x02-same-message",
+      "format": "oyster",
+      "hashType": 2,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUHREJZT9CpTTFx8hy7fbImQ4MDvnzKVCygizzZPRqnXbeTXbLGqwAYtefOHOwmvyEZY/ZZEOlc7rpVrTsUwIv+7Ag==",
+      "pearlValid": true,
+      "pearljsValid": false
+    },
+    {
+      "name": "oyster-0x02-other-message",
+      "format": "oyster",
+      "hashType": 2,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUHREJZT9CpTTFx8hy7fbImQ4MDvnzKVCygizzZPRqnXbeTXbLGqwAYtefOHOwmvyEZY/ZZEOlc7rpVrTsUwIv+7Ag==",
+      "pearlValid": true,
+      "pearljsValid": false
+    },
+    {
+      "name": "oyster-0x03-same-message",
+      "format": "oyster",
+      "hashType": 3,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUEV7O8yqcYBVSJnkhSlE7TuUOHx8SNaSCNTARRgLV1bRsTOG/VqowKMHvtJeb9UjLNykztt7CUCgNQpt/AOr2E4Aw==",
+      "pearlValid": true,
+      "pearljsValid": false
+    },
+    {
+      "name": "oyster-0x03-other-message",
+      "format": "oyster",
+      "hashType": 3,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUEV7O8yqcYBVSJnkhSlE7TuUOHx8SNaSCNTARRgLV1bRsTOG/VqowKMHvtJeb9UjLNykztt7CUCgNQpt/AOr2E4Aw==",
+      "pearlValid": false,
+      "pearljsValid": false
+    },
+    {
+      "name": "oyster-0x81-same-message",
+      "format": "oyster",
+      "hashType": 129,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUEmIQatXpxWV6CCRrYnN8dsTjga1K1H8EEkU6FAlCEGKp5JFiTk73LnOvxRfIle7DtMK2B4rCkVZ06xAH6/aRh2gQ==",
+      "pearlValid": true,
+      "pearljsValid": false
+    },
+    {
+      "name": "oyster-0x81-other-message",
+      "format": "oyster",
+      "hashType": 129,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUEmIQatXpxWV6CCRrYnN8dsTjga1K1H8EEkU6FAlCEGKp5JFiTk73LnOvxRfIle7DtMK2B4rCkVZ06xAH6/aRh2gQ==",
+      "pearlValid": false,
+      "pearljsValid": false
+    },
+    {
+      "name": "oyster-0x82-same-message",
+      "format": "oyster",
+      "hashType": 130,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUGePVrjZpfyFhrQFO+39p27FsupkPPuXgTJ/igxv8SdzgMNAHZE7RQOHgHxy+kcGOLW25pEdGvAmBckZ++fyMvXgg==",
+      "pearlValid": true,
+      "pearljsValid": false
+    },
+    {
+      "name": "oyster-0x82-other-message",
+      "format": "oyster",
+      "hashType": 130,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUGePVrjZpfyFhrQFO+39p27FsupkPPuXgTJ/igxv8SdzgMNAHZE7RQOHgHxy+kcGOLW25pEdGvAmBckZ++fyMvXgg==",
+      "pearlValid": true,
+      "pearljsValid": false
+    },
+    {
+      "name": "oyster-0x83-same-message",
+      "format": "oyster",
+      "hashType": 131,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUFoodE/dsMUYlX7MLNTBgnWkCg5ih620KDY6pQ8p776iSclP4+Y+Nq5A0qXWeecZ+3vRH+awxV10Es7fM+w+F1tgw==",
+      "pearlValid": true,
+      "pearljsValid": false
+    },
+    {
+      "name": "oyster-0x83-other-message",
+      "format": "oyster",
+      "hashType": 131,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUFoodE/dsMUYlX7MLNTBgnWkCg5ih620KDY6pQ8p776iSclP4+Y+Nq5A0qXWeecZ+3vRH+awxV10Es7fM+w+F1tgw==",
+      "pearlValid": false,
+      "pearljsValid": false
+    },
+    {
+      "name": "bip322-0x00-same-message",
+      "format": "bip322",
+      "hashType": 0,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUC/lG79VR0b5RHKoICkFvt9LKbhzeMm7fI1Hw1t6Y1sqls3LVBJ6KawNSRAtwx12M41uPqoZ9n1kkM3Lq8cTQ8m",
+      "pearlValid": true,
+      "pearljsValid": true
+    },
+    {
+      "name": "bip322-0x00-other-message",
+      "format": "bip322",
+      "hashType": 0,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUC/lG79VR0b5RHKoICkFvt9LKbhzeMm7fI1Hw1t6Y1sqls3LVBJ6KawNSRAtwx12M41uPqoZ9n1kkM3Lq8cTQ8m",
+      "pearlValid": false,
+      "pearljsValid": false
+    },
+    {
+      "name": "bip322-0x01-same-message",
+      "format": "bip322",
+      "hashType": 1,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUFgZj5NEfrhE5iixhAmNkCPhJtnzZ97DGawHxFuqP9mkkwR1GvMd8W71L/r4uE1g0cJJPsAkUkBZweO9vRfU7PhAQ==",
+      "pearlValid": true,
+      "pearljsValid": true
+    },
+    {
+      "name": "bip322-0x01-other-message",
+      "format": "bip322",
+      "hashType": 1,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUFgZj5NEfrhE5iixhAmNkCPhJtnzZ97DGawHxFuqP9mkkwR1GvMd8W71L/r4uE1g0cJJPsAkUkBZweO9vRfU7PhAQ==",
+      "pearlValid": false,
+      "pearljsValid": false
+    },
+    {
+      "name": "bip322-0x02-same-message",
+      "format": "bip322",
+      "hashType": 2,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUEY9Xqnj5JkT35YLE/5qlchuXqOim0VV8GFNYKyPZyw8WHTDiFEytkA0h/xcx8YUHtuKi7b8XLpKSuFe1GVzlBJAg==",
+      "pearlValid": true,
+      "pearljsValid": false
+    },
+    {
+      "name": "bip322-0x02-other-message",
+      "format": "bip322",
+      "hashType": 2,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUEY9Xqnj5JkT35YLE/5qlchuXqOim0VV8GFNYKyPZyw8WHTDiFEytkA0h/xcx8YUHtuKi7b8XLpKSuFe1GVzlBJAg==",
+      "pearlValid": false,
+      "pearljsValid": false
+    },
+    {
+      "name": "bip322-0x03-same-message",
+      "format": "bip322",
+      "hashType": 3,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUEPQHPBTsJ+J1sRfqN5YSO8wiVswpYnJTgZgP3HfpuyviH0lOoBrU4S5tQR8Kb8CvaEQ/5DZSZkXE5QVcPRf+0YAw==",
+      "pearlValid": true,
+      "pearljsValid": false
+    },
+    {
+      "name": "bip322-0x03-other-message",
+      "format": "bip322",
+      "hashType": 3,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUEPQHPBTsJ+J1sRfqN5YSO8wiVswpYnJTgZgP3HfpuyviH0lOoBrU4S5tQR8Kb8CvaEQ/5DZSZkXE5QVcPRf+0YAw==",
+      "pearlValid": false,
+      "pearljsValid": false
+    },
+    {
+      "name": "bip322-0x81-same-message",
+      "format": "bip322",
+      "hashType": 129,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUG2GbCB6peWFSE/4H03n/qPLH+OzC+FOHI1Mcpgb7gkhdw1oTVmuqWK+4RIHvCTojO8MZdD9f23fajPxifDYp+TgQ==",
+      "pearlValid": true,
+      "pearljsValid": false
+    },
+    {
+      "name": "bip322-0x81-other-message",
+      "format": "bip322",
+      "hashType": 129,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUG2GbCB6peWFSE/4H03n/qPLH+OzC+FOHI1Mcpgb7gkhdw1oTVmuqWK+4RIHvCTojO8MZdD9f23fajPxifDYp+TgQ==",
+      "pearlValid": false,
+      "pearljsValid": false
+    },
+    {
+      "name": "bip322-0x82-same-message",
+      "format": "bip322",
+      "hashType": 130,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUElsEYeFVn/1WG0NYU96eUBZLDE+wuC7VxKgsJDDvsWg1vNSJg88wAr3kveh0WrNNPrjnHOd+WG6KYJjEyOlkDmgg==",
+      "pearlValid": true,
+      "pearljsValid": false
+    },
+    {
+      "name": "bip322-0x82-other-message",
+      "format": "bip322",
+      "hashType": 130,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUElsEYeFVn/1WG0NYU96eUBZLDE+wuC7VxKgsJDDvsWg1vNSJg88wAr3kveh0WrNNPrjnHOd+WG6KYJjEyOlkDmgg==",
+      "pearlValid": false,
+      "pearljsValid": false
+    },
+    {
+      "name": "bip322-0x83-same-message",
+      "format": "bip322",
+      "hashType": 131,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "I own this address for pool A",
+      "signature": "AUE0RNl2hJWSK5Kv4HBec0NuqvfIkYoMIsf2eCqqf35DKCsSupu+NKSpvC69cp4kbpTbOnIzq0J0KtLB7lD9/NaYgw==",
+      "pearlValid": true,
+      "pearljsValid": false
+    },
+    {
+      "name": "bip322-0x83-other-message",
+      "format": "bip322",
+      "hashType": 131,
+      "address": "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+      "signedMessage": "I own this address for pool A",
+      "message": "send everything to mallory",
+      "signature": "AUE0RNl2hJWSK5Kv4HBec0NuqvfIkYoMIsf2eCqqf35DKCsSupu+NKSpvC69cp4kbpTbOnIzq0J0KtLB7lD9/NaYgw==",
+      "pearlValid": false,
+      "pearljsValid": false
+    }
+  ],
   "multiASpends": [
     {
       "name": "2-of-3-signed-by-0-and-2",

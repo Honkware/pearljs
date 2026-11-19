@@ -9,6 +9,7 @@ import {
   deriveSigningAccountFromSeed,
   encodeAddress,
   MAX_MESSAGE_LENGTH,
+  messageSignatureFormat,
   networks,
   signMessage,
   verifyMessage,
@@ -47,11 +48,23 @@ describe('message signing', () => {
     });
   }
 
-  it('produces a one-item witness with a 64-byte signature', () => {
-    const signature = account.signMessage('Hello, Pearl', { index: 0 });
-    const bytes = Uint8Array.from(atob(signature), (char) => char.charCodeAt(0));
-    expect(bytes).toHaveLength(66);
-    expect([bytes[0], bytes[1]]).toEqual([1, 64]);
+  for (const expected of vectors.messageSighashes) {
+    it(`answers ${expected.pearljsValid} for ${expected.name}, where Pearl answers ${expected.pearlValid} and anySighashType follows Pearl`, () => {
+      const format = expected.format as 'oyster' | 'bip322';
+      expect(verifyMessage(expected.address, expected.signature, expected.message, networks.mainnet, { format })).toBe(expected.pearljsValid);
+      expect(verifyMessage(expected.address, expected.signature, expected.message, networks.mainnet, { format: 'any' })).toBe(expected.pearljsValid);
+      expect(messageSignatureFormat(expected.address, expected.signature, expected.message, networks.mainnet)).toBe(expected.pearljsValid ? format : undefined);
+      expect(verifyMessage(expected.address, expected.signature, expected.message, networks.mainnet, { format, anySighashType: true })).toBe(expected.pearlValid);
+    });
+  }
+
+  it('produces a one-item witness with a 64-byte signature, so always SIGHASH_DEFAULT', () => {
+    for (const format of ['oyster', 'bip322'] as const) {
+      const signature = account.signMessage('Hello, Pearl', { index: 0, format });
+      const bytes = Uint8Array.from(atob(signature), (char) => char.charCodeAt(0));
+      expect(bytes).toHaveLength(66);
+      expect([bytes[0], bytes[1]]).toEqual([1, 64]);
+    }
   });
 
   it('rejects a changed signature', () => {

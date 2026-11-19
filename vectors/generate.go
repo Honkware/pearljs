@@ -292,6 +292,7 @@ type Vectors struct {
 	XMSS             XMSSVectors             `json:"xmss"`
 	Messages         []MessageVector         `json:"messages"`
 	MessageFormats   []MessageFormatVector   `json:"messageFormats"`
+	MessageSighashes []MessageSighashVector  `json:"messageSighashes"`
 	MultiASpends     []MultiASpendVector     `json:"multiASpends"`
 	ScriptToolkit    ScriptToolkitVectors    `json:"scriptToolkit"`
 	WIF              []WIFVector             `json:"wif"`
@@ -580,6 +581,25 @@ type MessageVector struct {
 	Signature string `json:"signature"`
 	SignError string `json:"signError"`
 	Valid     bool   `json:"valid"`
+}
+
+// MessageSighashVector is a message signature made with HashType over
+// SignedMessage and checked against Message. PearlValid is Pearl's verdict:
+// Oyster's BIP322VerifyMessageSimple for the oyster format, Pearl's script
+// engine on BIP-322's to_sign for bip322. PearljsValid is what pearljs's
+// verifyMessage answers by default, which refuses every hash type but
+// SIGHASH_DEFAULT and SIGHASH_ALL, since a NONE signature in Oyster's
+// format holds for any message.
+type MessageSighashVector struct {
+	Name          string `json:"name"`
+	Format        string `json:"format"`
+	HashType      uint8  `json:"hashType"`
+	Address       string `json:"address"`
+	SignedMessage string `json:"signedMessage"`
+	Message       string `json:"message"`
+	Signature     string `json:"signature"`
+	PearlValid    bool   `json:"pearlValid"`
+	PearljsValid  bool   `json:"pearljsValid"`
 }
 
 // MessageFormatVector is one message in the two other formats a Pearl key
@@ -1941,6 +1961,7 @@ func main() {
 	}
 
 	vectors.MessageFormats = messageFormatVectors(privM0, addrM0, accountPath+"/0/0")
+	vectors.MessageSighashes = messageSighashVectors(privM0, addrM0)
 
 	vectors.Recovery = recoveryVectors(nets)
 
@@ -2247,6 +2268,72 @@ func bip322Transactions(message []byte, pkScript []byte) (chainhash.Hash, *wire.
 	toSign.AddTxIn(&wire.TxIn{PreviousOutPoint: *wire.NewOutPoint(&toSpendHash, 0), Sequence: 0})
 	toSign.AddTxOut(wire.NewTxOut(0, []byte{txscript.OP_RETURN}))
 	return *hash, toSpend, toSign
+}
+
+// oysterToSign is to_sign as BIP322SignMessageSimple builds it
+// (wallet/rpc/jsonrpc/bip322.go), whose verifier gives the verdicts.
+func oysterToSign(message []byte, pkScript []byte) *wire.MsgTx {
+	toSpend := wire.NewMsgTx(2)
+	toSpend.AddTxIn(wire.NewTxIn(&wire.OutPoint{Index: 0xffffffff}, nil, nil))
+	toSpend.AddTxOut(wire.NewTxOut(0, pkScript))
+	toSign := wire.NewMsgTx(2)
+	toSpendHash := toSpend.TxHash()
+	toSign.AddTxIn(wire.NewTxIn(wire.NewOutPoint(&toSpendHash, 0), nil, nil))
+	nullData, err := txscript.NullDataScript(message)
+	check(err)
+	toSign.AddTxOut(wire.NewTxOut(0, nullData))
+	return toSign
+}
+
+func messageSighashVectors(priv *btcec.PrivateKey, addr *btcutil.AddressTaproot) []MessageSighashVector {
+	pkScript, err := txscript.PayToAddrScript(addr)
+	check(err)
+	fetcher := txscript.NewCannedPrevOutputFetcher(pkScript, 0)
+	const signed, other = "I own this address for pool A", "send everything to mallory"
+	var out []MessageSighashVector
+	for _, format := range []string{"oyster", "bip322"} {
+		build := func(message string) *wire.MsgTx {
+			if format == "oyster" {
+				return oysterToSign([]byte(message), pkScript)
+			}
+			_, _, toSign := bip322Transactions([]byte(message), pkScript)
+			return toSign
+		}
+		for _, hashType := range []txscript.SigHashType{
+			txscript.SigHashDefault, txscript.SigHashAll, txscript.SigHashNone, txscript.SigHashSingle,
+			txscript.SigHashAll | txscript.SigHashAnyOneCanPay, txscript.SigHashNone | txscript.SigHashAnyOneCanPay,
+			txscript.SigHashSingle | txscript.SigHashAnyOneCanPay,
+		} {
+			toSign := build(signed)
+			witness, err := txscript.TaprootWitnessSignature(toSign, txscript.NewTxSigHashes(toSign, fetcher), 0, 0, pkScript, hashType, priv)
+			check(err)
+			encoded, err := jsonrpc.SerializeWitnessStack(witness)
+			check(err)
+			signature := base64.StdEncoding.EncodeToString(encoded)
+			for _, message := range []string{signed, other} {
+				var valid bool
+				if format == "oyster" {
+					valid, err = jsonrpc.BIP322VerifyMessageSimple(addr, signature, message)
+					check(err)
+				} else {
+					tx := build(message)
+					tx.TxIn[0].SetWitness(witness)
+					engine, err := txscript.NewEngine(pkScript, tx, 0, txscript.StandardVerifyFlags, nil, txscript.NewTxSigHashes(tx, fetcher), 0, fetcher)
+					valid = err == nil && engine.Execute() == nil
+				}
+				name := fmt.Sprintf("%s-%#02x-same-message", format, uint8(hashType))
+				if message != signed {
+					name = fmt.Sprintf("%s-%#02x-other-message", format, uint8(hashType))
+				}
+				out = append(out, MessageSighashVector{
+					Name: name, Format: format, HashType: uint8(hashType), Address: addr.String(),
+					SignedMessage: signed, Message: message, Signature: signature, PearlValid: valid,
+					PearljsValid: valid && (hashType == txscript.SigHashDefault || hashType == txscript.SigHashAll),
+				})
+			}
+		}
+	}
+	return out
 }
 
 func messageFormatVectors(priv *btcec.PrivateKey, addr *btcutil.AddressTaproot, path string) []MessageFormatVector {
