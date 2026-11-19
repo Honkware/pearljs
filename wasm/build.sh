@@ -31,7 +31,15 @@ sed -i.orig -e "s#path = \"\.\./plonky2/#path = \"$pearl/plonky2/#" -e "s#path =
 rm "$here/vendor/zk-pow/Cargo.toml.orig"
 
 cd "$here"
-cargo build --locked --release --target wasm32-unknown-unknown -p pearljs-verify-proof
+# Panic messages carry source paths; map them to fixed names so the binary is the
+# same on every machine and names no home directory. CARGO_ENCODED_RUSTFLAGS takes
+# flags separated by 0x1f, since the paths may hold spaces, and replaces
+# .cargo/config.toml's flags, so the getrandom backend is repeated here.
+sysroot=$(rustc --print sysroot)
+cargo_home=$(cd "${CARGO_HOME:-$HOME/.cargo}" && pwd -P)
+sep=$(printf '\037')
+CARGO_ENCODED_RUSTFLAGS="--cfg${sep}getrandom_backend=\"wasm_js\"${sep}--remap-path-prefix=$here=/pearljs/wasm${sep}--remap-path-prefix=$pearl=/pearl${sep}--remap-path-prefix=$cargo_home=/cargo${sep}--remap-path-prefix=$sysroot=/rustc" \
+  cargo build --locked --release --target wasm32-unknown-unknown -p pearljs-verify-proof
 rm -rf "$here/target/bindgen"
 wasm-bindgen --target web --no-typescript --out-dir "$here/target/bindgen" target/wasm32-unknown-unknown/release/pearljs_verify_proof.wasm
 wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
