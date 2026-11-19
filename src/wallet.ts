@@ -30,6 +30,7 @@ import type { FeeRate } from './amount.js';
 import type { BlockRef } from './client.js';
 import { KeystoreError, PearlError, PearlRpcError, PolicyError, SigningError, StoreError, WalletError, XmssError } from './errors.js';
 import { toHex } from './internal/bytes.js';
+import { mapLimit } from './internal/filter-scan.js';
 import { decodeBigint, decodeHex, encodeBigint } from './internal/store-ops.js';
 import { InsufficientFundsError, confirmationsFromHeight } from './coinselect.js';
 import type { CoinSelectionStrategy } from './coinselect.js';
@@ -724,19 +725,6 @@ function txFromJson(txid: string, value: JsonValue): TxEntry {
     ...(record.label === null ? {} : { label: record.label }),
     ...(record.by === null ? {} : { by: record.by }),
   };
-}
-
-async function mapLimit<T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await run(items[i]!);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
-  return results;
 }
 
 // The outpoints a transaction spends; none for a coinbase.

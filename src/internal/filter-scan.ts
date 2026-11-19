@@ -85,6 +85,7 @@ function invalidHeader(message: string): PearlError {
   return new PearlError('BLOCK_HEADER_INVALID', message);
 }
 
+// Runs `run` over items with at most `limit` calls in flight, keeping order.
 export async function mapLimit<T, R>(items: readonly T[], limit: number, run: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;

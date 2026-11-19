@@ -38,6 +38,7 @@ import { parseTransaction } from './transaction.js';
 import type { TxOutput } from './transaction.js';
 import type { TransactionSource } from './wallet.js';
 import { toHex } from './internal/bytes.js';
+import { mapLimit } from './internal/filter-scan.js';
 import { PearlError } from './errors.js';
 
 /**
@@ -307,21 +308,6 @@ function stateOf(invoice: Invoice, paid: bigint, confirmations: number, conflict
   }
   if (now >= invoice.expiresAt) return paid > 0n ? 'expired-underpaid' : 'expired';
   return paid > 0n ? 'underpaid' : 'awaiting';
-}
-
-
-// Runs fn over items with at most `limit` calls in flight, keeping order.
-async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i]!);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
 }
 
 /** Options for refreshInvoices. */
