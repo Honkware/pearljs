@@ -164,6 +164,17 @@ function instantiate(locate: Locate): Promise<Verifier> {
   });
 }
 
+// The module's memory grows by some 24 MB with every V2 or V3 proof and never shrinks,
+// so an instance past this size is left to the garbage collector and the next call loads another.
+const RETIRE_BYTES = 256 * 1024 * 1024;
+
+function retire(verifier: Verifier): void {
+  if (live === verifier && verifier.exports.memory.buffer.byteLength > RETIRE_BYTES) {
+    live = null;
+    current = null;
+  }
+}
+
 function discard(verifier: Verifier): void {
   verifier.broken = true;
   if (live === verifier) {
@@ -312,6 +323,7 @@ export async function verifyProof(header: PearlBlockHeader, certificate: PearlCe
     return { valid: false, outcome: 'error', message: `Internal error: ${name}: ${text}` };
   }
   const text = message(exports);
+  retire(verifier);
   if (code === 0) return { valid: true, outcome: 'accepted', message: text };
   return { valid: false, outcome: code === 1 ? 'rejected' : 'error', message: text };
 }

@@ -1,8 +1,7 @@
 // Mainnet blocks whose proofs pearld accepted. Each is the smallest block
-// (coinbase only) that shows one way verifyBlockProof failed on the chain:
-// the module's stack overflowing, in V8 or in the module's own memory, comes
-// out as a thrown RangeError, a rejection or a panic depending on what the
-// overflow overwrites.
+// (coinbase only) that shows one way a verifier built before zk-pow's matrix
+// positions were computed in 64 bits failed on the chain: a thrown
+// RangeError, a rejection or a panic.
 
 import { describe, expect, it } from 'vitest';
 import { verifyBlockProof } from '../src/verify-proof.js';
@@ -10,7 +9,7 @@ import { mainnetBlock } from './helpers.js';
 
 describe('verifyBlockProof on mainnet', () => {
   it.each([
-    [98976, 'a V2 proof that overflowed the native stack'],
+    [98976, 'a V2 proof that threw a RangeError'],
     [91600, 'a V2 proof the verifier called invalid'],
     [98800, 'a V2 proof that panicked as unreachable code'],
     [145267, 'a V3 proof the verifier called invalid'],
@@ -20,19 +19,23 @@ describe('verifyBlockProof on mainnet', () => {
     expect(verdict).toEqual({ valid: true, outcome: 'accepted', message: 'Proof verified successfully' });
   });
 
-  it('accepts the V1 proof of block 200, which pearld verifies with its V1 verifier', async () => {
+  it('rejects the V1 proof of block 200 with the message of pearld\'s FFI on the fp8-scheme branch', async () => {
     const verdict = await verifyBlockProof(mainnetBlock(200));
-    expect(verdict.outcome).toBe('accepted');
+    expect(verdict).toEqual({ valid: false, outcome: 'rejected', message: 'unsupported certificate version 1 for FFI verification' });
   });
 
-  it('keeps accepting after many proofs in one process', async () => {
-    // The module's memory grew by some 16 to 25 MB a proof until it reached
-    // 4 GB and trapped, about every 250 proofs. Block 139000 verifies within
-    // the module's stack, so only the growth is measured.
+  it('keeps its memory bounded over many proofs in one process', async () => {
+    // The module's memory grows by some 24 MB a proof and reached WebAssembly's
+    // 4 GB after about 250. Block 139000 verifies in about 60 ms.
     const block = mainnetBlock(139000);
     expect((await verifyBlockProof(block)).outcome).toBe('accepted');
     const before = process.memoryUsage().external;
-    for (let i = 0; i < 20; i += 1) await verifyBlockProof(block);
-    expect(process.memoryUsage().external - before).toBeLessThan(64 * 1024 * 1024);
+    let most = 0;
+    for (let i = 0; i < 60; i += 1) {
+      expect((await verifyBlockProof(block)).outcome).toBe('accepted');
+      globalThis.gc?.();
+      most = Math.max(most, process.memoryUsage().external - before);
+    }
+    expect(most).toBeLessThan(1024 * 1024 * 1024);
   });
 });
