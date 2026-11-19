@@ -33,6 +33,7 @@
     "src/payments.ts",
     "src/policy.ts",
     "src/rbf.ts",
+    "src/recover.ts",
     "src/rpc.ts",
     "src/script.ts",
     "src/scriptpath.ts",

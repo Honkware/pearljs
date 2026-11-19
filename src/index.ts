@@ -52,3 +52,4 @@ export * from './ws.js';
 export * from './xmss.js';
 export * from './mining.js';
 export * from './gateway.js';
+export * from './recover.js';

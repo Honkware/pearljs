@@ -131,6 +131,10 @@
       "types": "./dist/rbf.d.ts",
       "default": "./dist/rbf.js"
     },
+    "./recover": {
+      "types": "./dist/recover.d.ts",
+      "default": "./dist/recover.js"
+    },
     "./rpc": {
       "types": "./dist/rpc.d.ts",
       "default": "./dist/rpc.js"
