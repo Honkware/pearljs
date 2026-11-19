@@ -40,10 +40,6 @@ import { checkSanity } from './policy.js';
 import type { BlockTemplate } from './rpc.js';
 import { encodeScriptNumber, scriptPush } from './script.js';
 
-// ---------------------------------------------------------------------------
-// Block templates
-// ---------------------------------------------------------------------------
-
 /** Bytes of a header without its proof commitment: what a miner's job key and pearl-gateway's jobs hash. */
 export const INCOMPLETE_HEADER_SIZE = 76;
 /** mining.CoinbaseFlags: the text pearld's own miner writes into its coinbases. */
@@ -283,10 +279,6 @@ export function sealBlock(skeleton: BlockSkeleton, work: ProvenWork): PearlBlock
   checkCertificateBinding(block);
   return block;
 }
-
-// ---------------------------------------------------------------------------
-// The V2/V3 statement: mining configuration and public data
-// ---------------------------------------------------------------------------
 
 /** zk-pow's MiningConfiguration::SERIALIZED_SIZE. */
 export const MINING_CONFIGURATION_SIZE = 52;
@@ -629,10 +621,6 @@ export function checkPublicData(data: PublicData): void {
   for (const outer of moe.outerIndices) if (!(outer < m)) malformed('outer indices must be <= m');
 }
 
-// ---------------------------------------------------------------------------
-// The V2/V3 commitment chain
-// ---------------------------------------------------------------------------
-
 const BLAKE3_CHUNK = 1024;
 // blake3("pearl/cert-v3/noise-seed/A") and "/B", zk-pow's SEED_SALT_A and SEED_SALT_B.
 const SEED_SALT_A = blake3(new TextEncoder().encode('pearl/cert-v3/noise-seed/A'));
@@ -765,10 +753,6 @@ export function jackpotHash(words: readonly number[], seedA: Uint8Array): Uint8A
   if (words.length !== 16) throw new RangeError(`the jackpot is 16 words, got ${words.length}`);
   return hash32(concat(words.map((word) => uint32le(word))), seedA);
 }
-
-// ---------------------------------------------------------------------------
-// Targets and jackpot bounds
-// ---------------------------------------------------------------------------
 
 /**
  * The target zk-pow reads from compact bits (nbits_to_difficulty). It is
@@ -942,10 +926,6 @@ export function checkBlockWork(block: PearlBlock, network: PearlNetwork, height:
     }
   }
 }
-
-// ---------------------------------------------------------------------------
-// Pool statistics
-// ---------------------------------------------------------------------------
 
 const TWO_256 = 1n << 256n;
 
