@@ -95,6 +95,19 @@ describe('htlcLeaves', () => {
     expect(parseHtlcLeaf(Uint8Array.from([0x5a, 0xb1, 0x75, 32, ...key, 0xac]))).toEqual({ kind: 'refund', timelock: { locktime: 10 }, key });
     expect(parseHtlcLeaf(Uint8Array.from([0x4c]))).toBeNull();
   });
+
+  it('refuses a claim leaf whose pushes are not minimal, which Pearl can never spend', () => {
+    const key = account.derivePublicKey(1);
+    const hash = sha256(preimage);
+    const pushdata = Uint8Array.from([0x82, 1, 32, 0x88, 0xa8, 0x4c, 32, ...hash, 0x88, 32, ...key, 0xac]);
+    const lengthByPushdata = Uint8Array.from([0x82, 0x4c, 1, 32, 0x88, 0xa8, 32, ...hash, 0x88, 32, ...key, 0xac]);
+    const keyByPushdata = Uint8Array.from([0x82, 1, 32, 0x88, 0xa8, 32, ...hash, 0x88, 0x4c, 32, ...key, 0xac]);
+    for (const leaf of [pushdata, lengthByPushdata, keyByPushdata]) {
+      expect(parseHtlcLeaf(leaf)).toBeNull();
+      expect(() => htlcStack(leaf, { preimage })).toThrow('not an HTLC claim or refund leaf');
+    }
+    expect(parseHtlcLeaf(hashlockScript(hash, checksigScript(key)))).toEqual({ kind: 'claim', hashType: 'sha256', hash, key });
+  });
 });
 
 describe("Pearl's verdicts on HTLC spends", () => {

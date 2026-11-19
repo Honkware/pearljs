@@ -397,9 +397,10 @@ export function parseHtlcLeaf(script: Uint8Array): HtlcLeaf | null {
     const [size, length, verify, op, hash, verify2] = chunks;
     if (size !== OP_CODES.OP_SIZE || !(length instanceof Uint8Array) || length.length !== 1 || length[0] !== HTLC_PREIMAGE_LENGTH) return null;
     if (verify !== OP_CODES.OP_EQUALVERIFY || verify2 !== OP_CODES.OP_EQUALVERIFY || !(hash instanceof Uint8Array)) return null;
-    if (op === OP_CODES.OP_SHA256 && hash.length === 32) return { kind: 'claim', hashType: 'sha256', hash, key };
-    if (op === OP_CODES.OP_HASH160 && hash.length === 20) return { kind: 'claim', hashType: 'hash160', hash, key };
-    return null;
+    const hashType = op === OP_CODES.OP_SHA256 && hash.length === 32 ? 'sha256' : op === OP_CODES.OP_HASH160 && hash.length === 20 ? 'hash160' : null;
+    // Pearl's engine always requires minimal pushes, so only the bytes the builder writes can be spent.
+    if (hashType === null || toHex(hashlockScript(hash, checksigScript(key))) !== toHex(script)) return null;
+    return { kind: 'claim', hashType, hash, key };
   }
   if (chunks.length === 5 && chunks[2] === OP_CODES.OP_DROP) {
     const value = pushedNumber(chunks[0]);
