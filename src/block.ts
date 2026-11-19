@@ -28,6 +28,7 @@ import {
 import type { PearlBlockHeader } from './blockheader.js';
 import { concat, equalBytes, toHex, uint32le, varInt } from './internal/bytes.js';
 import { PearlError } from './errors.js';
+import { checkLotteryLayout, checkV4Statement } from './internal/v4-statement.js';
 
 // wire.CertificateMaxSize, wire.MaxZKProofSize and the public data sizes.
 /** wire.CertificateMaxSize: the most bytes a serialized certificate may have, version included. */
@@ -438,7 +439,8 @@ export function certificateStatement(certificate: PearlCertificate): V4Statement
     const w = u16();
     const [oWPrev, oW, oLast] = [u32(), u32(), u32()];
     const [hashRouting, hashOffsets] = [hash(), hash()];
-    // I_A has no length of its own: it holds one index per row of A's tile.
+    // I_A has no length of its own: it holds one index per row of A's tile, whose shape is checked first.
+    checkLotteryLayout(a.tileSize, b.tileSize);
     if (data.length - at < a.tileSize * 4) fail('truncated fp8 public_data');
     const iA = Array.from({ length: a.tileSize }, () => u32());
     moe = { hashIdR: moeHashIds[0], hashIdO: moeHashIds[1], w, oWPrev, oW, oLast, hashRouting, hashOffsets, iA };
@@ -447,8 +449,9 @@ export function certificateStatement(certificate: PearlCertificate): V4Statement
   return { ancestorHeader, k, r, quant, device, a, b, experts, hashA, hashB, tileBases, hashJackpot, moe };
 }
 
-// The checks verify_zk_proof_v4 and JobParams::check_ancestry make before
-// they decode the statement or verify the proof, in their order and words.
+// The checks verify_zk_proof_v4 makes before the proof, in its order and
+// words: the sizes, the statement decoded with its bounds, then
+// JobParams::check_ancestry.
 function checkV4Ancestry(certificate: PearlCertificate, header: PearlBlockHeader): void {
   const fail = (message: string): never => {
     throw new PearlError('BLOCK_CERTIFICATE_INVALID', message);
@@ -460,6 +463,7 @@ function checkV4Ancestry(certificate: PearlCertificate, header: PearlBlockHeader
   if (publicData.length < PUBLIC_DATA_MIN_SIZE_V4 || publicData.length > PUBLIC_DATA_MAX_SIZE_V4) {
     fail(`invalid public_data_len ${publicData.length}`);
   }
+  checkV4Statement(certificateStatement(certificate)!);
   let child = header;
   [...ancestors, certificateAncestorHeader(certificate)!].forEach((parent, i) => {
     if (!equalBytes(child.prevBlock, blockHash(parent))) fail(`v4 ancestor header at depth ${i + 1} does not connect`);
@@ -473,9 +477,10 @@ function checkV4Ancestry(certificate: PearlCertificate, header: PearlBlockHeader
  * certificate's hash equal to the header hash, the header's proof commitment
  * equal to the certificate's, and public data and proof that are not empty.
  * For V4 it then checks what Pearl's verifier checks before the proof: a
- * public data length a statement can have, and ancestor headers that chain
- * the block, parent first, to the ancestor header in the public data. Genesis
- * blocks are hardcoded and fail these checks.
+ * public data length a statement can have, a statement that decodes and
+ * meets Pearl's bounds (CERTIFICATE_MALFORMED otherwise), and ancestor
+ * headers that chain the block, parent first, to the ancestor header in the
+ * public data. Genesis blocks are hardcoded and fail these checks.
  */
 export function checkCertificateBinding(block: PearlBlock): void {
   const { certificate, header } = block;

@@ -30,7 +30,7 @@ import {
   checkCertificateBinding,
 } from './block.js';
 import type { CertificateVersion, PearlBlock, PearlCertificate, V4Statement } from './block.js';
-import { PUBLIC_DATA_SIZE_V1 } from './block.js';
+import { PUBLIC_DATA_MAX_SIZE_V4, PUBLIC_DATA_MIN_SIZE_V4, PUBLIC_DATA_SIZE_V1 } from './block.js';
 import { BLOCK_HEADER_SIZE, blockHash, parseBlockHeader, serializeBlockHeader } from './blockheader.js';
 import type { PearlBlockHeader } from './blockheader.js';
 import { bitsToTarget, requiredCertVersion } from './consensus.js';
@@ -855,19 +855,21 @@ export interface JackpotCheckOptions {
  * The checks Pearl's verifier makes on a certificate's public data before
  * it verifies the proof, against `bits`: a block header's bits, or a pool's
  * share bits, which Pearl's verifier also accepts in their place. For V2 and
- * V3: the public data's layout and structure (parsePublicData,
+ * V3: the public data's length, layout and structure (parsePublicData,
  * checkPublicData), then hash_jackpot at most jackpotBound. For V1, which
  * mainnet carries below its MoE fork: the 164-byte layout with an all-zero
  * reserved tail and V1's structure rules, then the same bound. For V4: the
- * statement's layout (certificateStatement) and bounds, then
+ * statement's length, layout (certificateStatement) and bounds, then
  * hash_jackpot at most v4JackpotBound. Throws JACKPOT_ABOVE_TARGET for a
  * jackpot over its bound and CERTIFICATE_MALFORMED for the rest, with
- * Pearl's messages. Passing means only that the proof is worth
- * verifying.
+ * Pearl's messages, in its order. Passing means only that the proof is
+ * worth verifying.
  */
 export function checkJackpot(certificate: PearlCertificate, bits: number, options: JackpotCheckOptions = {}): void {
   const { version, publicData } = certificate;
+  if (publicData.length === 0 && version !== 1) malformed('empty public data');
   if (version === 4) {
+    if (publicData.length < PUBLIC_DATA_MIN_SIZE_V4 || publicData.length > PUBLIC_DATA_MAX_SIZE_V4) malformed(`invalid public_data_len ${publicData.length}`);
     const statement = certificateStatement(certificate)!;
     checkV4Statement(statement);
     if (jackpotValue(statement.hashJackpot) > v4JackpotBound(bits, statement)) {
@@ -880,6 +882,7 @@ export function checkJackpot(certificate: PearlCertificate, bits: number, option
     return;
   }
   if (version !== 2 && version !== 3) malformed(`unknown certificate version ${version}`);
+  if (!isValidPublicDataSize(publicData.length)) malformed(`invalid public_data_len ${publicData.length}`);
   const data = parsePublicData(publicData);
   checkPublicData(data);
   if (jackpotValue(data.hashJackpot) > jackpotBound(bits, data.config)) {

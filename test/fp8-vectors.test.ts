@@ -99,13 +99,10 @@ describe('V4 blocks', () => {
 
       const refused = BINDING_REFUSALS.some((text) => expected.verifyError.includes(text));
       const message = bindingError(() => checkCertificateBinding(block));
-      if (refused) {
-        expect(message, expected.verifyError).not.toBe('');
-        expect(expected.verifyError.endsWith(message), `${message} / ${expected.verifyError}`).toBe(true);
-      } else {
-        // The proof or the statement is what Pearl refuses, or nothing: pearljs checks neither.
-        expect(message, expected.verifyError).toBe('');
-      }
+      if (refused) expect(message, expected.verifyError).not.toBe('');
+      // The binding check decodes the statement, so it refuses a bad one as Pearl does; only the proof is left to Pearl.
+      if (message !== '') expect(expected.verifyError.endsWith(message), `${message} / ${expected.verifyError}`).toBe(true);
+      else expect(expected.verifyError === '' || /proof does not verify|malformed proof bytes|Proof Invalid/.test(expected.verifyError), expected.verifyError).toBe(true);
 
       expect(block.transactions.map((tx) => tx.getId())).toEqual(expected.txids);
       expect(displayHex(calculateMerkleRoot(block.transactions))).toBe(expected.merkleRoot);

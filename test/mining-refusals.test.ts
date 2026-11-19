@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import vectors from '../vectors/mining/proofs.json';
 import type { CertificateVersion, PearlCertificate } from '../src/block.js';
-import { certificateProofCommitment } from '../src/block.js';
+import { certificateProofCommitment, certificateStatement, checkCertificateBinding } from '../src/block.js';
 import type { PearlBlockHeader } from '../src/blockheader.js';
 import { blockHash, parseBlockHeader } from '../src/blockheader.js';
 import { fromHex } from '../src/internal/bytes.js';
@@ -74,5 +74,52 @@ describe('checkJackpot and checkBlockWork on V1', () => {
   it('refuses V1 public data that is not 164 bytes', () => {
     const { header, certificate } = edited('V3 dense', 1, (pd) => pd.slice(0, 100));
     expect(() => checkJackpot(certificate, header.bits)).toThrow(expect.objectContaining({ code: 'CERTIFICATE_MALFORMED', message: 'v1 proof requires 164 byte public_data, got 100' }));
+  });
+});
+
+describe('the order of Pearl\'s refusals', () => {
+  it.each([
+    ['V3 public data of 170 bytes', edited('V3 dense', 3, (pd) => Uint8Array.from([...pd, 0, 0, 0, 0, 0, 0])), 'invalid public_data_len 170'],
+    ['V3 public data of 1 byte', edited('V3 dense', 3, (pd) => pd.slice(0, 1)), 'invalid public_data_len 1'],
+    ['V2 without public data', edited('V3 dense', 2, () => new Uint8Array(0)), 'empty public data'],
+    ['V4 public data of 239 bytes', edited('V4 H100', 4, (pd) => pd.slice(0, 239)), 'invalid public_data_len 239'],
+  ])('checkJackpot refuses %s by its length first', (_, { header, certificate }, message) => {
+    expect(() => checkJackpot(certificate, header.bits)).toThrow(expect.objectContaining({ code: 'CERTIFICATE_MALFORMED', message }));
+  });
+
+  it('checkCertificateBinding decodes a V4 statement before it follows the ancestor headers', () => {
+    // The ancestor header in the statement no longer connects, and the Quant byte is unknown.
+    const { header, certificate } = edited('V4 H100', 4, (pd) => {
+      pd[0]! ^= 1;
+      pd[114] = 3;
+    });
+    expect(() => checkCertificateBinding({ header, certificate, transactions: [] })).toThrow(
+      expect.objectContaining({ code: 'CERTIFICATE_MALFORMED', message: 'unknown Quant discriminant: 3' }),
+    );
+  });
+
+  it('checkCertificateBinding applies the V4 bounds before the ancestor headers', () => {
+    const { header, certificate } = edited('V4 H100', 4, (pd, view) => {
+      pd[0]! ^= 1;
+      view.setUint32(108, 0, true);
+    });
+    expect(() => checkCertificateBinding({ header, certificate, transactions: [] })).toThrow(expect.objectContaining({ message: 'k must be >= 1024 || k=0' }));
+  });
+
+  it.each([
+    [200, 'h*w must be <= 2048 || h=200 w=16'],
+    [4, 'h*w must be >= 256 || h=4 w=16'],
+  ])('certificateStatement checks a MoE tile of %i rows before it reads I_A', (h, message) => {
+    // Dense H100 public data made MoE: one expert, two hash ids after A's operand, the MoE tail without I_A.
+    const { certificate } = edited('V4 H100', 4, (pd) => {
+      const out = new Uint8Array(pd.length + 2 + 78);
+      out.set(pd.subarray(0, 168));
+      out.set(pd.subarray(168), 170);
+      const view = new DataView(out.buffer);
+      view.setUint16(125, 1, true);
+      view.setUint32(164, h, true);
+      return out;
+    });
+    expect(() => certificateStatement(certificate)).toThrow(expect.objectContaining({ code: 'CERTIFICATE_MALFORMED', message }));
   });
 });
