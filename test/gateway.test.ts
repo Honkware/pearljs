@@ -104,3 +104,48 @@ describe('V4 jobs', () => {
     expect(encodeGatewayResponse({ id: 1, result: made })).toContain('"ancestor_headers": []');
   });
 });
+
+// pearl-gateway's verdicts on these lines come from its own schemas.py run with
+// fastjsonschema 2.19 and Python's json module, which reads integers exactly
+// and floats as doubles.
+describe('numbers and params as pearl-gateway reads them', () => {
+  const job = (target: string, key = 'target') =>
+    `{"jsonrpc": "2.0", "method": "submitPlainProof", "id": 1, "params": {"plain_proof": "", "mining_job": {"incomplete_header_bytes": "${btoa('\0'.repeat(76))}", "${key}": ${target}, "cert_version": 4}}}`;
+  const target = (line: string): bigint => {
+    const request = decodeGatewayRequest(line);
+    if (request.method !== 'submitPlainProof') throw new Error('expected submitPlainProof');
+    return request.job.target;
+  };
+
+  it('refuses params that are null', () => {
+    expect(() => decodeGatewayRequest('{"jsonrpc": "2.0", "method": "getMiningInfo", "id": 1, "params": null}')).toThrow(
+      expect.objectContaining({ code: 'GATEWAY_MESSAGE_INVALID', message: 'params is not an object' }),
+    );
+  });
+
+  it('reads a target written as a float with an integer value as the integer Python reads', () => {
+    expect(target(job('1e3'))).toBe(1000n);
+    expect(target(job('123.0'))).toBe(123n);
+    expect(target(job('-0.0'))).toBe(0n);
+    expect(target(job('1e30'))).toBe(1000000000000000019884624838656n);
+    expect(target(job('123', 'tar\\u0067et'))).toBe(123n);
+    for (const refused of ['1.5', '1e400', '-1']) expect(() => target(job(refused)), refused).toThrow(expect.objectContaining({ code: 'GATEWAY_MESSAGE_INVALID' }));
+  });
+
+  it('keeps an id beyond 2^53 exactly and echoes it as written', () => {
+    const line = '{"jsonrpc": "2.0", "method": "getMiningInfo", "id": 1152921504606846977, "params": {}}\n';
+    const request = decodeGatewayRequest(line);
+    expect(request.id).toBe(1152921504606846977n);
+    expect(encodeGatewayRequest(request)).toBe(line);
+    const reply = decodeGatewayResponse('{"jsonrpc": "2.0", "result": "submitted", "id": -1152921504606846977}', 'submitPlainProof');
+    expect(reply.id).toBe(-1152921504606846977n);
+    expect(decodeGatewayRequest('{"jsonrpc": "2.0", "method": "getMiningInfo", "id": 7}').id).toBe(7);
+  });
+
+  it('refuses ids it could not echo as written with GATEWAY_MESSAGE_INVALID', () => {
+    expect(() => decodeGatewayRequest('{"jsonrpc": "2.0", "method": "getMiningInfo", "id": 1.5}')).toThrow(expect.objectContaining({ code: 'GATEWAY_MESSAGE_INVALID' }));
+    expect(() => decodeGatewayResponse('{"jsonrpc": "2.0", "result": "submitted", "id": 2.0}', 'submitPlainProof')).toThrow(expect.objectContaining({ code: 'GATEWAY_MESSAGE_INVALID' }));
+    expect(() => encodeGatewayRequest({ id: 1.5, method: 'getMiningInfo' })).toThrow(expect.objectContaining({ code: 'GATEWAY_MESSAGE_INVALID' }));
+    expect(() => encodeGatewayResponse({ id: 2 ** 60, result: 'submitted' })).toThrow(expect.objectContaining({ code: 'GATEWAY_MESSAGE_INVALID' }));
+  });
+});

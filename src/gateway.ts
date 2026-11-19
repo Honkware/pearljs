@@ -18,7 +18,7 @@
 
 import { serializeBlockHeader } from './blockheader.js';
 import { PearlError } from './errors.js';
-import { parseJson } from './internal/rpc-wire.js';
+import { toHex } from './internal/bytes.js';
 import type { BlockSkeleton } from './mining.js';
 import { incompleteHeader, INCOMPLETE_HEADER_SIZE } from './mining.js';
 
@@ -34,8 +34,12 @@ export const GATEWAY_ERROR_CODES = {
   MINING_PAUSED: -32001,
 } as const;
 
-/** A JSON-RPC id. The gateway's miners count up from 1. */
-export type GatewayId = string | number | null;
+/**
+ * A JSON-RPC id. The gateway's miners count up from 1. An integer id beyond
+ * 2^53 - 1 is a bigint, so it is echoed exactly, as the gateway's Python
+ * echoes it.
+ */
+export type GatewayId = string | number | bigint | null;
 
 /** A job as getMiningInfo hands it out (pearl-gateway's MiningJob). */
 export interface MiningJob {
@@ -104,7 +108,8 @@ function dumps(value: unknown): string {
   if (typeof value === 'boolean') return value ? 'true' : 'false';
   if (typeof value === 'bigint') return value.toString();
   if (typeof value === 'number') {
-    if (!Number.isSafeInteger(value)) throw new TypeError('the protocol carries integers only');
+    // Python writes a float its own way; only integers round-trip, and only safe ones as numbers.
+    if (!Number.isSafeInteger(value)) invalid(`${value} is not a safe integer; give a larger integer as a bigint`);
     return String(value);
   }
   if (typeof value === 'string') {
@@ -135,8 +140,8 @@ function readJob(value: unknown): MiningJob {
   const job = value as Record<string, unknown>;
   const incomplete = fromBase64(job.incomplete_header_bytes, 'incomplete_header_bytes');
   if (incomplete.length !== INCOMPLETE_HEADER_SIZE) invalid(`incomplete_header_bytes is ${incomplete.length} bytes, not ${INCOMPLETE_HEADER_SIZE}`);
-  const target = job.target;
-  if (typeof target !== 'bigint' || target < 0n) invalid('target is not a non-negative integer');
+  const target = job.target instanceof RawNumber ? job.target.integer(true) : undefined;
+  if (target === undefined || target < 0n) invalid('target is not a non-negative integer');
   const certVersion = job.cert_version;
   if (typeof certVersion !== 'number' || !Number.isInteger(certVersion) || certVersion < 1) invalid('cert_version is not a positive integer');
   const ancestors = job.ancestor_headers;
@@ -152,14 +157,81 @@ function readJob(value: unknown): MiningJob {
 }
 
 function checkId(id: unknown): GatewayId {
-  if (id === null || typeof id === 'string' || (typeof id === 'number' && Number.isFinite(id))) return id;
+  if (id === null || typeof id === 'string') return id;
+  if (id instanceof RawNumber) {
+    const value = id.integer(false);
+    if (value === undefined) invalid(`id ${id.text} is not an integer; ids are kept exactly, so only integer ids are read`);
+    return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value;
+  }
   return invalid('id is not a string, number or null');
+}
+
+// A number under "id" or "target", as written.
+class RawNumber {
+  constructor(readonly text: string) {}
+
+  // The integer it is, or undefined. With floats, a number written as a float
+  // counts when its double is an integer, as fastjsonschema's "integer" lets
+  // Python's float through, and is the integer that double holds.
+  integer(floats: boolean): bigint | undefined {
+    if (/^-?\d+$/.test(this.text)) return BigInt(this.text);
+    const value = Number(this.text);
+    return floats && Number.isInteger(value) ? BigInt(value) : undefined;
+  }
+}
+
+const NUMBER = /-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+
+// JSON.parse, with each number under an "id" or "target" key, the key's
+// escapes decoded as Python decodes them, kept as written in a RawNumber.
+function parseRaw(text: string): unknown {
+  const raw: string[] = [];
+  const marker = `\u0000${toHex(globalThis.crypto.getRandomValues(new Uint8Array(12)))}:`;
+  let out = '';
+  let copied = 0;
+  let lastString = '';
+  let key: string | null = null;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (c === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') j += text[j] === '\\' ? 2 : 1;
+      lastString = text.slice(i + 1, j);
+      key = null;
+      i = j;
+    } else if (c === ':') {
+      try {
+        key = JSON.parse(`"${lastString}"`) as string;
+      } catch {
+        key = null;
+      }
+    } else if (c === '-' || (c >= '0' && c <= '9')) {
+      NUMBER.lastIndex = i;
+      const match = NUMBER.exec(text);
+      if (match === null) break;
+      if (key === 'id' || key === 'target') {
+        out += `${text.slice(copied, i)}"\\u0000${marker.slice(1)}${raw.length}"`;
+        raw.push(match[0]);
+        copied = i + match[0].length;
+      }
+      key = null;
+      i += match[0].length - 1;
+    } else if (c !== ' ' && c !== '\n' && c !== '\r' && c !== '\t') {
+      key = null;
+    }
+  }
+  return JSON.parse(out + text.slice(copied), (_key, value: unknown) => {
+    if (typeof value !== 'string' || !value.startsWith(marker)) return value;
+    const slot = Number(value.slice(marker.length));
+    // A string the sender wrote that only looks like a slot stays a string.
+    return Number.isInteger(slot) && slot < raw.length && value === `${marker}${slot}` ? new RawNumber(raw[slot]!) : value;
+  });
 }
 
 function parseLine(line: string): Record<string, unknown> {
   let value: unknown;
   try {
-    value = parseJson(line.trim(), new Set(), new Set(['target']));
+    value = parseRaw(line.trim());
   } catch {
     invalid('the line is not JSON');
   }
@@ -180,7 +252,10 @@ export function encodeGatewayRequest(request: GatewayRequest): string {
 /**
  * Reads a miner's line. Refuses (GATEWAY_MESSAGE_INVALID) what the gateway
  * refuses with Invalid Request or Invalid params, and methods it does not
- * have; the gateway's own error text is not reproduced.
+ * have; the gateway's own error text is not reproduced. A target written as
+ * a float whose value is an integer (1e3, 123.0) is read as that integer, as
+ * the gateway's schema reads it. An id written as a float is refused, though
+ * the gateway takes one, since it could not be echoed as written.
  */
 export function decodeGatewayRequest(line: string): GatewayRequest {
   const message = parseLine(line);
@@ -189,7 +264,8 @@ export function decodeGatewayRequest(line: string): GatewayRequest {
   }
   if (!('id' in message)) invalid('the request has no id');
   const id = checkId(message.id);
-  const params = message.params ?? {};
+  // The gateway's schema wants an object when params is present; null is not one.
+  const params = 'params' in message ? message.params : {};
   if (typeof params !== 'object' || params === null || Array.isArray(params)) invalid('params is not an object');
   const fields = params as Record<string, unknown>;
   if (message.method === 'getMiningInfo') {
