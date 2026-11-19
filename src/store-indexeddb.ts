@@ -62,12 +62,16 @@ function storeError(error: unknown, lost: string | null): unknown {
 
 interface LockManager {
   request(name: string, options: { ifAvailable: boolean; mode: 'exclusive' }, callback: (lock: unknown) => Promise<void>): Promise<void>;
+  query?(): Promise<{ held?: { name?: string }[] }>;
 }
 
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 // Holds the named lock until release is called; null when another holder has
-// it. release resolves once the lock manager has let the lock go, which Firefox
-// does a task after the callback settles: a store reopened before then would
-// find its own lock still held.
+// it. release resolves once the lock manager shows the lock let go. Firefox
+// lets it go a task after the callback settles in a page, and later still in
+// an extension's event page, after the request's promise has resolved: a
+// store reopened before then would find its own lock still held.
 async function holdLock(name: string): Promise<(() => Promise<void>) | null> {
   const locks = (globalThis.navigator as { locks?: LockManager } | undefined)?.locks;
   if (locks === undefined) return () => Promise.resolve();
@@ -78,9 +82,15 @@ async function holdLock(name: string): Promise<(() => Promise<void>) | null> {
         return Promise.resolve();
       }
       return new Promise<void>((release) =>
-        resolve(() => {
+        resolve(async () => {
           release();
-          return held;
+          await held;
+          // Bounded: another tab may take the lock the moment it is free, and then it stays held.
+          for (let i = 0; i < 50 && locks.query !== undefined; i++) {
+            const state = await locks.query();
+            if (!(state.held ?? []).some((other) => other.name === name)) break;
+            await sleep(20);
+          }
         }),
       );
     });
