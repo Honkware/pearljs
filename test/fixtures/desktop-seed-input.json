@@ -1,0 +1,109 @@
+{
+  "source": "pearl-research-labs/pearl apps/apps/pearl-desktop-wallet 3.0.0, parseSeedInput from src/renderer/src/lib/seed-input.ts with bip39 3.1.0, run under Node 22.17.0. The desktop wallet hands the normalized string to Oyster's --createfromfile as the seed.",
+  "cases": [
+    {
+      "input": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "result": {
+        "kind": "mnemonic",
+        "normalized": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "wordCount": 12
+      }
+    },
+    {
+      "input": "  ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABOUT\n",
+      "result": {
+        "kind": "mnemonic",
+        "normalized": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "wordCount": 12
+      }
+    },
+    {
+      "input": "abandon  abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "result": {
+        "kind": "mnemonic",
+        "normalized": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "wordCount": 12
+      }
+    },
+    {
+      "input": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon\nabout",
+      "result": {
+        "kind": "mnemonic",
+        "normalized": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "wordCount": 12
+      }
+    },
+    {
+      "input": "abandon\tabandon\tabandon\tabandon\tabandon\tabandon\tabandon\tabandon\tabandon\tabandon\tabandon\tabout",
+      "result": {
+        "kind": "mnemonic",
+        "normalized": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "wordCount": 12
+      }
+    },
+    {
+      "input": "legal winner thank year wave sausage worth useful legal winner thank yellow",
+      "result": {
+        "kind": "mnemonic",
+        "normalized": "legal winner thank year wave sausage worth useful legal winner thank yellow",
+        "wordCount": 12
+      }
+    },
+    {
+      "input": "000102030405060708090a0b0c0d0e0f",
+      "result": {
+        "kind": "hex",
+        "normalized": "000102030405060708090a0b0c0d0e0f"
+      }
+    },
+    {
+      "input": "0x000102030405060708090A0B0C0D0E0F",
+      "result": {
+        "kind": "hex",
+        "normalized": "000102030405060708090a0b0c0d0e0f"
+      }
+    },
+    {
+      "input": " 000102030405060708090a0b0c0d0e0f ",
+      "result": {
+        "kind": "hex",
+        "normalized": "000102030405060708090a0b0c0d0e0f"
+      }
+    },
+    {
+      "input": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon",
+      "result": {
+        "kind": "invalid",
+        "reason": "Mnemonic checksum is invalid. Double-check the word order and spelling."
+      }
+    },
+    {
+      "input": "abandon abandon abandon",
+      "result": {
+        "kind": "invalid",
+        "reason": "Mnemonic must be 12, 15, 18, 21, or 24 words (got 3)"
+      }
+    },
+    {
+      "input": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandn",
+      "result": {
+        "kind": "invalid",
+        "reason": "\"abandn\" is not a BIP39 word. Double-check spelling."
+      }
+    },
+    {
+      "input": "0001020304",
+      "result": {
+        "kind": "invalid",
+        "reason": "Hex seed must be between 128 and 512 bits"
+      }
+    },
+    {
+      "input": "",
+      "result": {
+        "kind": "invalid",
+        "reason": "Please enter your seed phrase"
+      }
+    }
+  ]
+}

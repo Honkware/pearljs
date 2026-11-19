@@ -5,12 +5,14 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"math/big"
 	"os"
 	"sort"
@@ -36,6 +38,11 @@ import (
 	"github.com/pearl-research-labs/pearl/wallet/wallet/txauthor"
 	"github.com/pearl-research-labs/pearl/wallet/wallet/txrules"
 	"github.com/pearl-research-labs/pearl/wallet/wallet/txsizes"
+	"github.com/pearl-research-labs/pearl/wallet/waddrmgr"
+	"github.com/pearl-research-labs/pearl/wallet/walletdb"
+	_ "github.com/pearl-research-labs/pearl/wallet/walletdb/bdb"
+	bip39 "github.com/tyler-smith/go-bip39"
+	"golang.org/x/crypto/hkdf"
 	"github.com/pearl-research-labs/pearl/xmss"
 )
 
@@ -299,6 +306,50 @@ type Vectors struct {
 	TapscriptExtras  []TapscriptExtraVector  `json:"tapscriptExtras"`
 	CustomLeaves     []CustomLeafVector      `json:"customLeaves"`
 	ChangeOutputs    []ChangeOutputVector    `json:"changeOutputs"`
+	Recovery         RecoveryVectors         `json:"recovery"`
+}
+
+// RecoveryWalletVector is a wallet Oyster's own code created from Input, as
+// its --createfromfile does (wallet/walletsetup.go): a valid BIP39 mnemonic
+// becomes bip39.NewSeed(Input, ""), anything else is read as a hex seed. Its
+// addresses are the first ones Oyster's address manager hands out on the
+// receive and change branches of Account.
+type RecoveryWalletVector struct {
+	Name        string   `json:"name"`
+	Network     string   `json:"network"`
+	Input       string   `json:"input"`
+	Kind        string   `json:"kind"`
+	Seed        string   `json:"seed"`
+	Account     uint32   `json:"account"`
+	AccountPath string   `json:"accountPath"`
+	AccountXPub string   `json:"accountXpub"`
+	Receive     []string `json:"receive"`
+	Change      []string `json:"change"`
+}
+
+// PQAddressVector is an address Oyster's getnewaddress (or
+// getrawchangeaddress) handed out with pq=true before Pearl removed that
+// argument (pearl-research-labs/pearl#463): the BIP86 key of Path tweaked
+// with the root of one leaf, <xmss_pubkey> OP_CHECKXMSSSIG, whose XMSS key
+// came from the private key at the same path under purpose 222 through
+// HKDF-SHA256 with info "XMSS-SEED-EXPANSION" (wallet/waddrmgr/xmss_keys.go
+// at 0798903bced203de8cfcb49441f44fd9b51b18eb, rebuilt here from Pearl's
+// current packages since the file is gone).
+type PQAddressVector struct {
+	Network       string `json:"network"`
+	Mnemonic      string `json:"mnemonic"`
+	Path          string `json:"path"`
+	XMSSPublicKey string `json:"xmssPublicKey"`
+	LeafScript    string `json:"leafScript"`
+	TapscriptRoot string `json:"tapscriptRoot"`
+	Address       string `json:"address"`
+	PlainAddress  string `json:"plainAddress"`
+}
+
+type RecoveryVectors struct {
+	RecoveryWindow uint32                 `json:"recoveryWindow"`
+	Wallets        []RecoveryWalletVector `json:"wallets"`
+	PQAddresses    []PQAddressVector      `json:"pqAddresses"`
 }
 
 // CoinVector is an unspent output offered to coin selection.
@@ -1835,6 +1886,8 @@ func main() {
 
 	vectors.MessageFormats = messageFormatVectors(privM0, addrM0, accountPath+"/0/0")
 
+	vectors.Recovery = recoveryVectors(nets)
+
 	// XMSS: keys from fixed seeds (key "a" uses the seeds published in
 	// pearl-research-labs/pearl#111), signatures across the index range, and
 	// P2MR spends checked by the script engine with OP_CHECKXMSSSIG.
@@ -2196,6 +2249,134 @@ func messageFormatVectors(priv *btcec.PrivateKey, addr *btcutil.AddressTaproot, 
 			LegacyUncompressed: base64.StdEncoding.EncodeToString(uncompressed),
 			LegacyRecoveredKey: hex.EncodeToString(recovered.SerializeCompressed()), LegacyRecoveredFlags: compressed,
 		})
+	}
+	return out
+}
+
+// oysterWallet creates a wallet with Oyster's loader in a fresh directory and
+// returns the first addresses its address manager hands out.
+func oysterWallet(params *chaincfg.Params, seed []byte, account uint32, count int) (string, []string, []string) {
+	waddrmgr.InitKeyScopes(params.HDCoinType)
+	dir, err := os.MkdirTemp("", "oyster-vector-")
+	check(err)
+	defer os.RemoveAll(dir)
+	privPass := []byte("vector")
+	loader := wallet.NewLoader(params, dir, true, time.Minute, 250)
+	w, err := loader.CreateNewWallet([]byte(wallet.InsecurePubPassphrase), privPass, seed, time.Unix(1724644369, 0))
+	check(err)
+	defer func() { check(loader.UnloadWallet()) }()
+	scoped, err := w.Manager.FetchScopedKeyManager(waddrmgr.KeyScopeBIP0086)
+	check(err)
+	var xpub string
+	var receive, change []string
+	check(walletdb.Update(w.Database(), func(tx walletdb.ReadWriteTx) error {
+		ns := tx.ReadWriteBucket([]byte("waddrmgr"))
+		if account != 0 {
+			check(w.Manager.Unlock(ns, privPass))
+			created, err := scoped.NewAccount(ns, fmt.Sprintf("account-%d", account))
+			check(err)
+			if created != account {
+				panic("Oyster numbered the new account differently")
+			}
+		}
+		props, err := scoped.AccountProperties(ns, account)
+		check(err)
+		xpub = props.AccountPubKey.String()
+		external, err := scoped.NextExternalAddresses(ns, account, uint32(count))
+		check(err)
+		internal, err := scoped.NextInternalAddresses(ns, account, uint32(count))
+		check(err)
+		for _, a := range external {
+			receive = append(receive, a.Address().EncodeAddress())
+		}
+		for _, a := range internal {
+			change = append(change, a.Address().EncodeAddress())
+		}
+		return nil
+	}))
+	return xpub, receive, change
+}
+
+func recoveryVectors(nets []*chaincfg.Params) RecoveryVectors {
+	out := RecoveryVectors{RecoveryWindow: 250}
+	const abandon = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+	const legal = "legal winner thank year wave sausage worth useful legal winner thank yellow"
+	const zoo24 = "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo vote"
+	type input struct {
+		name    string
+		input   string
+		account uint32
+	}
+	inputs := []input{
+		{"abandon", abandon, 0},
+		{"legal-winner", legal, 0},
+		{"zoo-24", zoo24, 0},
+		// Oyster validates with strings.Fields but hashes the phrase as given,
+		// so a double space or a newline makes another seed.
+		{"abandon-double-space", strings.Replace(abandon, " ", "  ", 1), 0},
+		{"abandon-newlines", strings.ReplaceAll(abandon, " about", "\nabout"), 0},
+		{"hex-seed", "000102030405060708090a0b0c0d0e0f", 0},
+		{"abandon-account-1", abandon, 1},
+	}
+	for _, params := range nets {
+		for _, item := range inputs {
+			if params.Name != chaincfg.MainNetParams.Name && item.name != "abandon" {
+				continue
+			}
+			vector := RecoveryWalletVector{
+				Name: item.name, Network: params.Name, Input: item.input, Account: item.account,
+				AccountPath: fmt.Sprintf("m/86'/%d'/%d'", params.HDCoinType, item.account),
+			}
+			var seed []byte
+			if bip39.IsMnemonicValid(item.input) {
+				vector.Kind = "mnemonic"
+				seed = bip39.NewSeed(item.input, "")
+			} else {
+				vector.Kind = "hex"
+				seed = mustHex(item.input)
+			}
+			vector.Seed = hex.EncodeToString(seed)
+			vector.AccountXPub, vector.Receive, vector.Change = oysterWallet(params, seed, item.account, 3)
+			out.Wallets = append(out.Wallets, vector)
+		}
+	}
+	waddrmgr.InitKeyScopes(chaincfg.MainNetParams.HDCoinType)
+
+	h := uint32(hdkeychain.HardenedKeyStart)
+	for _, params := range []*chaincfg.Params{&chaincfg.MainNetParams, &chaincfg.TestNet2Params} {
+		master, err := hdkeychain.NewMaster(bip39.NewSeed(abandon, ""), params)
+		check(err)
+		for _, child := range []struct{ branch, index uint32 }{{0, 0}, {1, 0}, {0, 1}} {
+			if params != &chaincfg.MainNetParams && child.index != 0 {
+				continue
+			}
+			pqKey, err := derive(master, 222+h, params.HDCoinType+h, h, child.branch, child.index).ECPrivKey()
+			check(err)
+			seeds := make([]byte, xmss.PrivateSeedLen+xmss.PublicSeedLen)
+			_, err = io.ReadFull(hkdf.New(sha256.New, pqKey.Serialize(), nil, []byte("XMSS-SEED-EXPANSION")), seeds)
+			check(err)
+			var privSeed [xmss.PrivateSeedLen]byte
+			var pubSeed [xmss.PublicSeedLen]byte
+			copy(privSeed[:], seeds[:xmss.PrivateSeedLen])
+			copy(pubSeed[:], seeds[xmss.PrivateSeedLen:])
+			pk, _, err := xmss.Keygen(privSeed, pubSeed)
+			check(err)
+			leaf, err := txscript.NewScriptBuilder().AddData(pk[:]).AddOp(txscript.OP_CHECKXMSSSIG).Script()
+			check(err)
+			root := txscript.AssembleTaprootScriptTree(txscript.NewBaseTapLeaf(leaf)).RootNode.TapHash()
+			internal, err := derive(master, 86+h, params.HDCoinType+h, h, child.branch, child.index).ECPubKey()
+			check(err)
+			pqAddr, err := btcutil.NewAddressTaproot(schnorr.SerializePubKey(txscript.ComputeTaprootOutputKey(internal, root[:])), params)
+			check(err)
+			plain, err := btcutil.NewAddressTaproot(schnorr.SerializePubKey(txscript.ComputeTaprootKeyNoScript(internal)), params)
+			check(err)
+			out.PQAddresses = append(out.PQAddresses, PQAddressVector{
+				Network: params.Name, Mnemonic: abandon,
+				Path:          fmt.Sprintf("m/86'/%d'/0'/%d/%d", params.HDCoinType, child.branch, child.index),
+				XMSSPublicKey: hex.EncodeToString(pk[:]), LeafScript: hex.EncodeToString(leaf),
+				TapscriptRoot: hex.EncodeToString(root[:]), Address: pqAddr.EncodeAddress(), PlainAddress: plain.EncodeAddress(),
+			})
+		}
 	}
 	return out
 }
