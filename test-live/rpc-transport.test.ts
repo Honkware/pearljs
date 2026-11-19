@@ -6,7 +6,7 @@
 
 import { join } from 'node:path';
 import { afterAll, beforeAll, expect, it } from 'vitest';
-import { Agent, WebSocket } from 'undici';
+import { WebSocket } from 'undici';
 import {
   blockHashHex,
   blockSubsidy,
@@ -30,7 +30,7 @@ import {
   toOutputScript,
 } from '../src/index.js';
 import type { AccountUtxo, Transaction } from '../src/index.js';
-import { clientOptions } from './context.js';
+import { clientOptions, trustingAgent } from './context.js';
 import { describeLive, describeOyster, FEE_RATE, fund, live, mine, miner, network, nowhere, pearld } from './chain.js';
 import { startPearld, type RunningPearld } from './processes.js';
 
@@ -216,7 +216,7 @@ describeLive('typed pearld methods', () => {
   });
 
   it('gives the same typed results over the websocket client', async () => {
-    const agent = new Agent({ connect: { ca: live!.pearld.ca } });
+    const agent = trustingAgent(live!.pearld.ca);
     const ws = new PearlWsClient({ ...live!.pearld, WebSocket, webSocketInit: { dispatcher: agent } });
     try {
       expect(await ws.getBlockCount()).toBe(await pearld.getBlockCount());

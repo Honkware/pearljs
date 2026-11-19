@@ -8,7 +8,7 @@
 // the RPC error code, sendrawtransaction's text and testmempoolaccept's
 // reject reason, and on the websocket notifications the step causes.
 
-import { Agent, WebSocket } from 'undici';
+import { WebSocket } from 'undici';
 import { expect, it } from 'vitest';
 import {
   createPsbt,
@@ -29,6 +29,7 @@ import {
 import type { PearlSigningAccount, PearldRpc, Transaction, TxOutput } from '../src/index.js';
 import { SimulatedChain } from '../src/testing.js';
 import { describeLive, fund, live, mine, miner, network, nowhere, pearld } from './chain.js';
+import { trustingAgent } from './context.js';
 
 const payer = deriveSigningAccountFromSeed(mnemonicToSeed('warrior weasel feed fresh rare donkey endless light canoe flash allow column'), network);
 const watched = payer.deriveAddress(20);
@@ -59,7 +60,7 @@ interface Outcome {
 
 function realSide(): Side {
   const endpoint = live?.pearld ?? nowhere;
-  const agent = new Agent({ connect: { ca: endpoint.ca } });
+  const agent = trustingAgent(endpoint.ca);
   const ws = new PearlWsClient({ url: endpoint.url, username: endpoint.username, password: endpoint.password, WebSocket, webSocketInit: { dispatcher: agent } });
   return {
     name: 'pearld',

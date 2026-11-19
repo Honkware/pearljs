@@ -6,7 +6,6 @@
 // oyster.test.ts and searchRawTransactions in invoice.test.ts.
 
 import { beforeAll, expect, it } from 'vitest';
-import { Agent } from 'undici';
 import {
   blockHashHex,
   createPsbt,
@@ -26,7 +25,7 @@ import {
   witnessTransactionId,
 } from '../src/index.js';
 import type { Transaction } from '../src/index.js';
-import { clientOptions } from './context.js';
+import { clientOptions, trustingAgent } from './context.js';
 import { addChange, describeLive, describeOyster, fund, limited, live, mine, network, nowhere, oyster, pearld } from './chain.js';
 import { freePort } from './processes.js';
 
@@ -225,7 +224,7 @@ describeLive('pearld RPC over TLS', () => {
     const endpoint = live!.pearld;
     const client = new PearldClient({
       ...clientOptions(endpoint),
-      init: { dispatcher: new Agent({ connect: { ca: endpoint.ca, maxVersion: 'TLSv1.2' } }) },
+      init: { dispatcher: trustingAgent(endpoint.ca, { maxVersion: 'TLSv1.2' }) },
     });
     expect(await client.getBlockCount()).toBe(await pearld.getBlockCount());
   });
@@ -331,7 +330,7 @@ describeOyster('Oyster RPC errors', () => {
   it('refuses TLS 1.2, which pearld accepts', async () => {
     const client = new JsonRpcClient({
       ...clientOptions(endpoint),
-      init: { dispatcher: new Agent({ connect: { ca: endpoint.ca, maxVersion: 'TLSv1.2' } }) },
+      init: { dispatcher: trustingAgent(endpoint.ca, { maxVersion: 'TLSv1.2' }) },
     });
     const error = await failure(client.call('getinfo'));
     expect(error.kind).toBe('network');

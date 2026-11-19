@@ -1,7 +1,7 @@
 // What global setup hands to the live tests, the fixed test wallets, and the
 // typed clients every test talks to the servers through.
 
-import { Agent } from 'undici';
+import { Agent, type buildConnector } from 'undici';
 import { OysterClient, PearldClient, PearlRpcError } from '../src/index.js';
 import type { RpcClientOptions } from '../src/index.js';
 
@@ -35,6 +35,19 @@ export const MINER_MNEMONIC = 'abandon abandon abandon abandon abandon abandon a
 export const OYSTER_MNEMONIC = 'legal winner thank year wave sausage worth useful legal winner thank yellow';
 export const OYSTER_PASSPHRASE = 'pearljs-live';
 
+// pearld and Oyster close every RPC connection after one reply, so each call
+// opens a new one. On a busy macOS host a burst of them to one loopback port
+// sees some SYNs go unanswered for 7, 13 and more seconds before the kernel's
+// own retransmission gets through, past undici's 10 second connect timeout.
+// Waiting longer is safe for every method, since a connection that never
+// opened never carried the request; it stays under the 60 second call limit.
+const CONNECT_TIMEOUT = 45_000;
+
+/** An undici dispatcher that trusts a server's own certificate and waits out slow connects. */
+export function trustingAgent(ca: string, connect: buildConnector.BuildOptions = {}): Agent {
+  return new Agent({ connect: { ca, timeout: CONNECT_TIMEOUT, ...connect } });
+}
+
 /**
  * Client options that trust the endpoint's own certificate. Node's fetch
  * takes a CA only through an undici dispatcher (or NODE_EXTRA_CA_CERTS when
@@ -45,7 +58,7 @@ export function clientOptions(endpoint: LiveEndpoint, credentials: Credentials =
     url: endpoint.url,
     username: credentials.username,
     password: credentials.password,
-    init: { dispatcher: new Agent({ connect: { ca: endpoint.ca } }) },
+    init: { dispatcher: trustingAgent(endpoint.ca) },
   };
 }
 

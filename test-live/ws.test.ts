@@ -6,7 +6,8 @@
 
 import { join } from 'node:path';
 import { afterAll, afterEach, expect, it } from 'vitest';
-import { Agent, WebSocket } from 'undici';
+import type { Agent } from 'undici';
+import { WebSocket } from 'undici';
 import {
   OysterWsClient,
   blockHashHex,
@@ -24,6 +25,7 @@ import type { AccountUtxo, PearlWsClientOptions, PearlWsEvents } from '../src/in
 import type { Credentials, LiveEndpoint } from './context.js';
 import { describeLive, describeOyster, FEE_RATE, fund, live, mine, miner, network, nowhere, pearld } from './chain.js';
 import { freePort, startPearld, type RunningPearld } from './processes.js';
+import { trustingAgent } from './context.js';
 
 const account = deriveSigningAccountFromSeed(
   mnemonicToSeed('vessel ladder alter error federal sibling chat ability sun glass valve picture'),
@@ -34,7 +36,7 @@ const open: { ws: PearlWsClient; agent: Agent }[] = [];
 
 /** A client for the endpoint that trusts its certificate; closed after the test. */
 function client(endpoint: LiveEndpoint, options: Partial<PearlWsClientOptions> = {}, credentials: Credentials = endpoint): PearlWsClient {
-  const agent = new Agent({ connect: { ca: endpoint.ca } });
+  const agent = trustingAgent(endpoint.ca);
   const ws = new PearlWsClient({
     url: endpoint.url,
     username: credentials.username,
@@ -314,7 +316,7 @@ describeOyster("Oyster's websocket", () => {
   });
 
   it('runs Oyster\'s typed methods over OysterWsClient', async () => {
-    const agent = new Agent({ connect: { ca: wallet.ca } });
+    const agent = trustingAgent(wallet.ca);
     const ws = new OysterWsClient({
       url: wallet.url,
       username: wallet.username,

@@ -4,7 +4,7 @@
 // process as JSON. Oyster's are in wallet-errors.test.ts. Policy, replacement, backend and wallet codes are
 // asserted next to the node's own refusals in the files that provoke them.
 
-import { Agent, WebSocket } from 'undici';
+import { WebSocket } from 'undici';
 import { expect, it } from 'vitest';
 import {
   PearldClient,
@@ -16,7 +16,7 @@ import {
   serializeTransaction,
 } from '../src/index.js';
 import type { PearlErrorJson } from '../src/index.js';
-import { clientOptions } from './context.js';
+import { clientOptions, trustingAgent } from './context.js';
 import { describeLive, fund, limited, live, miner, minerScript, nowhere, pearld } from './chain.js';
 import { freePort } from './processes.js';
 
@@ -87,7 +87,7 @@ describeLive('typed errors from pearld', () => {
   });
 
   it('gives the same codes over the websocket', async () => {
-    const agent = new Agent({ connect: { ca: endpoint.ca } });
+    const agent = trustingAgent(endpoint.ca);
     const socket = (password: string, extra: { auth?: 'header' | 'command' } = {}): PearlWsClient =>
       new PearlWsClient({ url: endpoint.url, username: endpoint.username, password, WebSocket, webSocketInit: { dispatcher: agent }, reconnect: false, ...extra });
     const ws = socket(endpoint.password);

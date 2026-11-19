@@ -1,7 +1,7 @@
 // What the wallet tests share: throwaway passphrases, connections to the
 // node, the node's own account of a transaction, and event recording.
 
-import { Agent, WebSocket } from 'undici';
+import { WebSocket } from 'undici';
 import { expect } from 'vitest';
 import {
   deriveSigningAccountFromSeed,
@@ -16,6 +16,7 @@ import {
 } from '../src/index.js';
 import type { InspectedTransaction, PearlWallet, SendResult, WalletBackend, WalletConnection, WalletEvents, WalletStore } from '../src/index.js';
 import { FEE_RATE, fund, live, network, nowhere, pearld, spentOutputs } from './chain.js';
+import { trustingAgent } from './context.js';
 
 /** Throwaway keystore passphrase; these wallets only ever hold regtest coins. */
 export const PASSPHRASE = 'pearljs-live keystore passphrase';
@@ -32,7 +33,7 @@ export function connection(store: WalletStore, backend: WalletBackend = nodeBack
 /** A websocket client for the suite's pearld, and what closes it. */
 export function nodeSocket(): { ws: PearlWsClient; close(): Promise<void> } {
   const endpoint = live?.pearld ?? nowhere;
-  const agent = new Agent({ connect: { ca: endpoint.ca } });
+  const agent = trustingAgent(endpoint.ca);
   const ws = new PearlWsClient({
     url: endpoint.url,
     username: endpoint.username,

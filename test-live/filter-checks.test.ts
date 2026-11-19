@@ -7,7 +7,7 @@
 // node mines a fork of its own.
 
 import { join } from 'node:path';
-import { Agent, WebSocket } from 'undici';
+import { WebSocket } from 'undici';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import {
   assembleScriptTree,
@@ -27,6 +27,7 @@ import type { PearldClient } from '../src/index.js';
 import { describeLive, eventually, fund, limited, live, mine, network, nowhere, pearld } from './chain.js';
 import { startPearld } from './processes.js';
 import type { RunningPearld } from './processes.js';
+import { trustingAgent } from './context.js';
 
 const account = deriveSigningAccountFromSeed(mnemonicToSeed(generateMnemonic()), network);
 const failure = (promise: Promise<unknown>): Promise<unknown> => promise.then(() => null, (err: unknown) => err);
@@ -60,7 +61,7 @@ describeLive('block checks on real blocks', () => {
     expect(header).toHaveLength(108);
     expect(blockHashHex(parseBlockHeader(header))).toBe(hash);
     const endpoint = live?.pearld ?? nowhere;
-    const agent = new Agent({ connect: { ca: endpoint.ca } });
+    const agent = trustingAgent(endpoint.ca);
     const ws = new PearlWsClient({ url: endpoint.url, username: live!.limited.username, password: live!.limited.password, WebSocket, webSocketInit: { dispatcher: agent } });
     try {
       expect(await ws.getRawBlockHeader(hash)).toEqual(header);

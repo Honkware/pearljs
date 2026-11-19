@@ -11,7 +11,7 @@
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
-import { Agent, WebSocket } from 'undici';
+import { WebSocket } from 'undici';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import {
   connectPearld,
@@ -38,7 +38,7 @@ import {
 } from '../src/index.js';
 import type { PearldCapabilities } from '../src/index.js';
 import { createFileStore } from '../src/store-file.js';
-import { clientOptions, pearldClient } from './context.js';
+import { clientOptions, pearldClient, trustingAgent } from './context.js';
 import { describeLive, describeOyster, eventually, FEE_RATE, fund, limited, live, mine, network, nowhere, oyster, pearld } from './chain.js';
 import { startPearld } from './processes.js';
 import type { RunningPearld } from './processes.js';
@@ -263,7 +263,7 @@ describeLive('node access', () => {
 
   it('lets the limited user drop a block watcher over the websocket though pearld refuses it stopnotifyblocks', async () => {
     const endpoint = live?.pearld ?? nowhere;
-    const agent = new Agent({ connect: { ca: endpoint.ca } });
+    const agent = trustingAgent(endpoint.ca);
     const ws = new PearlWsClient({ url: endpoint.url, username: live!.limited.username, password: live!.limited.password, WebSocket, webSocketInit: { dispatcher: agent } });
     const errors: Error[] = [];
     ws.on('error', (error) => void errors.push(error));

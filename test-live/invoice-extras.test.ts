@@ -6,7 +6,7 @@
 // and an invoice on a P2MR address whose block time comes from the filter scan.
 
 import { join } from 'node:path';
-import { Agent, WebSocket } from 'undici';
+import { WebSocket } from 'undici';
 import { expect, it } from 'vitest';
 import {
   assembleScriptTree,
@@ -29,7 +29,7 @@ import {
   watchInvoices,
 } from '../src/index.js';
 import type { Invoice } from '../src/index.js';
-import { OYSTER_PASSPHRASE } from './context.js';
+import { OYSTER_PASSPHRASE, trustingAgent } from './context.js';
 import { describeLive, eventually, FEE_RATE, fund, live, mine, network, pearld } from './chain.js';
 import { nodeView, outsider } from './wallets.js';
 import { freePort, startOyster, startPearld } from './processes.js';
@@ -112,7 +112,7 @@ describeLive('watchInvoices over a websocket', () => {
   it('follows an invoice from the mempool to confirmed across a restart of the pearld it watches', async () => {
     const options = { exe: process.env.PEARLD!, dir: join(live!.dir, 'pearld-invoices'), miningAddress: shop.deriveAddress(99), rpcPort: await freePort(), extraArgs: [`--connect=${live!.p2p}`] };
     let second: RunningPearld = await startPearld(options);
-    const agent = new Agent({ connect: { ca: second.endpoint.ca } });
+    const agent = trustingAgent(second.endpoint.ca);
     const ws = new PearlWsClient({ url: second.endpoint.url, username: second.endpoint.username, password: second.endpoint.password, WebSocket, webSocketInit: { dispatcher: agent }, reconnect: { initialDelay: 200, maxDelay: 1000 } });
     const changes: Invoice[] = [];
     const errors: Error[] = [];

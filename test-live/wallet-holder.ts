@@ -10,10 +10,10 @@
 // same way and the process then exits.
 
 import { createInterface } from 'node:readline';
-import { Agent } from 'undici';
 import { PearlWallet, PearldClient, networks, pearldBackend } from '../src/index.js';
 import type { CoinSource } from '../src/index.js';
 import { createFileStore } from '../src/store-file.js';
+import { trustingAgent } from './context.js';
 
 const { WALLET_PATH, WALLET_PASS, LOCK, NODE_URL, NODE_USER, NODE_PASS, NODE_CA } = process.env;
 const answer = (value: unknown): void => {
@@ -28,7 +28,7 @@ const node = new PearldClient({
   url: NODE_URL!,
   username: NODE_USER!,
   password: NODE_PASS!,
-  init: { dispatcher: new Agent({ connect: { ca: NODE_CA! } }) },
+  init: { dispatcher: trustingAgent(NODE_CA!) },
 });
 let wallet: PearlWallet;
 try {

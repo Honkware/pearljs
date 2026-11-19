@@ -3,16 +3,16 @@
 // starts a full sync against the node, writes a dot for every address
 // history it fetches, and never exits by itself. The test kills it mid-sync.
 
-import { Agent } from 'undici';
 import { PearlWallet, PearldClient, networks, pearldBackend, pearldTransactionSource } from '../src/index.js';
 import { createFileStore } from '../src/store-file.js';
+import { trustingAgent } from './context.js';
 
 const { WALLET_PATH, NODE_URL, NODE_USER, NODE_PASS, NODE_CA } = process.env;
 const node = new PearldClient({
   url: NODE_URL!,
   username: NODE_USER!,
   password: NODE_PASS!,
-  init: { dispatcher: new Agent({ connect: { ca: NODE_CA! } }) },
+  init: { dispatcher: trustingAgent(NODE_CA!) },
 });
 const backend = pearldBackend(node, { network: networks.regtest });
 const wallet = await PearlWallet.open({

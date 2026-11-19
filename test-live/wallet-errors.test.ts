@@ -3,10 +3,9 @@
 // the batch it answers with one error. Runs after oyster.test.ts, which needs a
 // wallet nobody has asked for an address yet.
 
-import { Agent } from 'undici';
 import { expect, it } from 'vitest';
 import { JsonRpcClient, OysterClient, PearlError, PearlRpcError, RPC_ERROR_CODES } from '../src/index.js';
-import { clientOptions, OYSTER_PASSPHRASE } from './context.js';
+import { clientOptions, OYSTER_PASSPHRASE, trustingAgent } from './context.js';
 import { describeOyster, live, miner, nowhere, oyster } from './chain.js';
 
 async function failure(promise: Promise<unknown>): Promise<PearlRpcError> {
@@ -46,7 +45,7 @@ describeOyster('typed errors from Oyster', () => {
 
     const wrong = new OysterClient(clientOptions(endpoint, { username: endpoint.username, password: 'wrong' }));
     expect(await failure(wrong.getBalance())).toMatchObject({ code: 'RPC_HTTP', kind: 'http', status: 401 });
-    const tls12 = new JsonRpcClient({ ...clientOptions(endpoint), init: { dispatcher: new Agent({ connect: { ca: endpoint.ca, maxVersion: 'TLSv1.2' } }) } });
+    const tls12 = new JsonRpcClient({ ...clientOptions(endpoint), init: { dispatcher: trustingAgent(endpoint.ca, { maxVersion: 'TLSv1.2' }) } });
     expect(await failure(tls12.call('getinfo'))).toMatchObject({ code: 'RPC_NETWORK', kind: 'network' });
 
     // Oyster answers a batch with one error for the lot, and every call in it gets that error.
