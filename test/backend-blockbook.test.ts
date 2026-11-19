@@ -23,6 +23,7 @@ import {
   type BlockbookBackendOptions,
 } from '../src/index.js';
 import { simulatedBlockbook } from '../src/testing.js';
+import { BLOCKBOOK_CACHE_LIMITS } from '../src/internal/bounded.js';
 import { FAST_KDF, FakeChain, MNEMONIC, PASSPHRASE, STRANGER, signWithTestWallet } from './wallet-chain.js';
 
 const network = customNetwork(networks.regtest, { coinbaseMaturity: 2 });
@@ -207,6 +208,33 @@ describe('blockbookBackend', () => {
     chain.pay(r1, 50000n);
     chain.mine(1);
     expect(await refreshInvoice(invoice, blockbook, chain.time)).toMatchObject({ state: 'confirmed', paidAmount: 50000n, confirmations: 1 });
+  });
+});
+
+describe('blockbookBackend caches', () => {
+  it('forgets the transactions and blocks it read longest ago past its limits, and asks for them again', async () => {
+    const saved = { ...BLOCKBOOK_CACHE_LIMITS };
+    Object.assign(BLOCKBOOK_CACHE_LIMITS, { transactions: 2, blocks: 1, checks: 2 });
+    try {
+      const { chain, server, backend } = setup();
+      const paid = [8000n, 9000n, 10000n, 11000n].map((value) => {
+        const tx = chain.pay(r0, value);
+        chain.mine(1);
+        return tx;
+      });
+      const blockbook = backend();
+      expect(historyOf(await blockbook.getHistory(r0))).toEqual(historyOf(await chain.getHistory(r0)));
+      const fetched = () => server.requests.filter((path) => path.startsWith('api/v2/tx/')).length;
+      const before = fetched();
+      for (const tx of paid) expect(await blockbook.getRawTransaction(tx.getId())).toBe(tx.toHex());
+      // Two of the four were still held.
+      expect(fetched()).toBeGreaterThanOrEqual(before + 2);
+      const blocksBefore = server.requests.filter((path) => path.startsWith('api/v2/rawblock/')).length;
+      expect(historyOf(await blockbook.getHistory(r0))).toEqual(historyOf(await chain.getHistory(r0)));
+      expect(server.requests.filter((path) => path.startsWith('api/v2/rawblock/')).length).toBeGreaterThan(blocksBefore);
+    } finally {
+      Object.assign(BLOCKBOOK_CACHE_LIMITS, saved);
+    }
   });
 });
 

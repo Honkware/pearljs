@@ -47,6 +47,7 @@ import type { BlockbookAddress, BlockbookClient, BlockbookTx, BlockbookXpubQuery
 import type { AddressPayment, BlockRef, ChainTransaction } from './client.js';
 import { bitsToTarget, checkCertificateRules } from './consensus.js';
 import { PearlError, PearlRpcError } from './errors.js';
+import { BLOCKBOOK_CACHE_LIMITS, BoundedMap } from './internal/bounded.js';
 import { fromHex, toHex } from './internal/bytes.js';
 import { mapLimit } from './internal/filter-scan.js';
 import { DEFAULT_RELAY_FEE_RATE } from './policy.js';
@@ -170,13 +171,17 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
     hosts.add(host);
   }
 
+  // Bounded, so a long-running process, or a server listing made-up transactions, does not grow them for ever. What
+  // is forgotten is asked again.
   // Transactions by txid, once their serialization hashed to it.
-  const transactions = new Map<string, { tx: Transaction; hex: string }>();
+  const transactions = new BoundedMap<string, { tx: Transaction; hex: string }>(BLOCKBOOK_CACHE_LIMITS.transactions);
   // Blocks by hash, once checked: the height they were claimed at, their time and txids.
-  const blocks = new Map<string, { height: number; time: number; txids: Set<string> }>();
+  const blocks = new BoundedMap<string, { height: number; time: number; txids: Set<string> }>(BLOCKBOOK_CACHE_LIMITS.blocks);
+  // Placements a downloaded block showed, `txid@height:hash`, with the block's time: a block that holds a transaction always will.
+  const placed = new BoundedMap<string, number>(BLOCKBOOK_CACHE_LIMITS.checks);
   // Heights and hashes every cross-check server has confirmed, and without verifyBlocks the placements they agree
   // on, since the last reorganization seen.
-  const confirmed = new Set<string>();
+  const confirmed = new BoundedMap<string, true>(BLOCKBOOK_CACHE_LIMITS.checks);
   let anchor: BlockRef | null = null;
 
   const bad = (message: string): PearlError => new PearlError('BACKEND_RESPONSE', `the Blockbook at ${new URL(client.url).host} ${message}`);
@@ -249,7 +254,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
         if (!kept) confirmed.clear();
       }
       anchor = { height, hash };
-      confirmed.add(`${height}:${hash}`);
+      confirmed.set(`${height}:${hash}`, true);
     }
     return { height, hash };
   };
@@ -261,7 +266,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
       const theirs = await ask(i, (other) => other.getBlockHash(height));
       if (theirs !== hash) throw disagree(i, `has block ${String(theirs)} at height ${height}, where the server places a transaction in ${hash}`);
     }));
-    confirmed.add(`${height}:${hash}`);
+    confirmed.set(`${height}:${hash}`, true);
   };
 
   const checkedBlock = async (hash: string, height: number): Promise<{ time: number; txids: Set<string> }> => {
@@ -295,7 +300,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
         throw disagree(i, `places ${txid} ${theirs === null ? 'nowhere' : `at height ${String(theirs.blockHeight)} in block ${String(theirs.blockHash)}`}, where the server places it at height ${at.height} in ${at.hash}`);
       }
     }));
-    confirmed.add(key);
+    confirmed.set(key, true);
   };
 
   // Where a transaction is, held to the block and the cross-check servers.
@@ -303,9 +308,14 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
     if (at.height > upTo.height) throw bad(`places ${txid} at height ${at.height}, above its tip at ${upTo.height}`);
     let time = at.time;
     if (verifyBlocks) {
-      const block = await checkedBlock(at.hash, at.height);
-      if (!block.txids.has(txid)) throw bad(`places ${txid} in block ${at.hash}, which does not hold it`);
-      time = block.time;
+      const key = `${txid}@${at.height}:${at.hash}`;
+      let shown = placed.get(key);
+      if (shown === undefined) {
+        const block = await checkedBlock(at.hash, at.height);
+        if (!block.txids.has(txid)) throw bad(`places ${txid} in block ${at.hash}, which does not hold it`);
+        placed.set(key, (shown = block.time));
+      }
+      time = shown;
     } else {
       await placedAlike(txid, at);
     }
@@ -402,8 +412,9 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
     const txs = await mapLimit(listed, concurrency, (item) => txOf(item.txid));
     const owned = new Map<string, bigint>();
     txs.forEach((tx, i) => tx.outs.forEach((out, vout) => toHex(out.script) === script && owned.set(`${listed[i]!.txid}:${vout}`, out.value)));
+    const byTxid = new Map(listed.map((item, i) => [item.txid, txs[i]!]));
     return mapLimit(listed, concurrency, async (item) => {
-      const tx = transactions.get(item.txid)!.tx;
+      const tx = byTxid.get(item.txid)!;
       let received = 0n;
       for (const out of tx.outs) if (toHex(out.script) === script) received += out.value;
       let spent = 0n;
@@ -678,8 +689,9 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
     const txs = await mapLimit(listed, concurrency, ([txid]) => txOf(txid));
     const owned = new Set<string>();
     txs.forEach((tx, i) => tx.outs.forEach((out, vout) => scripts.has(toHex(out.script)) && owned.add(`${listed[i]![0]}:${vout}`)));
+    const byTxid = new Map(listed.map(([txid], i) => [txid, txs[i]!]));
     const found = await mapLimit(listed, concurrency, async ([txid, at]): Promise<[string, BlockRef | null] | null> => {
-      const tx = transactions.get(txid)!.tx;
+      const tx = byTxid.get(txid)!;
       let touched = tx.outs.some((out) => scripts.has(toHex(out.script)));
       for (const input of tx.isCoinbase() ? [] : tx.ins) {
         if (touched) break;
@@ -717,8 +729,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
     async getRawTransaction(txid) {
       const known = transactions.get(txid);
       if (known !== undefined) return known.hex;
-      await fetchTx(txid);
-      return transactions.get(txid)?.hex ?? null;
+      return (await fetchTx(txid))?.reply.hex ?? null;
     },
 
     getUtxos,
