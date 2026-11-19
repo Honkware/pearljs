@@ -639,7 +639,12 @@ export interface BlockbookNewBlock {
   readonly hash: string;
 }
 
-/** A transaction touching a subscribed address (sendOnNewTxAddr). */
+/**
+ * A transaction touching a subscribed address (sendOnNewTxAddr). One from
+ * the mempool comes as GetTransactionFromMempoolTx writes it, with
+ * blockHeight 0 and no blockHash; the client sets its blockHeight to -1, as
+ * the REST API has it. One a block confirms comes without hex or size.
+ */
 export interface BlockbookAddressTx {
   readonly address: string;
   readonly tx: BlockbookTx;
@@ -796,7 +801,12 @@ export class BlockbookWsClient {
     for (const address of addresses) decodeAddress(address, this.network);
     for (const [id, sub] of this.#subscriptions) if (sub.method === 'subscribeAddresses') this.#subscriptions.delete(id);
     const params = { addresses: [...addresses], ...(options.newBlockTxs === true ? { newBlockTxs: true } : {}) };
-    return this.#subscribe('subscribeAddresses', 'unsubscribeAddresses', params, listener as (data: unknown) => void);
+    return this.#subscribe('subscribeAddresses', 'unsubscribeAddresses', params, (data) => {
+      const event = data as BlockbookAddressTx;
+      const tx = event?.tx;
+      // Height 0 with no block is the mempool; block 0's coinbase pays no one.
+      listener(tx !== null && typeof tx === 'object' && tx.blockHash === undefined && tx.blockHeight === 0 ? { ...event, tx: { ...tx, blockHeight: -1 } } : event);
+    });
   }
 
   /** Stops reconnecting, fails pending calls and closes the socket. */

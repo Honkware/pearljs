@@ -162,7 +162,10 @@ describe('Pearl\'s mainnet Blockbook, as recorded', () => {
       send(text: string): void {
         const { id, method, params } = JSON.parse(text) as { id: string; method: string; params: unknown };
         const reply = replies.get(JSON.stringify([method, params]));
-        if (reply !== undefined) queueMicrotask(() => this.onmessage?.({ data: reply.replace(/"id":"\d+"/, `"id":"${id}"`) }));
+        const frames = reply !== undefined ? [reply]
+          : method === 'subscribeNewBlock' ? ['{"id":"1","data":{"subscribed":true}}', mainnet.notifications.newBlock]
+          : method === 'subscribeAddresses' ? ['{"id":"2","data":{"subscribed":true}}', mainnet.notifications.mempoolTx, mainnet.notifications.blockTx] : [];
+        for (const frame of frames) queueMicrotask(() => this.onmessage?.({ data: frame.replace(/"id":"\d+"/, `"id":"${id}"`) }));
       }
       close(): void {
         this.readyState = 3;
@@ -174,6 +177,14 @@ describe('Pearl\'s mainnet Blockbook, as recorded', () => {
     expect(await ws.getBlockHash(99_999_999)).toBeNull();
     await expect(ws.call('estimateFee', { blocks: [1, 6] })).rejects.toMatchObject({ kind: 'rpc', message: 'estimateFee: EstimateSmartFee: not supported' });
     expect(await ws.getAccountInfo({ descriptor: P2MR_A })).toMatchObject({ balance: 0n, txs: 2 });
+    const blocks: unknown[] = [];
+    await ws.subscribeNewBlock((block) => blocks.push(block));
+    const heights: number[] = [];
+    await ws.subscribeAddresses([BUSY], ({ tx }) => heights.push(tx.blockHeight), { newBlockTxs: true });
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(blocks).toEqual([{ height: 145347, hash: '0260f118a76469a52cd9fc653bb59a2efc62d2b97fecc55144bfb4ca4dedd9a7', evmData: null }]);
+    // The mempool's comes at height 0 and is read as -1.
+    expect(heights).toEqual([-1, 145347]);
     await ws.close();
   });
 });
@@ -223,6 +234,36 @@ describe('the simulated Blockbook', () => {
       const reply = await get(path);
       expect([path, reply.status, reply.value]).toEqual([path, recorded.status, JSON.parse(recorded.body)]);
     }
+  });
+
+  it('tells of new blocks and of an address\'s mempool and block transactions in the real one\'s shapes', async () => {
+    const frames: { id: string; data: Record<string, unknown> }[] = [];
+    class Spy extends server.WebSocket {
+      constructor(url: string) {
+        super(url);
+        const self = this as unknown as { onmessage: ((event: { data: unknown }) => void) | null };
+        queueMicrotask(() => {
+          const deliver = self.onmessage;
+          self.onmessage = (event) => (frames.push(JSON.parse(String(event.data)) as never), deliver?.(event));
+        });
+      }
+    }
+    const ws = new BlockbookWsClient({ url: server.url, network: chain.network, WebSocket: Spy, keepAlive: 0 });
+    await ws.subscribeNewBlock(() => {});
+    await ws.subscribeAddresses([STRANGER], () => {}, { newBlockTxs: true });
+    chain.pay(STRANGER, 5000n);
+    chain.mine(1);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const real = (frame: string) => (JSON.parse(frame) as { data: Record<string, unknown> }).data;
+    const txOf = (data: Record<string, unknown>) => data.tx as Record<string, unknown>;
+    const ours = frames.map((frame) => frame.data).filter((data) => !('subscribed' in data));
+    const block = ours.find((data) => 'height' in data)!;
+    const [pending, mined] = ours.filter((data) => 'tx' in data);
+    expect(keys(block)).toEqual(keys(real(mainnet.notifications.newBlock)));
+    expect(keys(txOf(pending!)).filter((key) => key !== 'rbf')).toEqual(keys(txOf(real(mainnet.notifications.mempoolTx))).filter((key) => key !== 'rbf'));
+    expect(txOf(pending!).blockHeight).toBe(0);
+    expect(keys(txOf(mined!))).toEqual(keys(txOf(real(mainnet.notifications.blockTx))));
+    await ws.close();
   });
 
   it('answers the websocket\'s getInfo, an unknown height and estimateFee as the real one does', async () => {

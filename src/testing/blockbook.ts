@@ -593,12 +593,28 @@ function socketClass(chain: SimulatedChain, server: Server): SimulatedBlockbookW
       const subs = this.#addresses;
       if (subs === null) return;
       for (const [hex, address] of subs.scripts) {
-        if (server.touches(tx, hex)) this.#out(subs.id, { address, tx: server.fullTx(tx, block) });
+        if (server.touches(tx, hex)) this.#out(subs.id, { address, tx: notified(server.fullTx(tx, block)) });
       }
     }
   }
 
   return Socket as unknown as SimulatedBlockbookWebSocket;
+}
+
+// A transaction as sendOnNewTxAddr writes it. From the mempool:
+// GetTransactionFromMempoolTx, at height 0 and without pearld's own reply.
+// From a block: no serialization, size or spend.
+function notified(tx: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...tx };
+  delete out.coinSpecificData;
+  if (out.blockHeight === -1) return { ...out, blockHeight: 0 };
+  for (const key of ['hex', 'size', 'rbf']) delete out[key];
+  out.vout = (out.vout as Record<string, unknown>[]).map((item) => {
+    const copy = { ...item };
+    for (const key of ['spent', 'spentTxId', 'spentIndex', 'spentHeight']) delete copy[key];
+    return copy;
+  });
+  return out;
 }
 
 // validateIntParam: the default when missing or unreadable, clamped to the range.
