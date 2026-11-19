@@ -15,6 +15,7 @@
 import { Transaction } from 'bitcoinjs-lib';
 import { formatPearl, MAX_GRAIN } from './amount.js';
 import { COINBASE_MATURITY } from './consensus.js';
+import type { PearlNetwork } from './networks.js';
 import { DEFAULT_RELAY_FEE_RATE, estimateVsize, isDust, minRelayFee } from './policy.js';
 import type { SpendEstimate } from './policy.js';
 import { classifyOutputScript } from './script.js';
@@ -48,8 +49,10 @@ export interface Utxo {
 export interface SpendableOptions {
   /** Confirmations an output needs. Oyster's sends use 1. */
   minConfirmations?: number;
-  /** Confirmations a coinbase output needs. COINBASE_MATURITY (100) unless given. */
+  /** Confirmations a coinbase output needs: the network's coinbaseMaturity unless given, or COINBASE_MATURITY (100) without a network. */
   coinbaseMaturity?: number;
+  /** The chain the outputs are on, for its coinbaseMaturity. */
+  network?: PearlNetwork;
 }
 
 /** wallet.calcConf: confirmations of an output from its block height, 0 when unconfirmed or above the tip. */
@@ -65,7 +68,7 @@ export function confirmationsFromHeight(height: number | undefined, tipHeight: n
  */
 export function spendableUtxos<T extends Utxo>(utxos: readonly T[], options: SpendableOptions = {}): T[] {
   const minimum = options.minConfirmations ?? 1;
-  const maturity = options.coinbaseMaturity ?? COINBASE_MATURITY;
+  const maturity = options.coinbaseMaturity ?? options.network?.coinbaseMaturity ?? COINBASE_MATURITY;
   return utxos.filter((utxo) => {
     const confs = utxo.confirmations ?? 0;
     if (utxo.value === 0n || confs < minimum) return false;

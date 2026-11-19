@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 import {
   arrangeCoins,
   COINBASE_MATURITY,
+  customNetwork,
+  networks,
   confirmationsFromHeight,
   DEFAULT_RELAY_FEE_RATE,
   InsufficientFundsError,
@@ -279,6 +281,15 @@ describe('spendable outputs', () => {
     expect(spendableUtxos([young, mature])).toEqual([mature]);
     expect(spendableUtxos([young, mature], { minConfirmations: 0 })).toEqual([mature]);
     expect(spendableUtxos([young, mature], { coinbaseMaturity: 50 })).toEqual([young, mature]);
+  });
+
+  it('takes the coinbase maturity of the network it is given, unless told one', () => {
+    const quick = customNetwork(networks.regtest, { coinbaseMaturity: 5 });
+    const young = coin({ coinbase: true, confirmations: 4 });
+    const mature = coin({ coinbase: true, confirmations: 5 });
+    expect(spendableUtxos([young, mature], { network: quick })).toEqual([mature]);
+    expect(spendableUtxos([young, mature], { network: quick, coinbaseMaturity: 4 })).toEqual([young, mature]);
+    expect(spendableUtxos([mature], { network: networks.regtest })).toEqual([]);
   });
 
   it('leaves out outputs worth nothing', () => {

@@ -9,6 +9,7 @@ import {
   addInputByTxid,
   assembleScriptTree,
   buildPayment,
+  customNetwork,
   checksigScript,
   checkStandard,
   createTransaction,
@@ -211,6 +212,10 @@ describe('payFromAccount', () => {
     expect(() => payFromAccount(account, options)).toThrow(/2 unspent outputs were left out as unconfirmed, immature or empty$/);
     expect(payFromAccount(account, { ...options, minConfirmations: 0 }).inputs.map((input) => input.index)).toEqual([0]);
     expect(payFromAccount(account, { ...options, coinbaseMaturity: 99 }).inputs.map((input) => input.index)).toEqual([1]);
+    // A network whose coinbases mature sooner needs no option.
+    const quick = customNetwork(network, { coinbaseMaturity: 99 });
+    expect(payFromAccount(account, { ...options, network: quick }).inputs.map((input) => input.index)).toEqual([1]);
+    expect(buildPayment({ ...options, network: quick }).inputs.map((input) => input.index)).toEqual([1]);
   });
 
   it('gives pearld\'s reason for a recipient amount that is dust', () => {
