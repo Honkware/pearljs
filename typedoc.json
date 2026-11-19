@@ -42,6 +42,7 @@
     "src/sweep.ts",
     "src/testing.ts",
     "src/testing-regtest.ts",
+    "src/tls-fetch.ts",
     "src/transaction.ts",
     "src/wallet.ts",
     "src/wif.ts",

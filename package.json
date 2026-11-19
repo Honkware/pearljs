@@ -167,6 +167,10 @@
       "types": "./dist/testing-regtest.d.ts",
       "default": "./dist/testing-regtest.js"
     },
+    "./tls-fetch": {
+      "types": "./dist/tls-fetch.d.ts",
+      "default": "./dist/tls-fetch.js"
+    },
     "./transaction": {
       "types": "./dist/transaction.d.ts",
       "default": "./dist/transaction.js"

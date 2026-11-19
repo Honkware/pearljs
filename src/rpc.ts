@@ -88,8 +88,9 @@ export interface HttpTransportOptions {
   /** Defaults to globalThis.fetch. */
   readonly fetch?: typeof fetch;
   /**
-   * Merged into every request. Node users pass `{ dispatcher }` here, with an
-   * undici Agent that trusts the server's rpc.cert.
+   * Merged into every request, e.g. `{ dispatcher }` with an undici Agent.
+   * To trust a server's rpc.cert in Node, pass `fetch: pearldFetch({ ca })`
+   * from pearljs/tls-fetch instead.
    */
   readonly init?: RequestInit & Record<string, unknown>;
   /** Limit per request in ms, 0 for none. Default DEFAULT_RPC_TIMEOUT, and none for generate, importprivkey and getblocktemplate. */

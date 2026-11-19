@@ -1380,6 +1380,15 @@
       "RegtestOptions"
     ]
   },
+  "tls-fetch": {
+    "values": [
+      "pearldFetch"
+    ],
+    "types": [
+      "PearldFetch",
+      "PearldFetchOptions"
+    ]
+  },
   "transaction": {
     "values": [
       "Psbt",

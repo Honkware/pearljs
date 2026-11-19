@@ -16,7 +16,6 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { request } from 'node:https';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,6 +25,7 @@ import { mnemonicToSeed } from './mnemonic.js';
 import { networks } from './networks.js';
 import { OysterClient, PearldClient } from './rpc.js';
 import type { JsonRpcClient } from './rpc.js';
+import { pearldFetch } from './tls-fetch.js';
 import { FAUCET_MNEMONIC, TEST_MNEMONIC } from './testing/keys.js';
 
 /** Where a started server listens and how to log in. */
@@ -96,21 +96,10 @@ function failed(message: string, cause?: unknown): PearlError {
 /**
  * A fetch that trusts one certificate, for clients of a server started
  * here: `new PearldClient({ ...endpoint, fetch: trustingFetch(endpoint.ca) })`.
- * Node's own fetch takes a CA only through a dispatcher from undici.
+ * It is `pearldFetch` from `pearljs/tls-fetch`, connections kept open.
  */
 export function trustingFetch(ca: string): typeof globalThis.fetch {
-  return (input, init = {}) =>
-    new Promise<Response>((resolve, reject) => {
-      const headers = Object.fromEntries(new Headers(init.headers));
-      const req = request(String(input), { method: init.method ?? 'GET', headers, ca, ...(init.signal ? { signal: init.signal } : {}) }, (res) => {
-        const chunks: Uint8Array[] = [];
-        res.on('data', (chunk: Uint8Array) => chunks.push(chunk));
-        res.on('error', reject);
-        res.on('end', () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode ?? 502 })));
-      });
-      req.on('error', reject);
-      req.end(typeof init.body === 'string' ? init.body : undefined);
-    });
+  return pearldFetch({ ca });
 }
 
 /** A port nothing is listening on right now. */
