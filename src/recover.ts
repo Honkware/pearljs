@@ -39,7 +39,7 @@ import { encodeAddress } from './address.js';
 import { formatPearl } from './amount.js';
 import type { WalletBackend, WalletBalance } from './backend.js';
 import { sumBalance } from './backend.js';
-import type { AccountDiscovery, DiscoveredAddress } from './discovery.js';
+import type { AccountDiscovery, DiscoveredAddress, DiscoveredChain } from './discovery.js';
 import { discoverAccount, OYSTER_RECOVERY_WINDOW } from './discovery.js';
 import { PearlError } from './errors.js';
 import type { KeyOrigin, PearlAccount } from './keys.js';
@@ -166,6 +166,11 @@ export interface RecoveryOptions {
   batchSize?: number;
   /** Stops the scan between rounds. */
   signal?: AbortSignal;
+  /**
+   * Addresses to scan on one chain of a variant before giving the backend
+   * up with BACKEND_RESPONSE, as PearlWallet's sync does. 10,000 unless given.
+   */
+  scanLimit?: number;
   /** Called as each variant starts, for progress. */
   onVariant?: (variant: DerivationVariant) => void;
   /** P2MR addresses to check besides the derived ones, such as an XMSS key's. */
@@ -312,11 +317,15 @@ async function scan(
   batchSize: number,
   signal: AbortSignal | undefined,
   shareAccountKeys: boolean,
+  scanLimit: number | undefined,
 ): Promise<VariantReport> {
   // Without extendedPublicKey, discoverAccount tells the backend nothing but addresses.
   const account = shareAccountKeys ? candidate.account : { deriveAddress: (index: number, change?: boolean) => candidate.account.deriveAddress(index, change) };
-  const found: AccountDiscovery = await discoverAccount(account, backend, { gap, batchSize, ...(signal === undefined ? {} : { signal }) });
-  const maturity = backend.network.coinbaseMaturity;
+  const found = await discoverAccount(account, backend, { gap, batchSize, ...(signal === undefined ? {} : { signal }), ...(scanLimit === undefined ? {} : { scanLimit }) });
+  return variantReport(candidate, found, backend.network.coinbaseMaturity);
+}
+
+function variantReport(candidate: Candidate, found: AccountDiscovery, maturity: number): VariantReport {
   const withBalance = (child: DiscoveredAddress): UsedAddress => ({
     ...child,
     balance: sumBalance(found.utxos.filter((utxo) => utxo.address === child.address), maturity),
@@ -343,14 +352,41 @@ function gapNeeded(used: readonly DiscoveredAddress[]): number {
   return widest;
 }
 
-/** The pq variant checks a fixed range, since each address costs an XMSS key. */
+/**
+ * The pq variant checks exactly `count` indices of each chain and never
+ * extends past them, since each address costs an XMSS key generation.
+ */
 async function scanRange(
   candidate: Candidate,
   backend: Pick<WalletBackend, 'getAddressActivity' | 'getUtxos' | 'network' | 'findUsed'>,
   count: number,
   signal: AbortSignal | undefined,
 ): Promise<VariantReport> {
-  return scan(candidate, backend, count, count, signal, false);
+  const chain = async (change: boolean): Promise<DiscoveredChain> => {
+    signal?.throwIfAborted();
+    const batch = Array.from({ length: count }, (_, index) => ({ address: candidate.account.deriveAddress(index, change), index, change }));
+    const addresses = batch.map((child) => child.address);
+    let paid: Set<string>;
+    if (backend.findUsed !== undefined) {
+      paid = new Set(await backend.findUsed(addresses));
+    } else {
+      const activity = await Promise.all(addresses.map((address) => backend.getAddressActivity(address)));
+      paid = new Set(addresses.filter((_, i) => activity[i]!.length > 0));
+    }
+    const used = batch.filter((child) => paid.has(child.address));
+    return { used, nextIndex: (used.at(-1)?.index ?? -1) + 1 };
+  };
+  const receive = await chain(false);
+  const change = await chain(true);
+  const children = new Map([...receive.used, ...change.used].map((child) => [child.address, child]));
+  const found = children.size === 0 ? [] : await backend.getUtxos([...children.keys()]);
+  const utxos = found.map((utxo) => {
+    const child = children.get(utxo.address);
+    if (child === undefined) throw new PearlError('BACKEND_RESPONSE', `the backend returned an output for ${utxo.address}, which was not asked for`);
+    return { ...utxo, index: child.index, change: child.change };
+  });
+  const maturity = backend.network.coinbaseMaturity;
+  return variantReport(candidate, { receive, change, utxos, balance: sumBalance(utxos, maturity) }, maturity);
 }
 
 const total = (balance: WalletBalance): bigint => balance.confirmed + balance.unconfirmed + balance.immature;
@@ -464,7 +500,7 @@ async function run(
     reports.push(
       candidate.variant.pq
         ? await scanRange(candidate, backend, options.pqAddresses ?? 0, options.signal)
-        : await scan(candidate, backend, gap, batchSize, options.signal, options.shareAccountKeys === true),
+        : await scan(candidate, backend, gap, batchSize, options.signal, options.shareAccountKeys === true, options.scanLimit),
     );
   }
   const p2mr = await checkP2mr(backend, options.p2mrAddresses ?? []);

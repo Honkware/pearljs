@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_SCAN_LIMIT,
   OYSTER_RECOVERY_WINDOW,
   discoverAccount,
   importWatchOnlyAccount,
@@ -108,5 +109,32 @@ describe('discoverAccount', () => {
     await expect(discoverAccount(account, backend, { gap: 0 })).rejects.toThrow('gap must be a positive integer');
     await expect(discoverAccount(account, backend, { batchSize: 1.5 })).rejects.toThrow('batchSize must be a positive integer');
     await expect(discoverAccount(account, backend, { signal: AbortSignal.abort() })).rejects.toThrow();
+    await expect(discoverAccount(account, backend, { scanLimit: 0 })).rejects.toThrow('scanLimit must be a positive integer');
+  });
+
+  it('gives up on a backend that calls every address used once a chain reaches scanLimit', async () => {
+    let asked = 0;
+    const liar = {
+      network,
+      getAddressActivity: async () => [],
+      getUtxos: async () => [],
+      findUsed: async (addresses: readonly string[]) => {
+        asked += addresses.length;
+        if (asked > 20_000) throw new Error('scanned past the limit');
+        return [...addresses];
+      },
+    };
+    await expect(discoverAccount(account, liar, { gap: 20, scanLimit: 100 })).rejects.toMatchObject({ code: 'BACKEND_RESPONSE' });
+    expect(asked).toBe(100);
+    asked = 0;
+    await expect(discoverAccount(account, liar)).rejects.toThrow('higher scanLimit');
+    expect(asked).toBe(DEFAULT_SCAN_LIMIT);
+  });
+
+  it('scans up to scanLimit addresses of a chain and no further', async () => {
+    const used = new Set([...Array.from({ length: 25 }, (_, i) => account.deriveAddress(i * 4)), account.deriveAddress(99)]);
+    const backend = { network, getAddressActivity: async () => [], getUtxos: async () => [], findUsed: async (addresses: readonly string[]) => addresses.filter((address) => used.has(address)) };
+    expect((await discoverAccount(account, backend, { gap: 5, scanLimit: 105 })).receive.nextIndex).toBe(100);
+    await expect(discoverAccount(account, backend, { gap: 5, scanLimit: 104 })).rejects.toMatchObject({ code: 'BACKEND_RESPONSE' });
   });
 });

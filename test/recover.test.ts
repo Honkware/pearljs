@@ -8,6 +8,7 @@ import * as ecc from 'tiny-secp256k1';
 import { describe, expect, it } from 'vitest';
 import {
   createMemoryStore,
+  DEFAULT_SCAN_LIMIT,
   deriveAccountFromSeed,
   diagnoseAccount,
   diagnoseSeed,
@@ -230,6 +231,52 @@ describe('diagnoseSeed', () => {
     expect(pq.accountKey).toBeNull();
     expect(report.reasons.map((reason) => reason.code)).toEqual(['OTHER_DERIVATION']);
     expect(report.reasons[0]!.message).toContain('pq=true');
+  });
+
+  it('gives up on a backend that calls every address used, as a wallet sync does', async () => {
+    let asked = 0;
+    const liar: Pick<WalletBackend, 'getAddressActivity' | 'getUtxos' | 'getBalance' | 'network' | 'findUsed'> = {
+      network: networks.regtest,
+      getAddressActivity: async () => [],
+      getUtxos: async () => [],
+      getBalance: async () => ({ confirmed: 0n, unconfirmed: 0n, immature: 0n }),
+      findUsed: async (addresses) => {
+        asked += addresses.length;
+        if (asked > 50_000) throw new Error('scanned past the limit');
+        return [...addresses];
+      },
+    };
+    await expect(diagnoseSeed(ABANDON, liar, { accounts: 1, otherCoinType: false, scanLimit: 500 })).rejects.toMatchObject({ code: 'BACKEND_RESPONSE' });
+    expect(asked).toBe(500);
+    asked = 0;
+    await expect(diagnoseSeed(ABANDON, liar, { accounts: 1, otherCoinType: false })).rejects.toThrow('higher scanLimit');
+    expect(asked).toBe(DEFAULT_SCAN_LIMIT);
+    asked = 0;
+    await expect(diagnoseAccount(deriveAccountFromSeed(mnemonicToSeed(ABANDON), networks.regtest), liar, { scanLimit: 300 })).rejects.toThrow('higher scanLimit');
+    expect(asked).toBe(300);
+  });
+
+  it('derives exactly pqAddresses pq addresses on each chain, whatever the backend says', async () => {
+    const pqAsked: string[] = [];
+    const backend: Pick<WalletBackend, 'getAddressActivity' | 'getUtxos' | 'getBalance' | 'network' | 'findUsed'> = {
+      network: networks.regtest,
+      getAddressActivity: async () => [],
+      getUtxos: async () => [],
+      getBalance: async () => ({ confirmed: 0n, unconfirmed: 0n, immature: 0n }),
+      // The plain variant asks in rounds of 7; call every pq address used.
+      findUsed: async (addresses) => {
+        if (addresses.length === 7) return [];
+        pqAsked.push(...addresses);
+        if (pqAsked.length > 4) throw new Error('derived pq addresses past the range');
+        return [...addresses];
+      },
+    };
+    const seed = mnemonicToSeed(ABANDON);
+    const report = await diagnoseSeed(seed, backend, { gap: 7, batchSize: 7, accounts: 1, otherCoinType: false, pqAddresses: 2 });
+    const network = networks.regtest;
+    expect(pqAsked).toEqual([oysterPqAddress(seed, network, 0), oysterPqAddress(seed, network, 1), oysterPqAddress(seed, network, 0, true), oysterPqAddress(seed, network, 1, true)]);
+    const pq = report.variants.find((v) => v.variant.pq)!;
+    expect([pq.receive.nextIndex, pq.change.nextIndex]).toEqual([2, 2]);
   });
 
   it('reads hex seeds and refuses what is neither a phrase nor a seed', async () => {

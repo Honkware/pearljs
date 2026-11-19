@@ -23,6 +23,9 @@ import { PearlError } from './errors.js';
 /** The recovery window Oyster restores with. */
 export const OYSTER_RECOVERY_WINDOW = 250;
 
+// The ceiling PearlWallet's sync uses (DEFAULT_SCAN_LIMIT in wallet.ts), which imports this module.
+const DEFAULT_SCAN_LIMIT = 10_000;
+
 /** Options for discoverAccount. */
 export interface DiscoveryOptions {
   /** Consecutive unused addresses that end the scan of a chain. Default OYSTER_RECOVERY_WINDOW; BIP44 wallets use 20. */
@@ -31,6 +34,12 @@ export interface DiscoveryOptions {
   batchSize?: number;
   /** Stops the scan between rounds. */
   signal?: AbortSignal;
+  /**
+   * Addresses to scan on one chain before giving the backend up, as
+   * PearlWallet's sync does: 10,000 unless given. A chain whose used
+   * addresses and gap reach past it rejects with BACKEND_RESPONSE.
+   */
+  scanLimit?: number;
 }
 
 /** An address of the account and where it sits: its index, and whether it is on the change chain. */
@@ -64,16 +73,19 @@ export interface AccountDiscovery {
  * confirmed or not.
  *
  * Rejects with whatever the backend rejects with, such as MissingIndexError from
- * pearldBackend without --addrindex, and with the signal's reason when aborted.
+ * pearldBackend without --addrindex, with the signal's reason when aborted,
+ * and with BACKEND_RESPONSE when a chain would need more than scanLimit
+ * addresses, as from a backend that calls every address used.
  */
 export async function discoverAccount(
   account: Pick<PearlAccount, 'deriveAddress'> & Partial<Pick<PearlAccount, 'extendedPublicKey'>>,
   backend: Pick<WalletBackend, 'getAddressActivity' | 'getUtxos' | 'network' | 'findUsed'>,
   options: DiscoveryOptions = {},
 ): Promise<AccountDiscovery> {
-  const { gap = OYSTER_RECOVERY_WINDOW, batchSize = 25, signal } = options;
+  const { gap = OYSTER_RECOVERY_WINDOW, batchSize = 25, signal, scanLimit = DEFAULT_SCAN_LIMIT } = options;
   if (!Number.isInteger(gap) || gap < 1) throw new RangeError('gap must be a positive integer');
   if (!Number.isInteger(batchSize) || batchSize < 1) throw new RangeError('batchSize must be a positive integer');
+  if (!Number.isInteger(scanLimit) || scanLimit < 1) throw new RangeError('scanLimit must be a positive integer');
 
   const xpub = account.extendedPublicKey?.();
   const usedAmong = async (batch: DiscoveredAddress[]): Promise<Set<string>> => {
@@ -91,7 +103,14 @@ export async function discoverAccount(
     let nextIndex = 0;
     for (let start = 0; start < nextIndex + gap; ) {
       signal?.throwIfAborted();
-      const count = Math.min(batchSize, nextIndex + gap - start);
+      // A backend that calls every address used would keep this going for ever.
+      if (start >= scanLimit) {
+        throw new PearlError(
+          'BACKEND_RESPONSE',
+          `the backend reports addresses in use with no gap of ${gap} within ${scanLimit} addresses of the ${change ? 'change' : 'receive'} chain; if the account really has that many, scan with a higher scanLimit`,
+        );
+      }
+      const count = Math.min(batchSize, nextIndex + gap - start, scanLimit - start);
       const batch = Array.from({ length: count }, (_, i) => ({ address: account.deriveAddress(start + i, change), index: start + i, change }));
       const paid = await usedAmong(batch);
       for (const child of batch) {
