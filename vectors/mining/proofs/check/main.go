@@ -24,7 +24,11 @@ type caseJSON struct {
 		Version    uint32 `json:"version"`
 		Hash       string `json:"hash"`
 		PublicData string `json:"publicData"`
-		Proof      string `json:"proof"`
+		Proof      struct {
+			From   string `json:"from"`
+			Flip   *int   `json:"flip"`
+			Length *int   `json:"length"`
+		} `json:"proof"`
 	} `json:"certificate"`
 	Bits  *uint32 `json:"bits"`
 	Error *string `json:"error"`
@@ -40,7 +44,8 @@ func check(path string) {
 		panic(err)
 	}
 	var file struct {
-		Cases []caseJSON `json:"cases"`
+		Proofs map[string]string `json:"proofs"`
+		Cases  []caseJSON        `json:"cases"`
 	}
 	if err := json.Unmarshal(raw, &file); err != nil {
 		panic(err)
@@ -56,7 +61,13 @@ func check(path string) {
 			panic(err)
 		}
 		pd, _ := hex.DecodeString(c.Certificate.PublicData)
-		proof, _ := hex.DecodeString(c.Certificate.Proof)
+		proof, _ := hex.DecodeString(file.Proofs[c.Certificate.Proof.From])
+		if f := c.Certificate.Proof.Flip; f != nil {
+			proof[*f] ^= 1
+		}
+		if n := c.Certificate.Proof.Length; n != nil {
+			proof = proof[:*n]
+		}
 		hashBytes, _ := hex.DecodeString(c.Certificate.Hash)
 		var cert wire.BlockCertificate
 		var p *wire.CertificateV2

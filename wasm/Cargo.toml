@@ -9,6 +9,10 @@ license = "MIT"
 crate-type = ["cdylib"]
 path = "src/lib.rs"
 
+[features]
+# Exports build_setup, to time compiling the circuits in place of loading a cache.
+measure-setup = []
+
 [dependencies]
 zk-pow = { path = "vendor/zk-pow", default-features = false }
 anyhow = "1.0"

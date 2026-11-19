@@ -287,3 +287,37 @@ pub unsafe extern "C" fn verify_v4(
         }
     }
 }
+
+/// For measurement only (feature measure-setup, never shipped): compiles the
+/// setups build_cache writes, V2's circuits when `v4` is 0 and V4's otherwise,
+/// and returns the serialized cache's length, or -1 with the reason as the message.
+#[cfg(feature = "measure-setup")]
+#[unsafe(no_mangle)]
+pub extern "C" fn build_setup(v4: u32) -> i64 {
+    use zk_pow::v2::circuit::pearl_circuit::{PearlRecursion, RecursionCircuit};
+    use zk_pow::v4::api::public_params::Device;
+    use zk_pow::v4::api::zk::{Fp8Verifier, sample_dense_statement_for_device};
+    let bytes = if v4 == 0 {
+        let mut cache = CircuitCache::default();
+        PearlRecursion::fill_verifier_cache(&mut cache);
+        cache.to_bytes()
+    } else {
+        let mut cache = Fp8VerifierCache::default();
+        Device::ALL
+            .into_iter()
+            .try_for_each(|device| {
+                let params = sample_dense_statement_for_device(device)?;
+                let verifier = Fp8Verifier::generate(&params, &Fp8BlockHeader::zero(), &mut Default::default())?;
+                cache.insert(device, verifier);
+                Ok::<(), anyhow::Error>(())
+            })
+            .and_then(|()| cache.to_bytes())
+    };
+    match bytes {
+        Ok(b) => b.len() as i64,
+        Err(e) => {
+            set_message(&e.to_string());
+            -1
+        }
+    }
+}
