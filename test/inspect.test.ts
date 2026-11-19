@@ -28,6 +28,7 @@ import type { InputSpend, TxOutput } from '../src/index.js';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
 import mainnetSpend from './fixtures/pr111-mainnet-xmss-spend.json' with { type: 'json' };
 import testnet2Blocks from './fixtures/testnet2-fp8-blocks.json' with { type: 'json' };
+import mainnetCoinbases from './fixtures/mainnet-coinbase-scripts.json' with { type: 'json' };
 import { bytesToHex, hexToBytes } from './vector-helpers.js';
 
 const network = networks.mainnet;
@@ -397,6 +398,13 @@ describe('coinbaseText', () => {
     expect(coinbaseText(Uint8Array.of(0x03, 0x0b, 0x4b, 0x02, 0x00))).toBe('');
     expect(coinbaseText(new Uint8Array(0))).toBe('');
   });
+
+  it.each(mainnetCoinbases.scripts.map((s) => [s.height, s.tag, s.hex] as const))(
+    'reads the tag of mainnet block %i, %s, when the miner wrote raw bytes instead of pushes',
+    (_height, tag, hex) => {
+      expect(coinbaseText(hexToBytes(hex))).toBe(tag);
+    },
+  );
 
   it('turns bidirectional overrides, isolates, zero-width characters and line separators into spaces', () => {
     const script = (text: string) => coinbaseScript(1000, 5n, text);

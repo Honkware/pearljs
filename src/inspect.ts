@@ -259,14 +259,22 @@ const isPrintableAscii = (data: Uint8Array): boolean => data.every((byte) => byt
 
 /**
  * The text a miner wrote in a coinbase input script. The BIP 34 height that
- * starts it is skipped, as are opcodes and pushes of up to 8 bytes that are
- * not all printable ASCII, which is how extra nonces and numbers look
- * (pearld's own miner writes the height, an extra nonce and "/P2SH/pearld/").
- * Each remaining push is read as UTF-8; control characters, format characters
- * (bidirectional overrides and isolates, zero-width characters), line and
- * paragraph separators and bytes that are not UTF-8 become one space per run,
- * and the pushes are joined with a space. A push that runs past the end of
- * the script is read up to the end. An empty string when there is no text.
+ * starts it is skipped, as are small numbers and pushes of up to 8 bytes
+ * that are not all printable ASCII, which is how extra nonces and numbers
+ * look (pearld's own miner writes the height, an extra nonce and
+ * "/P2SH/pearld/"). Each remaining push is read as UTF-8; control characters,
+ * format characters (bidirectional overrides and isolates, zero-width
+ * characters), line and paragraph separators and bytes that are not UTF-8
+ * become one space per run, and the pushes are joined with a space.
+ *
+ * Many miners write the extra nonce or the tag as raw bytes rather than as
+ * pushes. When the bytes after the height hold an opcode other than a push or
+ * a small number, or a push whose length byte is printable ASCII and that runs
+ * past the end of the script, the text is instead every run of at least 4
+ * printable ASCII characters in those bytes (after any extra nonce or numbers
+ * pushed before the first text), trimmed and joined with a space. Any other
+ * push that runs past the end is read up to the end. An empty string when
+ * there is no text.
  *
  * The result is safe to print on one line, in a terminal or a page, without
  * reordering what is around it. It is still text the miner chose: a pool
@@ -276,6 +284,7 @@ export function coinbaseText(script: Uint8Array): string {
   const parts: string[] = [];
   const decoder = new TextDecoder('utf-8', { fatal: false });
   let at = 0;
+  let rawFrom = 0;
   let skipFirst = coinbaseHeight(script) !== null;
   while (at < script.length) {
     const opcode = script[at]!;
@@ -292,13 +301,38 @@ export function coinbaseText(script: Uint8Array): string {
     at = start + length;
     if (skipFirst) {
       skipFirst = false;
+      rawFrom = at;
       continue;
     }
-    if (data.length === 0 || (data.length <= NONCE_LENGTH && !isPrintableAscii(data))) continue;
+    // A raw nonce byte parses as an opcode or a push length, and a raw "/" (0x2f) as a push of 47 bytes.
+    const smallNumber = opcode === 0x4f || (opcode >= 0x51 && opcode <= 0x60);
+    const textAsLength = at > script.length && opcode >= 0x20 && opcode <= 0x4b;
+    if ((opcode > 0x4e && !smallNumber) || textAsLength) return printableRuns(script.subarray(rawFrom));
+    if (data.length === 0 || (data.length <= NONCE_LENGTH && !isPrintableAscii(data))) {
+      // Keeps a well-formed extra nonce push from joining the raw tag after it.
+      if (parts.length === 0) rawFrom = at;
+      continue;
+    }
     const text = decoder.decode(data).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\uFFFD]+/gu, ' ').trim();
     if (text !== '') parts.push(text);
   }
   return parts.join(' ');
+}
+
+const MIN_RAW_RUN = 4;
+
+function printableRuns(bytes: Uint8Array): string {
+  const runs: string[] = [];
+  let run = '';
+  for (const byte of [...bytes, 0]) {
+    if (byte >= 0x20 && byte <= 0x7e) run += String.fromCharCode(byte);
+    else {
+      const text = run.trim();
+      if (text.length >= MIN_RAW_RUN) runs.push(text);
+      run = '';
+    }
+  }
+  return runs.join(' ');
 }
 
 // OP_RETURN, a push of 36 bytes, then the tag aa21a9ed (blockchain.WitnessMagicBytes).
