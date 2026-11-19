@@ -7,17 +7,20 @@
 // feat/pearl-fp8-testnet at 6d736fc6 is the same here): the structs in
 // api/types.go, server/ws_types.go and common/internalstate.go, the
 // handlers in server/public.go and server/websocket.go, and api/worker.go
-// for what they compute. Kept from there on purpose: amounts as decimal
-// strings, Go's omitted zero and empty fields, blockHeight -1 in the
+// for what they compute, and held to replies of Pearl's own servers recorded
+// on 2026-11-19 (test/fixtures/blockbook/). Kept on purpose: amounts as
+// decimal strings, Go's omitted zero and empty fields, blockHeight -1 in the
 // mempool, the mempool put in front of an address's first page and that
 // page cut to the page size, the last page repeated for a page past the
 // end, the spend of an output marked only once a block confirms it (with
 // the extended index Pearl's configs turn on), a confirmed coinbase output
-// never flagged as one in utxo replies, and {"error": text} with HTTP 400
-// for an error Blockbook calls public and 500 otherwise. Values Blockbook
-// takes from its build and host (version, gitCommit, buildTime, host,
-// about, dbSize) are placeholders, and confirmationETA fields, fiat rates
-// and xpubs are left out.
+// never flagged as one in utxo replies, {"error": text} with HTTP 400 for an
+// error Blockbook calls public and 500 otherwise, and the websocket's
+// estimateFee refused, since it asks pearld for estimatesmartfee. Values
+// Blockbook takes from its build, host and pearld (version, gitCommit,
+// buildTime, host, about, dbSize, the backend's version and subversion) are
+// placeholders, the confirmation ETA is approximate, and fiat rates (which
+// Pearl's servers do not serve) and xpubs are left out.
 
 import { fromOutputScript, toOutputScript } from '../address.js';
 import { serializeBlock } from '../block.js';
@@ -96,6 +99,14 @@ export function simulatedBlockbook(chain: SimulatedChain): SimulatedBlockbook {
     return { spent: true, spentTxId: spender.txid, ...(index > 0 ? { spentIndex: index } : {}), spentHeight: spending.block!.height };
   };
   const omitZero = (key: string, value: number): Record<string, number> => (value === 0 ? {} : { [key]: value });
+  // Worker.getConfirmationETA: one block while the mempool holds under 32
+  // transactions, which is taken here for any size, times the average
+  // interval of the last 100 blocks.
+  const confirmationEta = (): Record<string, number> => {
+    const recent = chain.blocks.slice(-101);
+    const period = recent.length < 2 ? network.targetSpacing : Math.floor((recent.at(-1)!.time - recent[0]!.time) / (recent.length - 1));
+    return { confirmationETABlocks: 1, ...omitZero('confirmationETASeconds', period) };
+  };
 
   // api.Tx as GetTransactionFromBchainTx builds it.
   const fullTx = (tx: Transaction, block: SimulatedBlock | null): Record<string, unknown> => {
@@ -117,7 +128,7 @@ export function simulatedBlockbook(chain: SimulatedChain): SimulatedBlockbook {
     return {
       txid, ...omitZero('version', tx.version), ...omitZero('lockTime', tx.locktime), vin, vout,
       ...(block === null ? {} : { blockHash: block.hash }), blockHeight: block === null ? -1 : block.height,
-      confirmations: confirmations(block), blockTime: time, size: tx.byteLength(), vsize: tx.virtualSize(),
+      confirmations: confirmations(block), ...(block === null ? confirmationEta() : {}), blockTime: time, size: tx.byteLength(), vsize: tx.virtualSize(),
       value: valueOut(tx).toString(), valueIn: valueIn(tx).toString(), fees: fees(tx).toString(), hex: tx.toHex(),
       ...(rbf ? { rbf: true } : {}),
       ...(block === null ? { coinSpecificData: (JSON.parse(simulatedReply(chain, 'getrawtransaction', [txid, 1], 1)) as { result: unknown }).result } : {}),
@@ -315,6 +326,14 @@ export function simulatedBlockbook(chain: SimulatedChain): SimulatedBlockbook {
     if (block === undefined || block === null || !chain.isActive(block)) throw new ApiError('Block not found');
     return block;
   };
+  // The block handler wraps the worker's error in another of the same text.
+  const blockReply = (id: string): SimulatedBlock => {
+    try {
+      return blockOf(id);
+    } catch (err) {
+      throw err instanceof ApiError ? new ApiError(`${err.message}, ${err.message}`) : err;
+    }
+  };
 
   const status = (): Record<string, unknown> => {
     const tip = chain.tip;
@@ -328,6 +347,8 @@ export function simulatedBlockbook(chain: SimulatedChain): SimulatedBlockbook {
       backend: {
         chain: network.name, blocks: chain.height, headers: chain.height, bestBlockHash: tip.hash,
         difficulty: difficultyForBits(tip.block.header.bits, network).toFixed(8),
+        // getnetworkinfo's, as strings; the simulated pearld reports version 0.
+        version: '0', subversion: '/simulated/', protocolVersion: '0',
       },
     };
   };
@@ -360,7 +381,7 @@ export function simulatedBlockbook(chain: SimulatedChain): SimulatedBlockbook {
     if ((arg = tail('api/v2/balancehistory/')) !== null) return balanceHistory(arg, query);
     if ((arg = tail('api/v2/rawblock/')) !== null) return { hex: toHex(serializeBlock(blockOf(arg).block)) };
     if ((arg = tail('api/v2/block/')) !== null) {
-      const block = blockOf(arg);
+      const block = blockReply(arg);
       const { paging, from, to } = computePaging(block.txs.length, Math.max(int(query.get('page'), 0, 0, MAX_PAGE_NUMBER) - 1, 0), TXS_IN_API);
       const header = block.block.header;
       return {
@@ -503,17 +524,16 @@ function socketClass(chain: SimulatedChain, server: Server): SimulatedBlockbookW
       };
       switch (method) {
         case 'getInfo': {
-          const { blockbook } = rest('api/') as { blockbook: Record<string, unknown> };
+          const { blockbook, backend } = rest('api/') as { blockbook: Record<string, unknown>; backend: Record<string, unknown> };
           return {
             name: 'Pearl', shortcut: 'PRL', network: 'PRL', decimals: 8, version: blockbook.version, bestHeight: chain.height, bestHash: chain.tip.hash,
-            block0Hash: chain.blocks[0]!.hash, testnet: chain.network.name !== 'mainnet' && chain.network.name !== 'simnet', backend: {},
+            block0Hash: chain.blocks[0]!.hash, testnet: chain.network.name !== 'mainnet' && chain.network.name !== 'simnet',
+            backend: { version: backend.version, subversion: backend.subversion },
           };
         }
-        case 'getBlockHash': {
-          const block = chain.blocks[Number(params.height)];
-          if (block === undefined) throw new Error('Block not found');
-          return { hash: block.hash };
-        }
+        case 'getBlockHash':
+          // An unknown height is an empty hash, not an error.
+          return { hash: chain.blocks[Number(params.height)]?.hash ?? '' };
         case 'getAccountInfo': {
           const { descriptor, details, page, pageSize, from, to } = params;
           // The websocket defaults to details "basic" and 25 to a page (txsOnPage).
@@ -526,8 +546,8 @@ function socketClass(chain: SimulatedChain, server: Server): SimulatedBlockbookW
         case 'estimateFee': {
           const blocks = Array.isArray(params.blocks) ? params.blocks : [];
           if (blocks.length > 32) throw new Error('blocks max 32');
-          if (chain.feeRate === null) throw new Error('EstimateFee: insufficient data');
-          return blocks.map(() => ({ feePerUnit: chain.feeRate!.toString() }));
+          // Blockbook asks for estimatesmartfee here, which pearld does not have.
+          throw new Error('EstimateSmartFee: not supported');
         }
         case 'sendTransaction': {
           const reply = JSON.parse(simulatedReply(chain, 'sendrawtransaction', [String(params.hex ?? '')], 1)) as { result: string | null; error: { code: number; message: string } | null };

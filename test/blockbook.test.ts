@@ -29,6 +29,12 @@ describe('BlockbookClient', () => {
     expect(new BlockbookClient({ url: 'http://blockbook.example/prefix', network, allowInsecureHttp: true }).url).toBe('http://blockbook.example/prefix/');
   });
 
+  it('names where a redirect leads, as Pearl\'s servers send http:// on to https://', async () => {
+    const fetch = (async () => new Response(null, { status: 301, headers: { Location: 'https://blockbook.example:443/api/' } })) as unknown as typeof globalThis.fetch;
+    const client = new BlockbookClient({ url: 'http://blockbook.example', network, fetch, allowInsecureHttp: true });
+    await expect(client.getStatus()).rejects.toMatchObject({ kind: 'http', status: 301, message: expect.stringContaining('redirect to https://blockbook.example:443/api/') });
+  });
+
   it('reads amounts as bigint grain and heights as numbers', async () => {
     const { chain, client } = setup();
     const paid = chain.pay(STRANGER, 123456789n);
@@ -176,7 +182,7 @@ describe('BlockbookWsClient', () => {
     expect(await ws.getInfo()).toMatchObject({ bestHeight: chain.height, bestHash: chain.tip.hash, block0Hash: network.genesisHash, decimals: 8 });
     expect(await ws.getBlockHash(1)).toBe(chain.blocks[1]!.hash);
     chain.feeRate = 3000n;
-    expect(await ws.estimateFee([2, 6])).toEqual([3000n, 3000n]);
+    await expect(ws.call('estimateFee', { blocks: [2, 6] })).rejects.toMatchObject({ kind: 'rpc', message: 'estimateFee: EstimateSmartFee: not supported' });
 
     const blocks: number[] = [];
     const seen: { address: string; txid: string; height: number }[] = [];
@@ -193,7 +199,7 @@ describe('BlockbookWsClient', () => {
     expect(await ws.getAccountInfo({ descriptor: STRANGER })).toMatchObject({ balance: 5000n, txs: 1 });
     expect((await ws.getAccountUtxo(STRANGER)).map((utxo) => utxo.value)).toEqual([5000n]);
     expect((await ws.getTransaction(paid.getId())).hex).toBe(paid.toHex());
-    await expect(ws.call('getBlockHash', { height: 999 })).rejects.toMatchObject({ kind: 'rpc' });
+    expect(await ws.getBlockHash(999)).toBeNull();
     await ws.close();
   });
 
@@ -213,6 +219,26 @@ describe('BlockbookWsClient', () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(blocks).toHaveLength(1);
     await ws.close();
+  });
+
+  it('pings while connected, so a proxy that closes quiet websockets keeps the session', async () => {
+    const chain = new SimulatedChain({ network, premine: 4 });
+    const server = simulatedBlockbook(chain);
+    const sent: string[] = [];
+    const Spy = class extends server.WebSocket {
+      override send(data: string): void {
+        sent.push((JSON.parse(data) as { method: string }).method);
+        super.send(data);
+      }
+    };
+    const ws = new BlockbookWsClient({ url: server.url, network, WebSocket: Spy, keepAlive: 5 });
+    await ws.subscribeNewBlock(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(sent.filter((method) => method === 'ping').length).toBeGreaterThanOrEqual(2);
+    await ws.close();
+    const after = sent.length;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sent).toHaveLength(after);
   });
 
   it('refuses a server whose block 0 is another network\'s', async () => {

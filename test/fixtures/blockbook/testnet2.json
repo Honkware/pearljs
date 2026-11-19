@@ -1,0 +1,24 @@
+{
+ "source": "https://blockbook.testnet.pearlresearch.ai",
+ "recorded": "2026-11-19T05:10:19.157Z",
+ "blockbook": {
+  "version": "devel",
+  "gitCommit": "6d736fc",
+  "buildTime": "2026-11-18T14:52:07+00:00"
+ },
+ "backend": {
+  "chain": "testnet2",
+  "subversion": "/pearlwire:0.5.0/pearld:1.6.0-fp8-testnet1/"
+ },
+ "note": "Replies as the server sent them, bodies verbatim. The raw blocks around the FP8 fork are in ../testnet2-fp8-blocks.json.",
+ "rest": {
+  "api/": {
+   "status": 200,
+   "body": "{\"blockbook\":{\"coin\":\"Pearl Testnet2\",\"network\":\"PRL\",\"host\":\"4bb0e24ad0a6\",\"version\":\"devel\",\"gitCommit\":\"6d736fc\",\"buildTime\":\"2026-11-18T14:52:07+00:00\",\"syncMode\":true,\"initialSync\":false,\"inSync\":true,\"bestHeight\":150383,\"lastBlockTime\":\"2026-11-19T05:05:03.445053787Z\",\"inSyncMempool\":true,\"lastMempoolTime\":\"2026-11-19T05:09:43.236408893Z\",\"mempoolSize\":2,\"decimals\":8,\"dbSize\":389228896,\"about\":\"Blockbook - blockchain indexer for Trezor Suite https://trezor.io/trezor-suite. Do not use for any other purpose.\"},\"backend\":{\"chain\":\"testnet2\",\"blocks\":150383,\"headers\":150383,\"bestBlockHash\":\"6b45e5ee7a1d9ffe84a8cc2ca1f2801ff9c830bde493cd509ce8ca392fc3c7a0\",\"difficulty\":\"116.33055513\",\"version\":\"1060000\",\"subversion\":\"/pearlwire:0.5.0/pearld:1.6.0-fp8-testnet1/\",\"protocolVersion\":\"3\"}}\n"
+  },
+  "api/v2/block/150283": {
+   "status": 200,
+   "body": "{\"page\":1,\"totalPages\":1,\"itemsOnPage\":1000,\"hash\":\"764f8c01eef28c2df5ee31fe3942b9ed8ac5d5863801fe0bdd40b04310b45b93\",\"previousBlockHash\":\"141308b03b9e1778d95441789dcc40619efa83e97438d92d2894cb0d20960be9\",\"nextBlockHash\":\"f1f99fbc7110142f8c6e5a9d99313d8377ca7684bcee0b327047e0b51d5a2293\",\"height\":150283,\"confirmations\":101,\"size\":61772,\"time\":1795015565,\"version\":536870912,\"merkleRoot\":\"6dfdb68dd1b8e12f2ae3d47af0ac6bdd90d7a0147e70b279b351e04b866b70d8\",\"nonce\":\"\",\"bits\":\"1a02196f\",\"difficulty\":\"121.94064674\",\"txCount\":1,\"txs\":[{\"txid\":\"6dfdb68dd1b8e12f2ae3d47af0ac6bdd90d7a0147e70b279b351e04b866b70d8\",\"vin\":[{\"n\":0,\"isAddress\":false,\"value\":\"0\"}],\"vout\":[{\"value\":\"213084436569\",\"n\":0,\"addresses\":[\"tprl1pmw509tys3kulusq5an6sy687evtmjd45hehluh9knn46n2v2gdpscgc7mf\"],\"isAddress\":true},{\"value\":\"0\",\"n\":1,\"addresses\":[],\"isAddress\":false}],\"blockHash\":\"764f8c01eef28c2df5ee31fe3942b9ed8ac5d5863801fe0bdd40b04310b45b93\",\"blockHeight\":150283,\"confirmations\":101,\"blockTime\":1795015565,\"value\":\"213084436569\",\"valueIn\":\"0\",\"fees\":\"0\"}]}\n"
+  }
+ }
+}

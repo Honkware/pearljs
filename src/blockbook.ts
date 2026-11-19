@@ -81,6 +81,10 @@ export interface BlockbookTx {
   /** -1 while in the mempool. */
   readonly blockHeight: number;
   readonly confirmations: number;
+  /** For a mempool transaction: blocks until a block confirms it, by its fee rate against the server's estimates. */
+  readonly confirmationETABlocks?: number;
+  /** confirmationETABlocks times the average block interval the server has seen. */
+  readonly confirmationETASeconds?: number;
   /** Block time, or the time the mempool took it in. */
   readonly blockTime: number;
   readonly size?: number;
@@ -109,6 +113,7 @@ export interface BlockbookXpubAddress {
   readonly standard: string;
   /** The address. */
   readonly name: string;
+  /** The derivation path from the master key, e.g. m/86'/808276'/0'/0/5. */
   readonly path?: string;
   readonly transfers: number;
   readonly decimals: number;
@@ -231,8 +236,12 @@ export interface BlockbookMempool extends BlockbookPaging {
   readonly mempoolSize: number;
 }
 
-/** What an address or xpub query returns besides balances. */
-export type BlockbookDetails = 'basic' | 'txids' | 'txslight' | 'txs';
+/**
+ * What an address or xpub query returns besides balances. An xpub's derived
+ * addresses (`tokens`) come with "tokens" and every level after it, never
+ * with "basic".
+ */
+export type BlockbookDetails = 'basic' | 'tokens' | 'tokenBalances' | 'txids' | 'txslight' | 'txs';
 
 /** Query parameters of /api/v2/address and /api/v2/xpub. */
 export interface BlockbookAddressQuery {
@@ -542,7 +551,9 @@ export class BlockbookClient {
         response = await Promise.race([this.#fetch(url, { ...this.#init, ...request, headers, signal: controller.signal, redirect: 'manual' }), aborted]);
         if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
           void response.body?.cancel().catch(() => {});
-          throw new PearlRpcError('http', name, `${origin} answered with a redirect, which is not followed`, { status: response.status });
+          // Pearl's servers send plain http:// on to https:// this way.
+          const location = response.headers.get('location');
+          throw new PearlRpcError('http', name, `${origin} answered with a redirect${location === null ? '' : ` to ${location.slice(0, 200)}`}, which is not followed`, { status: response.status });
         }
         text = await Promise.race([readBounded(response, this.#maxReplySize, name, origin), aborted]);
       } catch (err) {
@@ -600,6 +611,12 @@ export interface BlockbookWsClientOptions {
   readonly allowInsecureHttp?: boolean;
   /** Told of a failure no call is waiting on: a dropped session, a reconnect that failed. */
   readonly onError?: (error: Error) => void;
+  /**
+   * Sends Blockbook's `ping` this often, in ms, while connected; 0 for
+   * never. Pearl's servers sit behind a proxy that closes a websocket after
+   * 30 seconds without a frame from the client. Default 20,000.
+   */
+  readonly keepAlive?: number;
 }
 
 /** getInfo over the websocket (WsInfoRes). */
@@ -679,6 +696,8 @@ export class BlockbookWsClient {
   readonly #timeout: number;
   readonly #maxReplySize: number;
   readonly #onError: ((error: Error) => void) | undefined;
+  readonly #keepAlive: number;
+  #pinger: ReturnType<typeof setInterval> | undefined;
   #socket: Socket | null = null;
   #ready: Promise<void> | null = null;
   #closed = false;
@@ -707,6 +726,9 @@ export class BlockbookWsClient {
     this.#timeout = options.timeout ?? DEFAULT_RPC_TIMEOUT;
     this.#maxReplySize = options.maxReplySize ?? DEFAULT_MAX_REPLY_SIZE;
     this.#onError = options.onError;
+    const keepAlive = options.keepAlive ?? 20_000;
+    if (!Number.isSafeInteger(keepAlive) || keepAlive < 0) throw new RangeError('keepAlive must be a whole number of ms, 0 for never');
+    this.#keepAlive = keepAlive;
   }
 
   /** Opens the connection and checks the network; calls do this on their own. */
@@ -729,10 +751,13 @@ export class BlockbookWsClient {
     return this.call('getInfo');
   }
 
-  /** The hash of the block at `height` on the server's chain. */
-  async getBlockHash(height: number): Promise<string> {
+  /** The hash of the block at `height` on the server's chain, null for a height it has not indexed. */
+  async getBlockHash(height: number): Promise<string | null> {
     checkHeight(height, 'height');
-    return (await this.call<{ hash: string }>('getBlockHash', { height })).hash;
+    const { hash } = await this.call<{ hash: string }>('getBlockHash', { height });
+    if (hash === '') return null;
+    if (typeof hash !== 'string' || !TXID_RE.test(hash)) throw new PearlRpcError('response', 'getBlockHash', `${this.#origin} sent no block hash`);
+    return hash;
   }
 
   /** An address's or xpub's balances and a page of history; the websocket form of getAddress and getXpub. */
@@ -747,16 +772,6 @@ export class BlockbookWsClient {
   getTransaction(txid: string): Promise<BlockbookTx> {
     checkTxid(txid);
     return this.call('getTransaction', { txid });
-  }
-
-  /** Fee rates for each confirmation target, in grain per 1000 vbytes (feePerUnit). At most 32 targets. */
-  async estimateFee(blocks: readonly number[]): Promise<FeeRate[]> {
-    const reply = await this.call<{ feePerUnit?: string }[]>('estimateFee', { blocks: [...blocks] });
-    if (!Array.isArray(reply)) throw new PearlRpcError('response', 'estimateFee', `${this.#origin} sent no list of estimates`);
-    return reply.map((item) => {
-      if (typeof item?.feePerUnit !== 'string' || !/^\d+$/.test(item.feePerUnit)) throw new PearlRpcError('response', 'estimateFee', `${this.#origin} sent an estimate that is not grain`);
-      return BigInt(item.feePerUnit);
-    });
   }
 
   async sendTransaction(tx: string | Uint8Array): Promise<string> {
@@ -791,6 +806,7 @@ export class BlockbookWsClient {
     this.#failAll(new PearlRpcError('network', 'close', 'the client was closed'));
     const socket = this.#socket;
     this.#socket = null;
+    this.#stopPinging();
     if (socket !== null && socket.readyState <= 1) socket.close(1000);
   }
 
@@ -844,12 +860,23 @@ export class BlockbookWsClient {
       throw err;
     }
     this.#attempt = 0;
+    this.#stopPinging();
+    if (this.#keepAlive > 0) {
+      this.#pinger = setInterval(() => this.#request('ping', {}).catch(() => {}), this.#keepAlive);
+      (this.#pinger as { unref?: () => void }).unref?.();
+    }
+  }
+
+  #stopPinging(): void {
+    clearInterval(this.#pinger);
+    this.#pinger = undefined;
   }
 
   #dropped(socket: Socket): void {
     if (this.#socket !== socket) return;
     this.#socket = null;
     this.#ready = null;
+    this.#stopPinging();
     this.#failAll(new PearlRpcError('network', 'websocket', `the websocket to ${this.#origin} closed`));
     if (this.#closed || this.#subscriptions.size === 0 || this.#reconnect === null) return;
     const policy = this.#reconnect;
