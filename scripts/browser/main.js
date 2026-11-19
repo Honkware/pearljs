@@ -1,6 +1,8 @@
 // Runs in headless Chrome against Pearl's vectors; scripts/browser-smoke.mjs reads the result.
 import * as p from 'pearljs';
+import { verifyProof } from 'pearljs/verify-proof';
 import v from 'pearl-vectors';
+import proofs from 'pearl-proof-vectors';
 
 const hex = (bytes) => Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 const unhex = (text) => Uint8Array.from(text.match(/../g) ?? [], (b) => parseInt(b, 16));
@@ -82,6 +84,19 @@ await checkAsync('keystore under WebCrypto', async () => {
   await reopened.unlock('pass');
   return reopened.useSecret('seed', (bytes) => bytes.every((b) => b === 7));
 });
+
+// pearljs/verify-proof fetches its module and caches as the bundler emitted them.
+for (const name of ['V3 dense', 'V4 H100', 'V4 B200 with proof byte 22 flipped']) {
+  await checkAsync(`verify-proof ${name}`, async () => {
+    const c = proofs.cases.find((item) => item.name === name);
+    const proof = unhex(proofs.proofs[c.certificate.proof.from]);
+    if (c.certificate.proof.flip !== undefined) proof[c.certificate.proof.flip] ^= 1;
+    const certificate = { version: c.certificate.version, hash: unhex(c.certificate.hash), publicData: unhex(c.certificate.publicData), proof };
+    if (c.certificate.version === 4) certificate.ancestorHeaders = [];
+    const verdict = await verifyProof(p.parseBlockHeader(unhex(c.header)), certificate);
+    return c.error === null ? verdict.valid : !verdict.valid && c.error === `v4 proof rejected: ${verdict.message.slice(0, 127)}`;
+  });
+}
 
 window.__pearljs = results;
 document.getElementById('out').textContent = JSON.stringify(results, null, 2);

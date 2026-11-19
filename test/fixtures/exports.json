@@ -1835,5 +1835,17 @@
       "GatewayResponse",
       "MiningJob"
     ]
+  },
+  "verify-proof": {
+    "values": [
+      "loadProofVerifier",
+      "verifyBlockProof",
+      "verifyProof"
+    ],
+    "types": [
+      "ProofVerdict",
+      "ProofVerifierAsset",
+      "ProofVerifierOptions"
+    ]
   }
 }
