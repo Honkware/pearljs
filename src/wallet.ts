@@ -21,7 +21,7 @@
  * @module
  */
 
-import * as ecc from 'tiny-secp256k1';
+import * as ecc from '#secp256k1';
 import { encodeAddress, fromOutputScript, toOutputScript } from './address.js';
 import type { AccountAddresses, WalletBackend, Watched } from './backend.js';
 import { buildPayment, finalizePayment } from './builder.js';

@@ -282,5 +282,11 @@
     "vite-plugin-wasm": "3.6.0",
     "vitest": "4.1.12"
   },
-  "sideEffects": false
+  "sideEffects": false,
+  "imports": {
+    "#secp256k1": {
+      "worker": "./dist/secp256k1-worker.js",
+      "default": "tiny-secp256k1"
+    }
+  }
 }

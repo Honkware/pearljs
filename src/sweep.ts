@@ -12,7 +12,7 @@
  * @module
  */
 
-import * as ecc from 'tiny-secp256k1';
+import * as ecc from '#secp256k1';
 import { toOutputScript } from './address.js';
 import { buildPayment, finalizePayment } from './builder.js';
 import type { SignedPayment } from './builder.js';

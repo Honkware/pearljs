@@ -21,7 +21,7 @@ import { BIP32Factory } from 'bip32';
 import type { BIP32Interface } from 'bip32';
 import { crypto as bitcoinCrypto, Transaction } from 'bitcoinjs-lib';
 import type { Psbt } from 'bitcoinjs-lib';
-import * as ecc from 'tiny-secp256k1';
+import * as ecc from '#secp256k1';
 import { MAX_GRAIN } from './amount.js';
 import { fromOutputScript } from './address.js';
 import type { PearlNetwork } from './networks.js';

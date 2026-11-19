@@ -9,7 +9,7 @@
  */
 
 import { Psbt, Transaction } from 'bitcoinjs-lib';
-import * as ecc from 'tiny-secp256k1';
+import * as ecc from '#secp256k1';
 import { MAX_GRAIN } from './amount.js';
 import { fromOutputScript, toOutputScript } from './address.js';
 import { ScriptRejectedError, verifyInput } from './interpreter.js';

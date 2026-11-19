@@ -16,7 +16,7 @@
  * @module
  */
 
-import * as ecc from 'tiny-secp256k1';
+import * as ecc from '#secp256k1';
 import { BASE_LEAF_VERSION, tapBranchHash, tapLeafHash, taggedHash } from './script.js';
 import { concat, equalBytes, toHex } from './internal/bytes.js';
 import { PearlError } from './errors.js';

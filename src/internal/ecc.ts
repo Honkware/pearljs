@@ -5,7 +5,7 @@
 // from. Each function that reaches that code calls ensureEcc instead.
 
 import { initEccLib } from 'bitcoinjs-lib';
-import * as ecc from 'tiny-secp256k1';
+import * as ecc from '#secp256k1';
 
 /** Gives bitcoinjs its curve library. The first call verifies it; later ones return at once. */
 export function ensureEcc(): void {

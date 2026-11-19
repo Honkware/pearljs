@@ -33,7 +33,7 @@
  */
 
 import { Transaction } from 'bitcoinjs-lib';
-import * as ecc from 'tiny-secp256k1';
+import * as ecc from '#secp256k1';
 import { decodeAddress } from './address.js';
 import type { PearlNetwork } from './networks.js';
 import { OP_CODES, scriptPush, taggedHash, TAPROOT_ANNEX_TAG } from './script.js';

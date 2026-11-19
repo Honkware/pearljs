@@ -35,7 +35,7 @@ import { pbkdf2 } from '@noble/hashes/pbkdf2';
 import { sha512 } from '@noble/hashes/sha2';
 import { wordlist } from '@scure/bip39/wordlists/english';
 import { BIP32Factory } from 'bip32';
-import * as ecc from 'tiny-secp256k1';
+import * as ecc from '#secp256k1';
 import { encodeAddress } from './address.js';
 import { formatPearl } from './amount.js';
 import type { WalletBackend, WalletBalance } from './backend.js';

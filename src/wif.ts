@@ -12,7 +12,7 @@
  */
 
 import { sha256 } from '@noble/hashes/sha2';
-import * as ecc from 'tiny-secp256k1';
+import * as ecc from '#secp256k1';
 import { encodeAddress } from './address.js';
 import type { PearlNetwork } from './networks.js';
 import { taprootOutputKey } from './scripttree.js';

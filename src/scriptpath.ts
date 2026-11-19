@@ -27,7 +27,7 @@
 import { sha256 } from '@noble/hashes/sha2';
 import { Transaction } from 'bitcoinjs-lib';
 import type { Psbt } from 'bitcoinjs-lib';
-import * as ecc from 'tiny-secp256k1';
+import * as ecc from '#secp256k1';
 import { MAX_GRAIN } from './amount.js';
 import { p2mr, p2tr } from './payments.js';
 import { classifyOutputScript, taggedHash, TAPROOT_ANNEX_TAG, tapLeafHash, xmssLeafScript } from './script.js';
