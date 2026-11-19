@@ -7,6 +7,8 @@
 #   v4-cache.bin   the V4 verifier setups, from zk-pow's build_cache
 #   LICENSES.txt   the licences of the crates compiled into verifier.wasm
 #
+# and src/internal/verify-proof-digests.ts, the SHA-256 digests of the first three.
+#
 # from a checkout of Pearl's fp8-scheme branch:
 #
 #   PEARL_FP8=/path/to/pearl wasm/build.sh
@@ -66,3 +68,15 @@ if [ "${1:-}" != "--no-caches" ]; then
   "$stage/wasm/target/native/release/build_cache" "$out/v4-cache.bin" "$out/v2-cache.bin" -
 fi
 shasum -a 256 "$out/verifier.wasm" "$out/v2-cache.bin" "$out/v4-cache.bin"
+
+# The loader refuses any file whose digest is not the one written here.
+digest() { shasum -a 256 "$out/$1" | cut -d' ' -f1; }
+cat >"$here/../src/internal/verify-proof-digests.ts" <<EOF
+// Written by wasm/build.sh: the SHA-256 digests of the files pearljs/verify-proof loads.
+
+export const VERIFIER_FILE_DIGESTS = {
+  'verifier.wasm': '$(digest verifier.wasm)',
+  'v2-cache.bin': '$(digest v2-cache.bin)',
+  'v4-cache.bin': '$(digest v4-cache.bin)',
+} as const;
+EOF

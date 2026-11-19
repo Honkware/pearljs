@@ -30,6 +30,7 @@ import type { PearlBlockHeader } from './blockheader.js';
 import { blockHash, serializeBlockHeader } from './blockheader.js';
 import { PearlError } from './errors.js';
 import { concat, equalBytes, toHex } from './internal/bytes.js';
+import { VERIFIER_FILE_DIGESTS } from './internal/verify-proof-digests.js';
 
 /** What the verifier made of a proof. */
 export interface ProofVerdict {
@@ -54,10 +55,13 @@ export interface ProofVerifierOptions {
   /**
    * Where to read an asset from, for a page that serves them itself. By
    * default they are read from `verify-proof/` beside this module, with
-   * `fetch` or, for a `file:` URL in Node, the file system.
+   * `fetch` or, for a `file:` URL in Node, the file system. Whatever the
+   * source, each file must have the SHA-256 digest this pearljs pins.
    */
   readonly locate?: (asset: ProofVerifierAsset) => URL | string;
 }
+
+type Locate = (asset: ProofVerifierAsset) => URL | string;
 
 interface Exports {
   memory: WebAssembly.Memory;
@@ -75,21 +79,40 @@ interface Exports {
 interface Verifier {
   readonly exports: Exports;
   readonly loaded: Set<'v2' | 'v4'>;
+  // Where the instance's later caches are read from: the locate it was loaded with.
+  readonly locate: Locate;
   // Set when a call into the instance threw: its stack pointer and heap may be left mid-call.
   broken: boolean;
 }
 
-let locate: (asset: ProofVerifierAsset) => URL | string = (asset) => new URL(`./verify-proof/${asset}`, import.meta.url);
+const besideModule: Locate = (asset) => new URL(`./verify-proof/${asset}`, import.meta.url);
 let compiled: Promise<WebAssembly.Module> | null = null;
 let current: Promise<Verifier> | null = null;
 // What current resolved to, so a failed call can drop it before anything else runs.
 let live: Verifier | null = null;
+// A fresh instance after a dropped one reads from where the last one loaded did.
+let lastLocate: Locate = besideModule;
 
 type NodeFs = { readFile(path: URL): Promise<Uint8Array> };
 
-async function read(asset: ProofVerifierAsset): Promise<Uint8Array<ArrayBuffer>> {
+async function read(asset: ProofVerifierAsset, locate: Locate): Promise<Uint8Array<ArrayBuffer>> {
   const where = locate(asset);
   const url = typeof where === 'string' ? new URL(where, globalThis.location?.href) : where;
+  const bytes = await fetchBytes(asset, url);
+  // The host serving the files is not trusted: a file decides every verdict, so it must be the one built.
+  let digest: string;
+  try {
+    digest = toHex(new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes)));
+  } catch (error) {
+    throw new PearlError('PROOF_VERIFIER_UNAVAILABLE', `cannot hash ${asset}: ${(error as Error).message}`, { cause: error });
+  }
+  if (digest !== VERIFIER_FILE_DIGESTS[asset]) {
+    throw new PearlError('PROOF_VERIFIER_UNAVAILABLE', `${asset} from ${url.href} has SHA-256 ${digest}, not the ${VERIFIER_FILE_DIGESTS[asset]} this pearljs pins`);
+  }
+  return bytes;
+}
+
+async function fetchBytes(asset: ProofVerifierAsset, url: URL): Promise<Uint8Array<ArrayBuffer>> {
   try {
     if (url.protocol === 'file:') {
       // getBuiltinModule rather than an import, so bundlers never see node:fs.
@@ -106,8 +129,9 @@ async function read(asset: ProofVerifierAsset): Promise<Uint8Array<ArrayBuffer>>
   }
 }
 
-function instantiate(): Promise<Verifier> {
-  compiled ??= read('verifier.wasm')
+function instantiate(locate: Locate): Promise<Verifier> {
+  // The module is checked against its digest, so one compiled from any source serves every instance.
+  compiled ??= read('verifier.wasm', locate)
     .then((bytes) => WebAssembly.compile(bytes))
     .catch((error: unknown) => {
       compiled = null;
@@ -125,7 +149,7 @@ function instantiate(): Promise<Verifier> {
     const instance = await WebAssembly.instantiate(module, imports);
     const exports = instance.exports as unknown as Exports;
     exports.init();
-    return { exports, loaded: new Set<'v2' | 'v4'>(), broken: false };
+    return { exports, loaded: new Set<'v2' | 'v4'>(), locate, broken: false };
   });
 }
 
@@ -154,10 +178,13 @@ function withBytes(exports: Exports, inputs: readonly Uint8Array[], f: (ptrs: nu
   return result;
 }
 
-async function verifierFor(cache: 'v2' | 'v4'): Promise<Verifier> {
+async function verifierFor(cache: 'v2' | 'v4', locate?: Locate): Promise<Verifier> {
   for (;;) {
-    const pending = (current ??= instantiate().then(
-      (verifier) => (live = verifier),
+    const pending = (current ??= instantiate(locate ?? lastLocate).then(
+      (verifier) => {
+        lastLocate = verifier.locate;
+        return (live = verifier);
+      },
       (error: unknown) => {
         current = null;
         throw error;
@@ -165,7 +192,7 @@ async function verifierFor(cache: 'v2' | 'v4'): Promise<Verifier> {
     ));
     const verifier = await pending;
     if (!verifier.loaded.has(cache)) {
-      const bytes = await read(cache === 'v2' ? 'v2-cache.bin' : 'v4-cache.bin');
+      const bytes = await read(cache === 'v2' ? 'v2-cache.bin' : 'v4-cache.bin', locate ?? verifier.locate);
       if (!verifier.loaded.has(cache) && !verifier.broken) {
         const { exports } = verifier;
         let code: number;
@@ -187,17 +214,14 @@ async function verifierFor(cache: 'v2' | 'v4'): Promise<Verifier> {
 /**
  * Load the verifier and the circuit caches for the given certificate
  * versions now rather than at the first verification. Optional: every
- * verification loads what it needs. `locate` applies to this and every
- * later load. Throws PROOF_VERIFIER_UNAVAILABLE when an asset cannot be
- * read or is not the one Pearl's verifier pins.
+ * verification loads what it needs. `locate` applies to the files this
+ * call reads; a verifier it loads reads any cache it needs later from the
+ * same place. Throws PROOF_VERIFIER_UNAVAILABLE when an asset cannot be
+ * read or its SHA-256 digest is not the one pinned in this pearljs.
  */
 export async function loadProofVerifier(versions: readonly (2 | 3 | 4)[] = [2, 3, 4], options: ProofVerifierOptions = {}): Promise<void> {
-  if (options.locate) {
-    locate = options.locate;
-    if (current === null) compiled = null;
-  }
   const caches = new Set(versions.map((v) => (v === 4 ? 'v4' : 'v2') as 'v2' | 'v4'));
-  for (const cache of caches) await verifierFor(cache);
+  for (const cache of caches) await verifierFor(cache, options.locate);
 }
 
 const rejected = (message: string): ProofVerdict => ({ valid: false, outcome: 'rejected', message });
