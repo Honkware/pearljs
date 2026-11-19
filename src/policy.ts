@@ -267,7 +267,12 @@ function isUnspendable(script: Uint8Array): boolean {
 
 /** How an input will be spent, for estimateVsize. */
 export type SpendEstimate =
-  | { type: 'keyPath'; sighashType?: number }
+  | {
+      type: 'keyPath';
+      sighashType?: number;
+      /** Length in bytes of the annex the witness will end with, its 0x50 tag included. None unless given. */
+      annexLength?: number;
+    }
   | {
       type: 'scriptPath';
       tree: ScriptTree;
@@ -276,6 +281,8 @@ export type SpendEstimate =
       sighashType?: number;
       /** Witness item sizes before the leaf script. Needed for leaves other than checksig, multi_a and XMSS. */
       stack?: readonly number[];
+      /** Length in bytes of the annex the witness will end with, its 0x50 tag included. None unless given. */
+      annexLength?: number;
     }
   | { type: 'witness'; items: readonly number[] };
 
@@ -286,8 +293,8 @@ export type SpendEstimate =
  * and XMSS leaves.
  *
  * spends has one entry per input, in input order. Throws when the counts differ,
- * when a leaf index is out of range, and for a leaf it cannot size without
- * `stack`.
+ * when a leaf index is out of range, for a leaf it cannot size without
+ * `stack`, and for an annexLength that is not a whole number of at least 1.
  */
 export function estimateVsize(tx: Transaction, spends: readonly SpendEstimate[]): number {
   if (spends.length !== tx.ins.length) throw new Error('spends must match the transaction inputs');
@@ -300,12 +307,17 @@ export function estimateVsize(tx: Transaction, spends: readonly SpendEstimate[])
 
 function witnessSizes(spend: SpendEstimate): number[] {
   if (spend.type === 'witness') return [...spend.items];
+  const annex = spend.annexLength;
+  if (annex !== undefined && (!Number.isInteger(annex) || annex < 1)) {
+    throw new RangeError('annexLength must be a whole number of bytes, at least 1 for the 0x50 tag');
+  }
+  const last = annex === undefined ? [] : [annex];
   const signature = (spend.sighashType ?? Transaction.SIGHASH_DEFAULT) === Transaction.SIGHASH_DEFAULT ? 64 : 65;
-  if (spend.type === 'keyPath') return [signature];
+  if (spend.type === 'keyPath') return [signature, ...last];
   const leaf = spend.tree.leaves[spend.leafIndex];
   if (leaf === undefined) throw new RangeError(`leaf index ${spend.leafIndex} is out of range`);
   const controlBlock = (spend.p2mr ? 1 : 33) + leaf.proof.length;
-  return [...(spend.stack ?? leafStack(leaf.script, signature)), leaf.script.length, controlBlock];
+  return [...(spend.stack ?? leafStack(leaf.script, signature)), leaf.script.length, controlBlock, ...last];
 }
 
 function leafStack(script: Uint8Array, signature: number): number[] {

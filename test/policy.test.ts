@@ -9,6 +9,7 @@ import {
   checkSanity,
   checkStandard,
   checksigScript,
+  createTransaction,
   deriveSigningAccountFromSeed,
   dustThreshold,
   estimateVsize,
@@ -253,6 +254,34 @@ describe('estimateVsize', () => {
       expect(estimateVsize(parseTransaction(expected.unsignedTxHex), spends)).toBe(signed.virtualSize());
     });
   }
+
+  for (const expected of vectors.tapscriptExtras.filter((item) => item.annex !== '')) {
+    it(`is exact for ${expected.name}, whose witness ends with a ${expected.annex.length / 2}-byte annex`, () => {
+      const signed = parseTransaction(expected.finalTxHex);
+      const inputIndex = signed.ins.findIndex((input) => input.witness.length >= 2 && bytesToHex(input.witness.at(-1)!) === expected.annex);
+      const tree = assembleScriptTree([hexToBytes(expected.leafScript)]);
+      const spend: SpendEstimate = {
+        type: 'scriptPath',
+        tree,
+        leafIndex: 0,
+        p2mr: expected.kind === 'p2mr',
+        stack: signed.ins[inputIndex]!.witness.slice(0, -3).map((item) => item.length),
+        annexLength: expected.annex.length / 2,
+      };
+      const spends = otherInputs(signed, inputIndex, spend);
+      expect(estimateVsize(parseTransaction(expected.unsignedTxHex), spends)).toBe(signed.virtualSize());
+    });
+  }
+
+  it('adds the annex and its length prefix to a key-path witness, as the 5-byte annexes on mainnet do', () => {
+    // 94 bytes without witness, 4 weight each; witness: marker and flag 2, item count 1, signature 1 + 64, annex 1 + 5.
+    const unsigned = createTransaction(2);
+    unsigned.addInput(new Uint8Array(32), 0);
+    unsigned.addOutput(p2tr, 1000n);
+    expect(estimateVsize(unsigned, [{ type: 'keyPath' }])).toBe(Math.ceil((94 * 4 + 2 + 1 + 65) / 4));
+    expect(estimateVsize(unsigned, [{ type: 'keyPath', annexLength: 5 }])).toBe(Math.ceil((94 * 4 + 2 + 1 + 65 + 6) / 4));
+    expect(() => estimateVsize(unsigned, [{ type: 'keyPath', annexLength: 0 }])).toThrow(RangeError);
+  });
 
   for (const expected of vectors.multiASpends) {
     it(`is exact for multi_a ${expected.name}`, () => {
