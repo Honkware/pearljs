@@ -3,6 +3,7 @@
 // PROOF_VERIFIER_UNAVAILABLE. A file of its own, so the locate set here does
 // not reach the other tests.
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { loadProofVerifier } from '../src/verify-proof.js';
 import type { ProofVerifierAsset } from '../src/verify-proof.js';
@@ -28,3 +29,12 @@ describe('loadProofVerifier', () => {
     await expect(loadProofVerifier([2, 3, 4], { locate: shipped })).resolves.toBeUndefined();
   });
 });
+
+describe('verifier.wasm', () => {
+  it('names no directory of the machine that built it, so another machine can rebuild it byte for byte', () => {
+    const text = new TextDecoder('latin1').decode(readFileSync(shipped('verifier.wasm')));
+    expect(text).not.toMatch(/\/(private\/)?tmp\/|\/Users\/|\/home\//);
+    expect(text).toContain('/build/zk-pow/src/');
+  });
+});
+

@@ -1,0 +1,6 @@
+# The compiler verifier.wasm is built and checked with; build.sh uses it for
+# the native build_cache too.
+[toolchain]
+channel = "1.100.0"
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

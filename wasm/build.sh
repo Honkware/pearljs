@@ -25,6 +25,9 @@ here=$(cd "$(dirname "$0")" && pwd -P)
 out="$here/../src/verify-proof"
 pearl=$(cd "${PEARL_FP8:?set PEARL_FP8 to a Pearl fp8-scheme checkout}" && pwd -P)
 stage=/tmp/pearljs-verify-proof
+# rust-toolchain.toml names the compiler; rustup installs it on first use.
+RUSTUP_TOOLCHAIN=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$here/rust-toolchain.toml")
+export RUSTUP_TOOLCHAIN
 
 copy() { (cd "$1" && tar cf - --exclude ./target --exclude ./bindings --exclude '*.bin' .) | (mkdir -p "$2" && cd "$2" && tar xf -); }
 # The stage's target directory is kept between runs; only the sources are replaced.
@@ -35,18 +38,20 @@ copy "$pearl/plonky2" "$stage/plonky2"
 copy "$pearl/pearl-blake3" "$stage/pearl-blake3"
 cp "$pearl/LICENSE" "$stage/LICENSE"
 patch -s -d "$stage/zk-pow" -p0 <"$here/patches/zk-pow-wasm32.patch"
-cp -R "$here/src" "$here/.cargo" "$here/Cargo.toml" "$here/Cargo.lock" "$here/licenses.py" "$stage/wasm/"
+cp -R "$here/src" "$here/.cargo" "$here/Cargo.toml" "$here/Cargo.lock" "$here/rust-toolchain.toml" "$here/licenses.py" "$stage/wasm/"
 
 cd "$stage/wasm"
-# Panic messages carry source paths; these name no home directory. CARGO_ENCODED_RUSTFLAGS
+# Panic messages carry source paths; these are remapped so they name neither the home
+# directory nor the stage, which macOS reaches as /private/tmp. CARGO_ENCODED_RUSTFLAGS
 # takes flags separated by 0x1f and replaces .cargo/config.toml's, so the getrandom
 # backend is repeated here.
 sysroot=$(rustc --print sysroot)
 cargo_home=$(cd "${CARGO_HOME:-$HOME/.cargo}" && pwd -P)
+stage_real=$(cd "$stage" && pwd -P)
 sep=$(printf '\037')
 # ahash takes compile-time random keys from const-random unless this seeds them.
 export CONST_RANDOM_SEED=pearljs-verify-proof
-CARGO_ENCODED_RUSTFLAGS="--cfg${sep}getrandom_backend=\"wasm_js\"${sep}--remap-path-prefix=$cargo_home=/cargo${sep}--remap-path-prefix=$sysroot=/rustc" \
+CARGO_ENCODED_RUSTFLAGS="--cfg${sep}getrandom_backend=\"wasm_js\"${sep}--remap-path-prefix=$cargo_home=/cargo${sep}--remap-path-prefix=$sysroot=/rustc${sep}--remap-path-prefix=$stage=/build${sep}--remap-path-prefix=$stage_real=/build" \
   cargo build --locked --release --target wasm32-unknown-unknown
 rm -rf target/bindgen
 wasm-bindgen --target web --no-typescript --out-dir target/bindgen target/wasm32-unknown-unknown/release/pearljs_verify_proof.wasm
