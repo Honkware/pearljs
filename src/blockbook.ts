@@ -801,7 +801,6 @@ export class BlockbookWsClient {
     const limit = options.newBlockTxs === true ? MAX_SUBSCRIBED_ADDRESSES_WITH_BLOCKS : MAX_SUBSCRIBED_ADDRESSES;
     if (addresses.length > limit) throw new RangeError(`Blockbook takes at most ${limit} addresses in one subscription`);
     for (const address of addresses) decodeAddress(address, this.network);
-    for (const [id, sub] of this.#subscriptions) if (sub.method === 'subscribeAddresses') this.#subscriptions.delete(id);
     const params = { addresses: [...addresses], ...(options.newBlockTxs === true ? { newBlockTxs: true } : {}) };
     return this.#subscribe('subscribeAddresses', 'unsubscribeAddresses', params, (data) => {
       const event = data as BlockbookAddressTx;
@@ -833,6 +832,8 @@ export class BlockbookWsClient {
       this.#subscriptions.delete(id);
       throw err;
     }
+    // Blockbook keeps one address set a connection and replaces it only when a subscribeAddresses succeeds.
+    if (method === 'subscribeAddresses') for (const [other, item] of this.#subscriptions) if (other !== id && item.method === method) this.#subscriptions.delete(other);
     return async () => {
       // A later subscribeAddresses replaced this one already.
       if (this.#subscriptions.get(id) !== sub) return;

@@ -259,6 +259,26 @@ describe('BlockbookWsClient', () => {
     expect(sent).toHaveLength(after);
   });
 
+  it('keeps an address subscription when a new one fails, and subscribes it again after a drop', async () => {
+    const chain = new SimulatedChain({ network, premine: 4 });
+    const { server, ws } = connect(chain, { reconnect: { initialDelay: 1 } });
+    const seen: string[] = [];
+    await ws.subscribeAddresses([STRANGER], (event) => seen.push(event.tx.txid));
+    // Blockbook answers a subscription it cannot take with an error and keeps the connection's last set.
+    chain.failNext(1, { method: 'blockbook ws subscribeAddresses', error: () => new Error('too many addresses') });
+    await expect(ws.subscribeAddresses([STRANGER], () => {})).rejects.toMatchObject({ kind: 'rpc', message: expect.stringContaining('too many addresses') });
+    const paid = chain.pay(STRANGER, 5000n);
+    await until(() => seen.length === 1);
+    expect(seen).toEqual([paid.getId()]);
+    server.WebSocket.dropAll();
+    await until(() => server.WebSocket.connections === 1);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const again = chain.pay(STRANGER, 6000n);
+    await until(() => seen.length === 2);
+    expect(seen).toEqual([paid.getId(), again.getId()]);
+    await ws.close();
+  });
+
   it('refuses a server whose block 0 is another network\'s', async () => {
     const chain = new SimulatedChain({ network: networks.testnet2, premine: 1 });
     const server = simulatedBlockbook(chain);
