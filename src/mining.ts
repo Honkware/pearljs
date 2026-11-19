@@ -33,7 +33,7 @@ import type { CertificateVersion, PearlBlock, PearlCertificate, V4Statement } fr
 import { PUBLIC_DATA_MAX_SIZE_V4, PUBLIC_DATA_MIN_SIZE_V4, PUBLIC_DATA_SIZE_V1 } from './block.js';
 import { BLOCK_HEADER_SIZE, blockHash, parseBlockHeader, serializeBlockHeader } from './blockheader.js';
 import type { PearlBlockHeader } from './blockheader.js';
-import { bitsToTarget, requiredCertVersion } from './consensus.js';
+import { bitsToTarget, blockSubsidy, requiredCertVersion } from './consensus.js';
 import { PearlError, PolicyError } from './errors.js';
 import { concat, equalBytes, fromHex, toHex, uint32le } from './internal/bytes.js';
 import { checkV4Statement } from './internal/v4-statement.js';
@@ -181,8 +181,9 @@ const display = (hash: Uint8Array): string => toHex(Uint8Array.from(hash).revers
  * checks what the template says against itself and throws
  * MINING_TEMPLATE_INVALID when the transactions do not hash to their ids,
  * the witness commitment or target disagree with what they are computed
- * from, the certificate version is not the network's for the height, or the
- * V4 ancestor headers do not chain to the previous block.
+ * from, `coinbasevalue` is more than the height's subsidy plus the
+ * transactions' fees, the certificate version is not the network's for the
+ * height, or the V4 ancestor headers do not chain to the previous block.
  */
 export function blockSkeleton(template: BlockTemplate, options: SkeletonOptions): BlockSkeleton {
   const { network } = options;
@@ -212,6 +213,12 @@ export function blockSkeleton(template: BlockTemplate, options: SkeletonOptions)
     if (wtxid !== entry.hash) throw templateError(`transaction ${i + 1} has witness hash ${wtxid}, the template says ${entry.hash}`);
     return tx;
   });
+  // CheckConnectBlock refuses a coinbase paying more than this; the work would be wasted.
+  const subsidy = blockSubsidy(network, height);
+  const fees = template.transactions.reduce((sum, entry) => sum + BigInt(entry.fee), 0n);
+  if (value > subsidy + fees) {
+    throw templateError(`coinbasevalue ${value} is more than the ${subsidy + fees} grain a block at height ${height} may pay: its subsidy, ${subsidy}, and its transactions' fees, ${fees}`);
+  }
   const witnessCommitment = witnessCommitmentFor(transactions);
   const given = template.default_witness_commitment;
   if (given !== undefined && given !== toHex(witnessCommitment)) {

@@ -164,6 +164,8 @@ describe('blockSkeleton', () => {
     expect(code({ ...fromFixture, requiredcertversion: 2 })).toBe('MINING_TEMPLATE_INVALID');
     expect(code({ ...fromFixture, coinbasevalue: undefined } as unknown as BlockTemplate)).toBe('MINING_TEMPLATE_INVALID');
     expect(code({ ...fromFixture, ancestorheaders: ['00'.repeat(108)] })).toBe('MINING_TEMPLATE_INVALID');
+    // pearld's template pays exactly the subsidy plus fees; one grain more is a block CheckConnectBlock refuses.
+    expect(code({ ...fromFixture, coinbasevalue: fromFixture.coinbasevalue! + 1n })).toBe('MINING_TEMPLATE_INVALID');
     const tx = goVectors.transactions[0]!;
     const withTx = { ...fromFixture, transactions: [{ data: tx.hex, txid: '00'.repeat(32), hash: '00'.repeat(32), depends: [], fee: 0n, vsize: 1 }] };
     expect(code(withTx)).toBe('MINING_TEMPLATE_INVALID');
