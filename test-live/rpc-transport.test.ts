@@ -180,10 +180,12 @@ describeLive('typed pearld methods', () => {
   });
 
   it('leaves generate without a default timeout, and gives up on a call when told to', async () => {
-    // Twenty blocks take longer to prove than the default timeout allows any other call.
+    // These take longer to prove than the default timeout allows any other call, and stay
+    // inside undici's own 300-second wait for response headers: some 20 seconds a V4 block.
+    const count = live?.fp8 === true ? 5 : 20;
     const started = Date.now();
-    const hashes = await pearld.generate(20);
-    expect(hashes).toHaveLength(20);
+    const hashes = await pearld.generate(count);
+    expect(hashes).toHaveLength(count);
     expect(Date.now() - started).toBeGreaterThan(DEFAULT_RPC_TIMEOUT);
 
     // Giving up on the reply does not stop pearld: it goes on proving, refuses a
