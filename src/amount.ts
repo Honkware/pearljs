@@ -23,24 +23,31 @@ export const MAX_GRAIN = 2100000000000000000n;
 const DECIMALS = 8;
 // No leading zeros: "00000001" is more likely a mangled 0.00000001 than one PRL.
 const PEARL_RE = /^(0|[1-9]\d*)(\.\d{1,8})?$/;
+// Pearl's node and wallet write PRL; exchanges list the coin as PEARL.
+const UNIT_RE = / (PRL|PEARL)$/;
+
+/** A unit label for an amount: PRL in Pearl's own software, PEARL on exchanges. */
+export type PearlUnit = 'PRL' | 'PEARL';
 
 /**
- * Parses a decimal pearl string like "1.5" into grains.
+ * Parses a decimal pearl string like "1.5" into grains. The number may be
+ * followed by one space and a unit, "1.5 PRL" or "1.5 PEARL".
  *
  * Throws for anything but a non-negative decimal with at most 8 decimal places
- * and no leading zeros, signs, spaces or exponent, and for an amount above
- * MAX_GRAIN.
+ * and no leading zeros, signs, other spaces or exponent, and for an amount
+ * above MAX_GRAIN.
  */
 export function parsePearl(text: string): bigint {
   if (typeof text !== 'string') {
     throw new TypeError('amount must be a decimal string');
   }
-  if (!PEARL_RE.test(text)) {
+  const number = text.replace(UNIT_RE, '');
+  if (!PEARL_RE.test(number)) {
     throw new PearlError('AMOUNT_INVALID', `invalid pearl amount: ${JSON.stringify(text)}`);
   }
-  const dot = text.indexOf('.');
-  const whole = dot === -1 ? text : text.slice(0, dot);
-  const frac = (dot === -1 ? '' : text.slice(dot + 1)).padEnd(DECIMALS, '0');
+  const dot = number.indexOf('.');
+  const whole = dot === -1 ? number : number.slice(0, dot);
+  const frac = (dot === -1 ? '' : number.slice(dot + 1)).padEnd(DECIMALS, '0');
   const grain = BigInt(whole) * GRAIN_PER_PEARL + BigInt(frac || '0');
   if (grain > MAX_GRAIN) {
     throw new PearlError('AMOUNT_OUT_OF_RANGE', `pearl amount exceeds maximum: ${text}`);
@@ -51,10 +58,11 @@ export function parsePearl(text: string): bigint {
 /**
  * Formats grains as a decimal pearl string without trailing zeros. Negative
  * amounts get a leading minus, as Oyster's listtransactions reports sends.
+ * With a unit the result ends in it, "1.5 PRL", in the form parsePearl reads.
  *
  * Throws for a value that is not a bigint or is outside plus or minus MAX_GRAIN.
  */
-export function formatPearl(grain: bigint): string {
+export function formatPearl(grain: bigint, unit?: PearlUnit): string {
   if (typeof grain !== 'bigint') {
     throw new TypeError('amount must be a bigint of grains');
   }
@@ -67,7 +75,11 @@ export function formatPearl(grain: bigint): string {
     .toString()
     .padStart(DECIMALS, '0')
     .replace(/0+$/, '');
-  return `${grain < 0n ? '-' : ''}${frac === '' ? whole.toString() : `${whole}.${frac}`}`;
+  if (unit !== undefined && unit !== 'PRL' && unit !== 'PEARL') {
+    throw new TypeError('unit must be PRL or PEARL');
+  }
+  const number = `${grain < 0n ? '-' : ''}${frac === '' ? whole.toString() : `${whole}.${frac}`}`;
+  return unit === undefined ? number : `${number} ${unit}`;
 }
 
 // Fee rates are bigint grain per 1000 vbytes throughout pearljs, the unit of

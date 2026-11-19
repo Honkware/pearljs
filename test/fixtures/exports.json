@@ -602,6 +602,7 @@
       "PearlScriptPathSignOptions",
       "PearlSignOptions",
       "PearlSigningAccount",
+      "PearlUnit",
       "PearlWsClientOptions",
       "PearlWsEvents",
       "PearldBackendOptions",
@@ -773,7 +774,8 @@
       "parsePearl"
     ],
     "types": [
-      "FeeRate"
+      "FeeRate",
+      "PearlUnit"
     ]
   },
   "backend": {

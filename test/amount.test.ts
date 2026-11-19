@@ -19,6 +19,22 @@ describe('constants', () => {
 });
 
 describe('parsePearl', () => {
+  it('reads an amount followed by one space and either ticker', () => {
+    expect(parsePearl('1.5 PRL')).toBe(150000000n);
+    expect(parsePearl('1.5 PEARL')).toBe(150000000n);
+    expect(parsePearl(formatPearl(12345678901n, 'PEARL'))).toBe(12345678901n);
+    for (const bad of ['1.5PRL', '1.5  PRL', '1.5 prl', '1.5 PRL ', 'PRL 1.5', '1.5 BTC', ' PRL', '1.5 PRL PRL']) {
+      expect(() => parsePearl(bad)).toThrow(/invalid/);
+    }
+  });
+
+  it('formats with a unit only when asked for one', () => {
+    expect(formatPearl(150000000n)).toBe('1.5');
+    expect(formatPearl(150000000n, 'PRL')).toBe('1.5 PRL');
+    expect(formatPearl(-1n, 'PEARL')).toBe('-0.00000001 PEARL');
+    expect(() => formatPearl(1n, 'BTC' as never)).toThrow(TypeError);
+  });
+
   it('parses whole pearls', () => {
     expect(parsePearl('0')).toBe(0n);
     expect(parsePearl('1')).toBe(100000000n);
