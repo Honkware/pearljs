@@ -2205,11 +2205,16 @@ export class PearlWallet {
     });
   }
 
-  /** Stops watching, locks the keystore and closes the store. */
+  /**
+   * Stops watching, locks the keystore and closes the store. A wallet whose
+   * store failed is closed too, so the store lets go of its lock.
+   */
   async close(): Promise<void> {
     if (this.#closed) return;
     for (const stop of [...this.#stops]) stop();
-    await this.#exclusive(async () => {
+    // Not #exclusive: that refuses a broken wallet, and the store's lock must be released regardless.
+    await this.#enqueue(async () => {
+      if (this.#closed) return;
       this.#closed = true;
       this.#keystore?.lock();
       await this.#store.close();
