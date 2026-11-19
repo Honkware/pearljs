@@ -32,6 +32,7 @@ type Token = { name: string; path: string; transfers: number };
 type Reply = { tokens?: Token[]; transactions?: { txid: string; blockHash?: string }[]; unconfirmedTxs: number };
 
 // A server over the chain whose xpub replies `edit` may change, and whose xpub queries `ask` may rewrite first.
+let servers = 0;
 function serve(chain: FakeChain, hooks: { edit?: (reply: Reply) => void; ask?: (url: URL) => void; refuse?: boolean } = {}) {
   const server = simulatedBlockbook(chain);
   const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -45,7 +46,7 @@ function serve(chain: FakeChain, hooks: { edit?: (reply: Reply) => void; ask?: (
     hooks.edit(body);
     return new Response(JSON.stringify(body), { status: 200 });
   }) as typeof globalThis.fetch;
-  const client = new BlockbookClient({ url: server.url, network, fetch });
+  const client = new BlockbookClient({ url: `https://blockbook-${++servers}.example/`, network, fetch });
   return { server, client, backend: (options: BlockbookBackendOptions = {}) => blockbookBackend(client, options) };
 }
 

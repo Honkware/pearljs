@@ -69,8 +69,8 @@ export interface BlockbookBackendOptions {
    */
   verifyBlocks?: boolean;
   /**
-   * Other Blockbook servers, on the same network, that must agree with the
-   * first: on the block at the height the backend reads to, on the block at
+   * Other Blockbook servers, on the same network and each on a host of its
+   * own, that must agree with the first: on the block at the height the backend reads to, on the block at
    * every height a transaction is placed at, and on the confirmed
    * transactions of every address it reads. One that cannot be asked or
    * disagrees fails the query with CROSS_CHECK_FAILED.
@@ -159,8 +159,13 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new RangeError('concurrency must be a positive integer');
   if (typeof minFeeRate !== 'bigint' || minFeeRate < 0n) throw new RangeError('minFeeRate must be a bigint of grain per 1000 vbytes');
   const network = client.network;
+  const hosts = new Set([new URL(client.url).host]);
   for (const other of others) {
     if (other.network.name !== network.name || other.network.genesisHash !== network.genesisHash) throw new TypeError('every crossCheck client must be for the backend\'s network');
+    // A server checked against itself checks nothing.
+    const host = new URL(other.url).host;
+    if (hosts.has(host)) throw new TypeError(`crossCheck names ${host} twice, or the backend's own server: each must be another server`);
+    hosts.add(host);
   }
 
   // Transactions by txid, once their serialization hashed to it.

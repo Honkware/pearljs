@@ -39,7 +39,8 @@ function setup(options: { premine?: number } = {}) {
   return { chain, ...serve(chain) };
 }
 
-// A client for the chain's simulated Blockbook, whose JSON replies `rewrite` may change.
+// A client for the chain's simulated Blockbook, whose JSON replies `rewrite` may change, under a host of its own.
+let servers = 0;
 function serve(chain: FakeChain, rewrite: { current: Rewrite | null } = { current: null }) {
   const server = simulatedBlockbook(chain);
   const fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -49,7 +50,7 @@ function serve(chain: FakeChain, rewrite: { current: Rewrite | null } = { curren
     const body = rewrite.current(path, await reply.json());
     return body instanceof Response ? body : new Response(JSON.stringify(body), { status: 200 });
   }) as typeof globalThis.fetch;
-  const client = new BlockbookClient({ url: server.url, network, fetch });
+  const client = new BlockbookClient({ url: `https://blockbook-${++servers}.example/`, network, fetch });
   const backend = (options: BlockbookBackendOptions = {}) => blockbookBackend(client, options);
   return { server, client, backend, rewrite };
 }
@@ -434,6 +435,17 @@ describe('cross-checked against other Blockbooks', () => {
     expect((await moving.backend({ verifyBlocks: false }).getHistory(r0))[0]!.block).toMatchObject({ height: older.height });
     await expect(moving.backend({ verifyBlocks: false, crossCheck: [witness.client] }).getHistory(r0)).rejects.toMatchObject({ code: 'CROSS_CHECK_FAILED' });
     expect((await serve(chain).backend({ verifyBlocks: false, crossCheck: [witness.client] }).getHistory(r0))[0]!.block).toMatchObject({ height: chain.height, hash: chain.tip.hash });
+  });
+
+  it('refuses the server itself, or another client for the same host, as a cross-check server', async () => {
+    const chain = new FakeChain({ network, premine: 4 });
+    const { client } = serve(chain);
+    const twin = new BlockbookClient({ url: client.url, network, fetch: simulatedBlockbook(chain).fetch });
+    const other = serve(chain).client;
+    expect(() => blockbookBackend(client, { crossCheck: [client] })).toThrow(TypeError);
+    expect(() => blockbookBackend(client, { crossCheck: [twin] })).toThrow(TypeError);
+    expect(() => blockbookBackend(client, { crossCheck: [other, new BlockbookClient({ url: other.url.toUpperCase(), network, fetch: simulatedBlockbook(chain).fetch })] })).toThrow(TypeError);
+    expect(() => blockbookBackend(client, { crossCheck: [other] })).not.toThrow();
   });
 
   it('reads no further than the lowest server, and fails when they are too far apart', async () => {
