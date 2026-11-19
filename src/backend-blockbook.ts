@@ -73,8 +73,9 @@ export interface BlockbookBackendOptions {
    * Other Blockbook servers, on the same network and each on a host of its
    * own, that must agree with the first: on the block at the height the backend reads to, on the block at
    * every height a transaction is placed at, and on the confirmed
-   * transactions of every address it reads. One that cannot be asked or
-   * disagrees fails the query with CROSS_CHECK_FAILED.
+   * transactions of every address it reads. Each is also asked before a
+   * transaction is called unknown or an output unspent. One that cannot be
+   * asked or disagrees fails the query with CROSS_CHECK_FAILED.
    */
   crossCheck?: readonly BlockbookClient[];
   /**
