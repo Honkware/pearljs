@@ -250,6 +250,8 @@ function isFinal(tx: Transaction, height: number, medianTimePast: number): boole
  */
 export class SimulatedChain implements WalletBackend, TransactionSource {
   readonly network: PearlNetwork;
+  /** A node of the test's own, whose refusals are final. */
+  readonly broadcastRefusalsFinal = true;
   readonly faucet: Faucet;
   /** pearld's RPC over this chain: pass it to pearldBackend, pearldTransactionSource, followChain or anything else that takes an Rpc. */
   readonly rpc: PearldRpc;

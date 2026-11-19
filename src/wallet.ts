@@ -785,6 +785,7 @@ function memoized(backend: WalletBackend, source: TransactionSource): { backend:
     getBalance: (watched) => backend.getBalance(watched),
     getHistory: (watched) => once(`history:${watchedKey(watched)}`, () => backend.getHistory(watched)),
     broadcast: (tx) => backend.broadcast(tx),
+    ...(backend.broadcastRefusalsFinal === true ? { broadcastRefusalsFinal: true } : {}),
     estimateFeeRate: (blocks) => backend.estimateFeeRate(blocks),
     getSpendStatus: (outpoint) => once(`spend:${outpoint.txid}:${outpoint.vout}`, () => backend.getSpendStatus(outpoint)),
   };
@@ -2179,7 +2180,7 @@ export class PearlWallet {
         try {
           await this.#backend.broadcast(entry.tx.toHex());
         } catch (err) {
-          outcome = broadcastOutcome(err);
+          outcome = this.#broadcastOutcome(err);
           error = err instanceof Error ? err : new Error(String(err));
         }
         if (outcome === 'held') {
@@ -3274,15 +3275,23 @@ export class PearlWallet {
     };
   }
 
-  // A refusal from the node takes the transaction back out. A node that
-  // says it already has the transaction has it. Any other failure leaves it
-  // recorded as not yet broadcast, since it may have reached the node, and
-  // rebroadcast or abandon settles it.
+  // A refusal proves the transaction reached no mempool only when the backend's own policy check made it, or the
+  // backend says its refusals are final, as a node of your own's are. A third party's server can relay a transaction
+  // and answer that it refused it, and an application that took that for a failed send would pay again.
+  #broadcastOutcome(err: unknown): 'held' | 'refused' | 'unknown' {
+    const outcome = broadcastOutcome(err);
+    return outcome === 'refused' && !(err instanceof PolicyError) && this.#backend.broadcastRefusalsFinal !== true ? 'unknown' : outcome;
+  }
+
+  // A final refusal takes the transaction back out. A node that says it
+  // already has the transaction has it. Any other failure leaves it
+  // recorded as not yet broadcast, since it may have reached a node, and
+  // a sync, rebroadcast or abandon settles it.
   async #broadcast(entry: TxEntry, replaced: TxEntry | null): Promise<void> {
     try {
       await this.#backend.broadcast(entry.tx.toHex());
     } catch (err) {
-      const outcome = broadcastOutcome(err);
+      const outcome = this.#broadcastOutcome(err);
       if (outcome === 'refused') {
         this.#txs.delete(entry.txid);
         this.#spendIndex = null;

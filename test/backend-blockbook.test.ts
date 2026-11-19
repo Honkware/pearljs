@@ -368,6 +368,28 @@ describe('cross-checked against other Blockbooks', () => {
     await wallet.close();
   });
 
+  it('keeps a send the server calls refused, which it may have relayed, until a sync or abandon settles it', async () => {
+    const chain = new FakeChain({ network, premine: 4 });
+    const lie: { current: Rewrite | null } = { current: null };
+    const primary = serve(chain, lie);
+    const wallet = await PearlWallet.create({ store: createMemoryStore(), backend: primary.backend(), passphrase: PASSPHRASE, mnemonic: MNEMONIC, kdf: FAST_KDF, gapLimit: 10 });
+    chain.pay(r0, 300000000n);
+    chain.mine(1);
+    await wallet.sync();
+    // The server relays the send and answers with pearld's refusal.
+    lie.current = (path, body) => (path === 'api/v2/sendtx/' ? new Response(JSON.stringify({ error: '-26: txn-mempool-conflict' }), { status: 400 }) : body);
+    const error = await wallet.send({ recipients: [{ address: STRANGER, amount: 100000000n }] }).catch((err: unknown) => err);
+    expect(error).toMatchObject({ code: 'WALLET_BROADCAST_UNCERTAIN', cause: { rpcCode: -26 } });
+    const [sent] = [...chain.mempool.keys()];
+    expect(wallet.transaction(sent!)).toMatchObject({ status: 'pending', broadcast: false });
+    expect(wallet.balance().confirmed).toBe(0n);
+    lie.current = null;
+    await wallet.sync();
+    expect(wallet.transaction(sent!)).toMatchObject({ status: 'pending', missing: false });
+    await expect(wallet.abandon(sent!)).rejects.toMatchObject({ code: 'WALLET_TRANSACTION_KNOWN' });
+    await wallet.close();
+  });
+
   it('takes a broadcast the server refused as sent when another server has it', async () => {
     const attempt = async (checked: boolean) => {
       const chain = new FakeChain({ network, premine: 4 });

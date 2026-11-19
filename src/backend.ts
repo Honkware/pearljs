@@ -101,6 +101,13 @@ export interface WalletBackend extends ChainClient {
   getHistory(watched: Watched): Promise<AddressHistoryEntry[]>;
   /** Sends a signed transaction and returns its txid. */
   broadcast(tx: string | Uint8Array): Promise<string>;
+  /**
+   * True when a refusal from broadcast proves the transaction reached no
+   * mempool, as from a node of your own. Otherwise a wallet keeps a refused
+   * send recorded, its coins taken, since a server can relay a transaction
+   * and still answer that it refused it.
+   */
+  readonly broadcastRefusalsFinal?: boolean;
   /** Grain per 1000 vbytes to confirm within `blocks`, never under the relay fee. */
   estimateFeeRate(blocks?: number): Promise<FeeRate>;
   /**
@@ -415,6 +422,7 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletCh
 
   return {
     network,
+    broadcastRefusalsFinal: true,
     getTip: () => chain.getTip(),
     async getAddressActivity(address) {
       if (decodeAddress(address, network).version === 1) return indexed(() => chain.getAddressActivity(address));
@@ -580,6 +588,7 @@ export function oysterBackend(rpc: Rpc, options: OysterBackendOptions): WalletCh
 
   return {
     network,
+    broadcastRefusalsFinal: true,
     getTip,
     getAddressActivity: payments,
 

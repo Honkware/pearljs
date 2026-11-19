@@ -17,6 +17,7 @@ import {
   buildFilter,
   checksigScript,
   createInvoice,
+  filterBackend,
   encodeFilter,
   filterKey,
   fromOutputScript,
@@ -50,6 +51,13 @@ const outpoints = (utxos: { txid: string; vout: number }[]) => utxos.map((u) => 
 const heightOf = (confirmations: number) => tipHeight - confirmations + 1;
 
 describe('pearld backend', () => {
+  it('says a refusal from pearld or Oyster is final, and from filterBackend\'s node is not', async () => {
+    const { client } = indexedPearld();
+    expect(pearldBackend(client, { network }).broadcastRefusalsFinal).toBe(true);
+    expect(oysterBackend(client, { network }).broadcastRefusalsFinal).toBe(true);
+    expect(filterBackend(client, { network, birthday: 0 }).broadcastRefusalsFinal).toBeUndefined();
+  });
+
   it('finds the unspent outputs of a set of addresses, mempool spends taken out and mempool outputs put in', async () => {
     const { client } = indexedPearld();
     const backend = pearldBackend(client, { network });
