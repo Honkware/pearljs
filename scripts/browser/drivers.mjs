@@ -115,6 +115,7 @@ export async function launchFirefox({ prefs = {} } = {}) {
   const profile = mkdtempSync(join(tmpdir(), 'pearljs-firefox-'));
   writeFileSync(join(profile, 'user.js'), Object.entries(prefs).map(([k, v]) => `user_pref(${JSON.stringify(k)}, ${JSON.stringify(v)});\n`).join(''));
   const proc = spawn(binaries.firefox(), ['--headless', '--no-remote', '--remote-debugging-port=0', '--profile', profile], { stdio: ['ignore', 'pipe', 'pipe'] });
+  const stop = stopper(proc, profile);
   const endpoint = await new Promise((resolve, reject) => {
     let text = '';
     const timer = setTimeout(() => reject(new Error(`Firefox did not start WebDriver BiDi: ${text.slice(-300)}`)), 30_000);
@@ -128,6 +129,9 @@ export async function launchFirefox({ prefs = {} } = {}) {
     };
     proc.stdout.on('data', read);
     proc.stderr.on('data', read);
+  }).catch(async (error) => {
+    await stop();
+    throw error;
   });
   const bidi = await openSocket(`${endpoint}/session`);
   const session = await bidi.send('session.new', { capabilities: {} });
@@ -148,7 +152,7 @@ export async function launchFirefox({ prefs = {} } = {}) {
     close: async () => {
       await bidi.send('session.end').catch(() => undefined);
       bidi.close();
-      await stopper(proc, profile)();
+      await stop();
     },
   };
 }
@@ -168,14 +172,22 @@ export async function launchSafari() {
     return json.value;
   };
   let session;
-  for (let i = 0; i < 40 && !session; i++) {
-    await sleep(250);
-    session = await call('POST', '/session', { capabilities: { alwaysMatch: { browserName: 'safari' } } }).catch((error) => {
-      if (/Remote Automation/.test(error.message)) throw new Error('Safari refuses WebDriver: run `safaridriver --enable` once, then run this again');
-      return undefined;
-    });
+  try {
+    for (let i = 0; i < 40 && !session; i++) {
+      await sleep(250);
+      session = await call('POST', '/session', { capabilities: { alwaysMatch: { browserName: 'safari' } } }).catch((error) => {
+        if (/Remote Automation/.test(error.message)) throw new Error('Safari refuses WebDriver: run `safaridriver --enable` once, then run this again');
+        return undefined;
+      });
+    }
+  } catch (error) {
+    await stopper(proc, null)();
+    throw error;
   }
-  if (!session) throw new Error('safaridriver did not start');
+  if (!session) {
+    await stopper(proc, null)();
+    throw new Error('safaridriver did not start');
+  }
   const id = session.sessionId;
   return {
     name: 'safari',
