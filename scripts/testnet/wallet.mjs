@@ -14,7 +14,7 @@ import { client, nodeDir } from './node.mjs';
 
 const dir = join(nodeDir, 'wallet');
 const secretsFile = join(dir, 'secrets.json');
-const network = networks.testnet2;
+const network = networks[process.env.PEARL_TESTNET_NETWORK ?? 'testnet2'];
 
 export function secrets() {
   return JSON.parse(readFileSync(secretsFile, 'utf8'));

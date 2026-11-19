@@ -20,7 +20,7 @@ async function settledAddresses(count: number): Promise<{ addresses: string[]; b
   const found = new Map<string, number>();
   const kinds = new Map<number, number>();
   let lowest = tip;
-  for (let height = tip - SETTLED; height > tip - 600 && found.size < count * 2; height--) {
+  for (let height = tip - SETTLED; height > Math.max(0, tip - 600) && found.size < count * 2; height--) {
     const block = parseBlock(await node.getRawBlock(await node.getBlockHash(height)));
     for (const tx of block.transactions.slice(1)) {
       for (const out of tx.outs) {

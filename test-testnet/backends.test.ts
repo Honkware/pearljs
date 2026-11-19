@@ -26,14 +26,14 @@ let wallet: PearlWallet;
 let skip: string | null = null;
 let birthday = 0;
 
-/** What a wallet holds, in a form two wallets on different backends can be compared by. */
+/** What one account holds, in a form two wallets on different backends can be compared by. Amounts in history entries cover the whole wallet, so only coins and balance carry them. */
 function state(subject: PearlWallet, account: string): unknown {
   const live = new Set(['pending', 'confirmed']);
   return {
     history: subject
       .history({ account, limit: 10_000 })
       .filter((entry) => live.has(entry.status))
-      .map((entry) => ({ txid: entry.txid, block: entry.block?.hash ?? null, received: entry.received, sent: entry.sent }))
+      .map((entry) => ({ txid: entry.txid, block: entry.block?.hash ?? null }))
       .sort((a, b) => a.txid.localeCompare(b.txid)),
     coins: subject
       .coins()
@@ -85,7 +85,7 @@ describeTestnet('one wallet through pearldBackend, filterBackend and blockbookBa
       for (const [name, backend] of watchers) {
         const before = blockbookRequests();
         const copy = await watcher(backend, xpub);
-        expect(state(copy, '0'), name).toEqual(expected);
+        expect(state(copy, copy.accounts()[0]!.id), name).toEqual(expected);
         if (name === 'blockbook') console.log(`blockbook requests for account 0: ${blockbookRequests() - before}`);
       }
     });
@@ -104,7 +104,7 @@ describeTestnet('one wallet through pearldBackend, filterBackend and blockbookBa
       const before = blockbookRequests();
       const copy = await watcher(blockbookBackend(blockbookClient(), { verifyBlocks: true, useXpub: true }), xpub);
       console.log(`blockbook requests for account 2 by xpub: ${blockbookRequests() - before}`);
-      expect(state(copy, '0')).toEqual(state(wallet, '2'));
+      expect(state(copy, copy.accounts()[0]!.id)).toEqual(state(wallet, '2'));
     });
     const back = await wallet.send({ recipients: [{ address: home(), amount: 'max' }], from: { account: '2' }, feeRate: await feeRate(), label: 'backends: empty account 2' });
     record('b backends', 'account 2 send-max home', back.txid);

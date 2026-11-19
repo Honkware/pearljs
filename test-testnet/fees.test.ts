@@ -40,7 +40,9 @@ describeTestnet('fees on testnet2', () => {
     for (let attempt = 0; bumped === null && attempt < 3; attempt++) {
       const sent = await wallet.send({ recipients: [{ address: to, amount: 500_000n }], feeRate: relayFee, rbf: true, label: 'fees: at the floor' });
       record('c fees', 'payment at the relay floor', sent.txid, { fee: String(sent.fee), vsize: sent.vsize });
-      expect(sent.fee).toBe(feeForVsize(sent.vsize, relayFee));
+      // The wallet prices key-path inputs as Oyster's txauthor does, a little above the real size, so never under the floor.
+      expect(sent.fee).toBeGreaterThanOrEqual(feeForVsize(sent.vsize, relayFee));
+      expect(sent.fee - feeForVsize(sent.vsize, relayFee)).toBeLessThanOrEqual(BigInt(sent.inputs.length + 1));
       const entry = (await node.getRawMempoolVerbose())[sent.txid];
       expect(entry?.fee).toBe(sent.fee);
       try {
