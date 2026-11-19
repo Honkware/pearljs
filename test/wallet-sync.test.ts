@@ -51,32 +51,40 @@ describe('wallet: sync against a backend that answers oddly', () => {
     expect(wallet.accounts()[0]!.nextReceiveIndex).toBe(56);
   });
 
-  it('does not show a double-spent coin as spendable when the backend cannot name what spent it', async () => {
+  it('keeps a pending send whose coin the backend calls spent without the transaction that spent it', async () => {
     const chain = new FakeChain();
     const wallet = await newWallet(chain);
     chain.pay(await wallet.receiveAddress(), prl('3'));
     chain.mine();
     await wallet.sync();
     const sent = await wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n });
-    chain.doubleSpend(sent.txid);
-    // A backend that knows the output is gone and not where it went, as pearldBackend's last resort and Oyster do.
+    const conflicts: unknown[] = [];
+    wallet.on('conflict', (event) => conflicts.push(event));
+    const rival = chain.doubleSpend(sent.txid, { mine: false });
     const real = chain.getSpendStatus.bind(chain);
-    chain.getSpendStatus = async (outpoint) => {
-      const status = await real(outpoint);
-      return status.status === 'spent' ? { status: 'spent', confirmed: true } : status;
-    };
+    // What a backend that has lost the send can say of its coin: spent by nothing named, by something it cannot
+    // show, by a transaction that spends something else, or by one still in its mempool.
+    const unrelated = chain.blocks[chain.height]!.txs[0]!.getId();
     await wallet.refresh();
-    expect(wallet.transaction(sent.txid)).toMatchObject({ status: 'conflicted' });
-    expect(wallet.balance()).toMatchObject({ confirmed: 0n, unconfirmed: 0n, total: 0n });
-    expect(wallet.coins()).toEqual([]);
-    await expect(wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n })).rejects.toMatchObject({ code: 'INSUFFICIENT_FUNDS' });
-    // A full sync with a backend that can name the spender agrees.
+    expect(wallet.transaction(sent.txid)).toMatchObject({ status: 'pending', missing: true });
+    for (const said of [{ status: 'spent' as const, confirmed: true }, { status: 'spent' as const, spender: '22'.repeat(32), confirmed: true }, { status: 'spent' as const, spender: unrelated, confirmed: true }]) {
+      chain.getSpendStatus = async () => said;
+      await wallet.refresh();
+      expect(wallet.transaction(sent.txid)).toMatchObject({ status: 'pending', missing: true });
+    }
     chain.getSpendStatus = real;
-    await wallet.sync();
+    expect(conflicts).toEqual([]);
+    expect(wallet.balance().confirmed).toBe(0n);
+    await expect(wallet.send({ recipients: [{ address: STRANGER, amount: prl('1') }], feeRate: 2000n })).rejects.toMatchObject({ code: 'INSUFFICIENT_FUNDS' });
+    // The rival in a block, in hand, is proof.
+    chain.mine();
+    await wallet.refresh();
+    expect(wallet.transaction(sent.txid)).toMatchObject({ status: 'conflicted', by: rival.getId() });
+    expect(conflicts).toEqual([{ txid: sent.txid, status: 'conflicted', by: rival.getId() }]);
     expect(wallet.balance().total).toBe(0n);
   });
 
-  it('gives a coin back when what was reported spent turns out not to be', async () => {
+  it('frees the coin of a send the backend lost only when it is abandoned', async () => {
     const chain = new FakeChain();
     const wallet = await newWallet(chain);
     chain.pay(await wallet.receiveAddress(), prl('3'));
@@ -87,8 +95,12 @@ describe('wallet: sync against a backend that answers oddly', () => {
     const real = chain.getSpendStatus.bind(chain);
     chain.getSpendStatus = async () => ({ status: 'spent', confirmed: false });
     await wallet.refresh();
-    expect(wallet.balance().total).toBe(0n);
+    expect(wallet.transaction(sent.txid)).toMatchObject({ status: 'pending', missing: true });
+    expect(wallet.balance().confirmed).toBe(0n);
     chain.getSpendStatus = real;
+    await wallet.sync();
+    expect(wallet.balance().confirmed).toBe(0n);
+    await wallet.abandon(sent.txid);
     await wallet.sync();
     expect(wallet.balance().confirmed).toBe(prl('3'));
   });

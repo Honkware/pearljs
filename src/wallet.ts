@@ -3094,8 +3094,8 @@ export class PearlWallet {
   }
 
   // Each unconfirmed transaction: confirmed now, still in the mempool, or
-  // gone; a gone one is conflicted when another transaction spends one of
-  // its inputs, and missing otherwise.
+  // gone; a gone one is conflicted when a transaction in a block is shown to
+  // spend one of its inputs, and missing otherwise.
   async #checkPending(events: PendingEvent[]): Promise<void> {
     let spentBy: Map<string, string> | undefined;
     for (const entry of [...this.#txs.values()]) {
@@ -3115,17 +3115,8 @@ export class PearlWallet {
         this.#observe(entry, found.block, events);
         continue;
       }
-      let conflict: string | null | undefined;
-      // The wallet's own outputs among its inputs that something else has spent, and what the backend says spent them.
-      const taken: [string, string | null][] = [];
-      for (const input of entry.tx.ins) {
-        if (entry.tx.isCoinbase()) break;
-        const status = await this.#backend.getSpendStatus({ txid: prevTxid(input), vout: input.index });
-        if (status.status !== 'spent' || status.spender === entry.txid) continue;
-        conflict ??= status.spender ?? null;
-        if (this.#isOurOutput(prevTxid(input), input.index)) taken.push([outpointKey(prevTxid(input), input.index), status.spender ?? null]);
-      }
-      if (conflict === undefined) {
+      const rival = await this.#provenConflict(entry);
+      if (rival === null) {
         if (!entry.missing) {
           entry.missing = true;
           this.#putTx(entry);
@@ -3134,24 +3125,42 @@ export class PearlWallet {
       }
       // Conflicted first, so a known rival that is only in the mempool finds its inputs free and becomes active again.
       entry.status = 'conflicted';
-      if (conflict === null) delete entry.by;
-      else entry.by = conflict;
+      entry.by = rival.txid;
       this.#putTx(entry);
-      events.push(['conflict', { txid: entry.txid, status: 'conflicted', by: conflict }]);
-      if (conflict !== null) {
-        const where = await this.#backend.getTransaction(conflict);
-        const known = this.#txs.get(conflict);
-        if (known === undefined) await this.#fetchAndIngest(conflict, where?.block ?? null, events);
-        else if (where !== null) this.#observe(known, where.block, events);
-      }
+      events.push(['conflict', { txid: entry.txid, status: 'conflicted', by: rival.txid }]);
+      const known = this.#txs.get(rival.txid);
+      if (known === undefined) await this.#ingest(rival.tx, rival.block, events);
+      else this.#observe(known, rival.block, events);
       // A coin whose spender the wallet could not record is spent all the same: without this it would
       // go back to the balance when its own spend was conflicted, until a full sync asked about it.
-      for (const [key, spender] of taken) {
-        if ((spender !== null && this.#txs.get(spender)?.status === 'active') || this.#externalSpends.has(key)) continue;
-        this.#externalSpends.set(key, spender);
-        this.#put(`spent:${key}`, { by: spender });
+      if (this.#txs.get(rival.txid)?.status === 'active') continue;
+      for (const input of rival.tx.ins) {
+        const key = outpointKey(prevTxid(input), input.index);
+        if (!this.#isOurOutput(prevTxid(input), input.index) || this.#externalSpends.has(key) || !inputKeys(entry.tx).includes(key)) continue;
+        this.#externalSpends.set(key, rival.txid);
+        this.#put(`spent:${key}`, { by: rival.txid });
       }
     }
+  }
+
+  // A transaction in a block that spends one of the entry's inputs, which is the only proof that the entry can no
+  // longer confirm. A backend's word that an input is spent is not: the spender must be named, be fetched and hash to
+  // its txid, spend that input, and be placed in a block. Without it a lost transaction stays pending, its coins
+  // taken, since a backend that lies about it, or one that relayed it and lost it, would otherwise have the
+  // application pay again with other coins while it may still confirm.
+  async #provenConflict(entry: TxEntry): Promise<{ txid: string; tx: Transaction; block: BlockRef } | null> {
+    if (entry.tx.isCoinbase()) return null;
+    for (const input of entry.tx.ins) {
+      const outpoint = { txid: prevTxid(input), vout: input.index };
+      const status = await this.#backend.getSpendStatus(outpoint);
+      if (status.status !== 'spent' || status.spender === undefined || status.spender === entry.txid) continue;
+      const tx = await this.#fetch(status.spender);
+      if (tx === null || tx.isCoinbase() || !tx.ins.some((other) => prevTxid(other) === outpoint.txid && other.index === outpoint.vout)) continue;
+      const where = await this.#backend.getTransaction(status.spender);
+      if (where === null || where.block === null) continue;
+      return { txid: status.spender, tx, block: where.block };
+    }
+    return null;
   }
 
   /**

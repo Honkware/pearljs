@@ -340,6 +340,34 @@ describe('cross-checked against other Blockbooks', () => {
     expect(await hiding.backend({ crossCheck: [witness.client] }).getTransaction('11'.repeat(32))).toBeNull();
   });
 
+  it('cannot make a wallet take its own pending send for conflicted and pay again', async () => {
+    const chain = new FakeChain({ network, premine: 4 });
+    const lie: { current: Rewrite | null } = { current: null };
+    const primary = serve(chain, lie);
+    const wallet = await PearlWallet.create({ store: createMemoryStore(), backend: primary.backend({ crossCheck: [serve(chain).client] }), passphrase: PASSPHRASE, mnemonic: MNEMONIC, kdf: FAST_KDF, gapLimit: 10 });
+    chain.pay(r0, 300000000n);
+    chain.pay(r1, 300000000n);
+    chain.mine(1);
+    await wallet.sync();
+    const first = await wallet.send({ recipients: [{ address: STRANGER, amount: 200000000n }] });
+    const funding = new Set(chain.transaction(first.txid)!.tx.ins.map((input) => Buffer.from(input.hash).reverse().toString('hex')));
+    // The send is "not found", its coins "spent" by nothing named, and it is left out of every mempool list.
+    lie.current = (path, body) => {
+      if (path === `api/v2/tx/${first.txid}`) return notFound(first.txid);
+      const tx = /^api\/v2\/tx\/([0-9a-f]{64})$/.exec(path)?.[1];
+      const reply = body as { vout?: { spent?: boolean; spentTxId?: string }[]; txids?: string[] };
+      if (tx !== undefined && funding.has(tx)) return { ...reply, vout: reply.vout!.map(({ spentTxId: _, ...out }) => ({ ...out, spent: true })) };
+      return Array.isArray(reply.txids) ? { ...reply, txids: reply.txids.filter((txid) => txid !== first.txid) } : body;
+    };
+    const conflicts: unknown[] = [];
+    wallet.on('conflict', (event) => conflicts.push(event));
+    await wallet.sync();
+    expect(conflicts).toEqual([]);
+    expect(wallet.transaction(first.txid)).toMatchObject({ status: 'pending' });
+    expect(wallet.balance().confirmed).toBe(300000000n);
+    await wallet.close();
+  });
+
   it('takes a broadcast the server refused as sent when another server has it', async () => {
     const attempt = async (checked: boolean) => {
       const chain = new FakeChain({ network, premine: 4 });
