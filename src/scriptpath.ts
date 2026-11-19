@@ -24,7 +24,6 @@
  * @module
  */
 
-import { sha256 } from '@noble/hashes/sha2';
 import { Transaction } from 'bitcoinjs-lib';
 import type { Psbt } from 'bitcoinjs-lib';
 import * as ecc from '#secp256k1';
@@ -40,11 +39,19 @@ import {
 import type { ScriptTree, ScriptTreeLeaf } from './scripttree.js';
 import { XMSS_SIGNATURE_LENGTH } from './xmss.js';
 import type { XmssSigner } from './xmss.js';
-import { concat, equalBytes, toHex, uint32le, varInt } from './internal/bytes.js';
+import { concat, equalBytes, toHex } from './internal/bytes.js';
 import { PearlError, SigningError } from './errors.js';
 import type { FeeRate } from './amount.js';
 import type { TxOutput } from './transaction.js';
-import { assertTaprootSighashType, psbtSighashType } from './internal/sighash.js';
+import {
+  assertTaprootSighashType,
+  coversInputValues,
+  NO_CODESEPARATOR,
+  pearlTaprootSighash,
+  psbtSighashType,
+  SIGHASH_ANYONECANPAY,
+  SIGHASH_OUTPUT_MASK,
+} from './internal/sighash.js';
 
 /**
  * Anything that can make a BIP340 Schnorr signature for a tapscript key,
@@ -123,27 +130,6 @@ function scriptPushesKey(script: Uint8Array, key: Uint8Array): boolean {
   return false;
 }
 
-const ZERO_HASH = new Uint8Array(32);
-const SIGHASH_ANYONECANPAY = 0x80;
-const SIGHASH_OUTPUT_MASK = 0x03;
-const TAPSCRIPT_SPEND_TYPE = 0x02; // ext_flag 1, no annex
-const TAPSCRIPT_KEY_VERSION = 0x00;
-const NO_CODESEPARATOR = 0xffffffff;
-
-function uint64le(value: bigint): Uint8Array {
-  const out = new Uint8Array(8);
-  new DataView(out.buffer).setBigUint64(0, value, true);
-  return out;
-}
-
-function varBytes(bytes: Uint8Array): Uint8Array {
-  return concat([varInt(bytes.length), bytes]);
-}
-
-function serializeOutput(value: bigint, script: Uint8Array): Uint8Array {
-  return concat([uint64le(value), varBytes(script)]);
-}
-
 /**
  * The two parts of the signature message a leaf or a witness can change.
  * Both are covered by every signature of the input, so the witness has to
@@ -169,85 +155,6 @@ function checkAnnex(annex: Uint8Array | undefined): void {
   if (annex !== undefined && (!(annex instanceof Uint8Array) || annex[0] !== TAPROOT_ANNEX_TAG)) {
     throw new PearlError('SCRIPT_INVALID', 'an annex must be bytes that start with 0x50');
   }
-}
-
-/**
- * Whether NewTxSigHashes computes the amount and script hashes for this
- * spend. With tx, an input whose outpoint is null does not count as P2TR;
- * no transaction on chain but a coinbase has one.
- */
-function coversInputValues(
-  prevouts: readonly TxOutput[],
-  sighashType: number,
-  tx?: Transaction,
-): boolean {
-  if ((sighashType & SIGHASH_ANYONECANPAY) !== 0) return true;
-  return prevouts.some((prevout, index) => {
-    const input = tx?.ins[index];
-    const nullOutpoint = input !== undefined && input.index === 0xffffffff && input.hash.every((byte) => byte === 0);
-    return !nullOutpoint && classifyOutputScript(prevout.script) === 'p2tr';
-  });
-}
-
-/**
- * Pearl's Taproot signature message, mirroring calcTaprootSignatureHashRaw
- * and the midstate from NewTxSigHashes: for a key path when leafHash is null,
- * with the tapscript extension otherwise. It follows Pearl's consensus code,
- * so P2MR signatures validate on Pearl nodes; the Go vectors pin every case.
- */
-function pearlTaprootSighash(
-  tx: Transaction,
-  inputIndex: number,
-  prevouts: readonly TxOutput[],
-  leafHash: Uint8Array | null,
-  sighashType: number,
-  options: TapscriptContextOptions,
-): Uint8Array {
-  const anyoneCanPay = (sighashType & SIGHASH_ANYONECANPAY) !== 0;
-  const outputMode = sighashType & SIGHASH_OUTPUT_MASK;
-  const parts: Uint8Array[] = [
-    Uint8Array.of(0x00, sighashType),
-    uint32le(tx.version),
-    uint32le(tx.locktime),
-  ];
-  if (!anyoneCanPay) {
-    const coversValues = coversInputValues(prevouts, sighashType, tx);
-    parts.push(sha256(concat(tx.ins.map((input) => concat([input.hash, uint32le(input.index)])))));
-    parts.push(
-      coversValues ? sha256(concat(prevouts.map((prevout) => uint64le(prevout.value)))) : ZERO_HASH,
-    );
-    parts.push(
-      coversValues ? sha256(concat(prevouts.map((prevout) => varBytes(prevout.script)))) : ZERO_HASH,
-    );
-    parts.push(sha256(concat(tx.ins.map((input) => uint32le(input.sequence)))));
-  }
-  if (outputMode !== Transaction.SIGHASH_SINGLE && outputMode !== Transaction.SIGHASH_NONE) {
-    parts.push(sha256(concat(tx.outs.map((output) => serializeOutput(output.value, output.script)))));
-  }
-  // spend_type is ext_flag * 2 + annex_present; the extension is the tapscript one.
-  parts.push(Uint8Array.of((leafHash === null ? 0 : TAPSCRIPT_SPEND_TYPE) | (options.annex === undefined ? 0 : 1)));
-  if (anyoneCanPay) {
-    const input = tx.ins[inputIndex]!;
-    const prevout = prevouts[inputIndex]!;
-    parts.push(
-      input.hash,
-      uint32le(input.index),
-      serializeOutput(prevout.value, prevout.script),
-      uint32le(input.sequence),
-    );
-  } else {
-    parts.push(uint32le(inputIndex));
-  }
-  // Not a tagged hash: sha256 of the annex with its length in front.
-  if (options.annex !== undefined) parts.push(sha256(varBytes(options.annex)));
-  if (outputMode === Transaction.SIGHASH_SINGLE) {
-    const output = tx.outs[inputIndex]!;
-    parts.push(sha256(serializeOutput(output.value, output.script)));
-  }
-  if (leafHash !== null) {
-    parts.push(leafHash, Uint8Array.of(TAPSCRIPT_KEY_VERSION), uint32le(options.codeSeparatorPosition ?? NO_CODESEPARATOR));
-  }
-  return taggedHash('TapSighash', concat(parts));
 }
 
 /** The argument checks the two signature messages share. Returns the sighash type. */

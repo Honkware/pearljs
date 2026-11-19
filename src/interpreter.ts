@@ -39,7 +39,7 @@ import {
   tapBranchHash,
   tapLeafHash,
 } from './script.js';
-import { keyPathSighash, tapscriptSighash } from './scriptpath.js';
+import { pearlTaprootSighash, TaprootMidstate } from './internal/sighash.js';
 import type { TxOutput } from './transaction.js';
 import { XMSS_PUBLIC_KEY_LENGTH, XMSS_SIGNATURE_LENGTH, xmssVerify } from './xmss.js';
 
@@ -478,10 +478,15 @@ function isNullOutpoint(input: { hash: Uint8Array; index: number }): boolean {
 
 /** The transaction being verified, its spent outputs and how its signature messages are computed. */
 class TxContext {
+  // pearld computes these once per transaction (TxSigHashes); recomputing them per input made n inputs cost O(n^2).
+  private readonly midstate: TaprootMidstate;
+
   constructor(
     readonly tx: Transaction,
     readonly prevouts: readonly TxOutput[],
-  ) {}
+  ) {
+    this.midstate = new TaprootMidstate(tx, prevouts);
+  }
 
   /**
    * The message a leaf's signature signs: calcTaprootSignatureHashRaw
@@ -492,15 +497,13 @@ class TxContext {
   tapscriptHash(inputIndex: number, sighashType: number, tapscript: TapscriptContext): Uint8Array | null {
     if (!SIGHASH_TYPES.has(sighashType)) return null;
     if ((sighashType & 0x03) === SIGHASH_SINGLE && inputIndex >= this.tx.outs.length) return null;
-    return tapscriptSighash(this.tx, inputIndex, {
-      prevouts: this.prevouts,
-      leafHash: tapscript.leafHash,
-      sighashType,
+    const context = {
       ...(tapscript.annex === null ? {} : { annex: tapscript.annex }),
       ...(tapscript.codeSeparatorPosition === NO_CODESEPARATOR
         ? {}
         : { codeSeparatorPosition: tapscript.codeSeparatorPosition }),
-    });
+    };
+    return pearlTaprootSighash(this.tx, inputIndex, this.prevouts, tapscript.leafHash, sighashType, context, this.midstate);
   }
 
   /**
@@ -511,11 +514,8 @@ class TxContext {
   keyPathHash(inputIndex: number, sighashType: number, annex: Uint8Array | null): Uint8Array | null {
     if (!SIGHASH_TYPES.has(sighashType)) return null;
     if ((sighashType & 0x03) === SIGHASH_SINGLE && inputIndex >= this.tx.outs.length) return null;
-    return keyPathSighash(this.tx, inputIndex, {
-      prevouts: this.prevouts,
-      sighashType,
-      ...(annex === null ? {} : { annex }),
-    });
+    const context = annex === null ? {} : { annex };
+    return pearlTaprootSighash(this.tx, inputIndex, this.prevouts, null, sighashType, context, this.midstate);
   }
 }
 
