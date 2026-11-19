@@ -36,6 +36,11 @@ export async function expectWalletMatchesNode(subject: PearlWallet): Promise<voi
     expect(mine, address).toEqual(txids.get(address));
   }
   const coins = new Map(subject.coins().map((coin) => [`${coin.txid}:${coin.vout}`, coin.value]));
+  // XMSS keys and imported keys are not account addresses, and the address index holds no P2MR address: ask the UTXO set.
+  for (const coin of subject.coins().filter((entry) => !used.includes(entry.address))) {
+    const left = await node.getTxOut(coin.txid, coin.vout, true);
+    if (left !== null) unspent.set(`${coin.txid}:${coin.vout}`, left.value);
+  }
   expect(coins).toEqual(unspent);
   const sum = [...unspent.values()].reduce((total, value) => total + value, 0n);
   expect(subject.balance().total).toBe(sum);
