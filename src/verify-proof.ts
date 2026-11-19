@@ -67,11 +67,15 @@ interface Exports {
 interface Verifier {
   readonly exports: Exports;
   readonly loaded: Set<'v2' | 'v4'>;
+  // Set when a call into the instance threw: its stack pointer and heap may be left mid-call.
+  broken: boolean;
 }
 
 let locate: (asset: ProofVerifierAsset) => URL | string = (asset) => new URL(`./verify-proof/${asset}`, import.meta.url);
 let compiled: Promise<WebAssembly.Module> | null = null;
 let current: Promise<Verifier> | null = null;
+// What current resolved to, so a failed call can drop it before anything else runs.
+let live: Verifier | null = null;
 
 type NodeFs = { readFile(path: URL): Promise<Uint8Array> };
 
@@ -113,8 +117,16 @@ function instantiate(): Promise<Verifier> {
     const instance = await WebAssembly.instantiate(module, imports);
     const exports = instance.exports as unknown as Exports;
     exports.init();
-    return { exports, loaded: new Set<'v2' | 'v4'>() };
+    return { exports, loaded: new Set<'v2' | 'v4'>(), broken: false };
   });
+}
+
+function discard(verifier: Verifier): void {
+  verifier.broken = true;
+  if (live === verifier) {
+    live = null;
+    current = null;
+  }
 }
 
 function message(exports: Exports): string {
@@ -135,21 +147,33 @@ function withBytes(exports: Exports, inputs: readonly Uint8Array[], f: (ptrs: nu
 }
 
 async function verifierFor(cache: 'v2' | 'v4'): Promise<Verifier> {
-  current ??= instantiate().catch((error: unknown) => {
-    current = null;
-    throw error;
-  });
-  const verifier = await current;
-  if (!verifier.loaded.has(cache)) {
-    const bytes = await read(cache === 'v2' ? 'v2-cache.bin' : 'v4-cache.bin');
+  for (;;) {
+    const pending = (current ??= instantiate().then(
+      (verifier) => (live = verifier),
+      (error: unknown) => {
+        current = null;
+        throw error;
+      },
+    ));
+    const verifier = await pending;
     if (!verifier.loaded.has(cache)) {
-      const { exports } = verifier;
-      const code = withBytes(exports, [bytes], ([ptr]) => (cache === 'v2' ? exports.load_v2_cache(ptr!, bytes.length) : exports.load_v4_cache(ptr!, bytes.length)));
-      if (code !== 0) throw new PearlError('PROOF_VERIFIER_UNAVAILABLE', message(exports));
-      verifier.loaded.add(cache);
+      const bytes = await read(cache === 'v2' ? 'v2-cache.bin' : 'v4-cache.bin');
+      if (!verifier.loaded.has(cache) && !verifier.broken) {
+        const { exports } = verifier;
+        let code: number;
+        try {
+          code = withBytes(exports, [bytes], ([ptr]) => (cache === 'v2' ? exports.load_v2_cache(ptr!, bytes.length) : exports.load_v4_cache(ptr!, bytes.length)));
+        } catch (error) {
+          discard(verifier);
+          throw new PearlError('PROOF_VERIFIER_UNAVAILABLE', `cannot load ${cache}-cache.bin: ${(error as Error).message}`, { cause: error });
+        }
+        if (code !== 0) throw new PearlError('PROOF_VERIFIER_UNAVAILABLE', message(exports));
+        verifier.loaded.add(cache);
+      }
     }
+    // Another call may have broken the instance while this one waited.
+    if (!verifier.broken) return verifier;
   }
-  return verifier;
 }
 
 /**
@@ -180,7 +204,10 @@ const displayHash = (hash: Uint8Array): string => toHex(Uint8Array.from(hash).re
  * ancestor headers. A V1 certificate is rejected with pearld's message.
  *
  * Resolves to the verdict; it rejects only with PROOF_VERIFIER_UNAVAILABLE
- * when the verifier cannot be loaded.
+ * when the verifier cannot be loaded, and with RangeError for bits that are
+ * not a uint32. When the module traps or the engine throws inside it, the
+ * verdict is `error` and the instance is discarded; the next call loads a
+ * fresh one.
  */
 export async function verifyProof(header: PearlBlockHeader, certificate: PearlCertificate, options: { readonly bits?: number } = {}): Promise<ProofVerdict> {
   const { bits } = options;
@@ -202,7 +229,8 @@ export async function verifyProof(header: PearlBlockHeader, certificate: PearlCe
   if (proof.length === 0) return rejected('empty proof data');
   if (version !== 2 && version !== 3 && version !== 4) return rejected(`unsupported certificate version ${version} for FFI verification`);
 
-  const verifier = await verifierFor(version === 4 ? 'v4' : 'v2');
+  let verifier = await verifierFor(version === 4 ? 'v4' : 'v2');
+  while (verifier.broken) verifier = await verifierFor(version === 4 ? 'v4' : 'v2');
   const { exports } = verifier;
   let code: number;
   try {
@@ -215,11 +243,16 @@ export async function verifyProof(header: PearlBlockHeader, certificate: PearlCe
             exports.verify_v2(h!, pd!, publicData.length, p!, proof.length, bits === undefined ? 0 : 1, bits ?? 0, version === 3 ? 1 : 0),
           );
   } catch (error) {
-    if (!(error instanceof WebAssembly.RuntimeError)) throw error;
-    // A panic traps the instance; its hook saved the message. Start afresh next time.
-    if (current !== null && (await current) === verifier) current = null;
-    const text = message(exports);
-    return { valid: false, outcome: 'error', message: text.startsWith('Internal panic: ') ? text : `Internal panic: ${error.message}` };
+    // A trap, or the engine giving up inside the module (stack overflow, out of memory),
+    // leaves the instance mid-call. Drop it before any other call can reach it.
+    discard(verifier);
+    if (error instanceof WebAssembly.RuntimeError) {
+      // A panic's hook saved its message before the trap.
+      const text = message(exports);
+      return { valid: false, outcome: 'error', message: text.startsWith('Internal panic: ') ? text : `Internal panic: ${error.message}` };
+    }
+    const { name, message: text } = error instanceof Error ? error : new Error(String(error));
+    return { valid: false, outcome: 'error', message: `Internal error: ${name}: ${text}` };
   }
   const text = message(exports);
   if (code === 0) return { valid: true, outcome: 'accepted', message: text };
