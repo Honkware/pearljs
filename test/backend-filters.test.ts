@@ -307,6 +307,15 @@ describe('one object per node', () => {
     }
   });
 
+  it('refuses crossCheck endpoints for a node whose address index would make it pearldBackend', async () => {
+    const { chain, node } = setup();
+    const other = new FakeNode(chain);
+    await expect(connectPearld(node, { network, birthday: 0, crossCheck: [other] })).rejects.toMatchObject({ code: 'CROSS_CHECK_UNSUPPORTED' });
+    await expect(connectPearld(node, { network, birthday: 0, crossCheck: [] })).resolves.toMatchObject({ kind: 'pearld' });
+    const plain = await connectPearld(new FakeNode(chain, { addrIndex: false, txIndex: false }), { network, birthday: 0, crossCheck: [other], maxAge: 0 });
+    expect(plain.kind).toBe('filters');
+  });
+
   it('serves a wallet as backend and transaction source at once', async () => {
     const { chain } = setup();
     chain.pay(r0!, 8000n);

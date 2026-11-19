@@ -786,11 +786,17 @@ export type PearldChain =
  * the wallet's transaction source and a ChainClient. It probes the node
  * (probePearld) and returns pearldBackend when the node keeps the address
  * index, filterBackend when it keeps only its filter index, and throws
- * BACKEND_UNSUPPORTED when it keeps neither.
+ * BACKEND_UNSUPPORTED when it keeps neither. Given `crossCheck` endpoints
+ * for a node with the address index it throws CROSS_CHECK_UNSUPPORTED:
+ * pearldBackend takes the node's word and has nothing to hold up to them.
  */
 export async function connectPearld(rpc: Rpc, options: ConnectPearldOptions): Promise<PearldChain> {
   const capabilities = await probePearld(rpc);
   if (capabilities.backend === 'pearld') {
+    if ((options.crossCheck?.length ?? 0) > 0) {
+      throw new PearlError('CROSS_CHECK_UNSUPPORTED',
+        'this pearld keeps the address index, so connectPearld would return pearldBackend, which cannot be cross-checked; call filterBackend for a scan its crossCheck endpoints confirm, or leave crossCheck out');
+    }
     const backend = pearldBackend(rpc, {
       network: options.network,
       ...(options.pageSize === undefined ? {} : { pageSize: options.pageSize }),

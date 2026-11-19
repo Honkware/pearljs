@@ -54,6 +54,7 @@ export type PearlErrorCode =
   | 'BLOCK_HEADER_INVALID'
   | 'FILTER_HEADER_MISMATCH'
   | 'CROSS_CHECK_FAILED'
+  | 'CROSS_CHECK_UNSUPPORTED'
   // checkSanity
   | 'SANITY_NO_INPUTS'
   | 'SANITY_NO_OUTPUTS'
