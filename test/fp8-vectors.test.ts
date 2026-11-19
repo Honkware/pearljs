@@ -2,6 +2,8 @@
 // vectors/fp8/generate.go): V4 blocks and the certificates Pearl's own
 // verifier accepts or refuses, encodings its decoder and encoder refuse,
 // certificate rules at every fork boundary, and RPC bodies from its handlers.
+// Last, three blocks from the public testnet2 chain on either side of its
+// fork, as its Blockbook served them.
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -34,6 +36,7 @@ import {
 import type { CertificateVersion, PearlCertificate } from '../src/index.js';
 import vectors from '../vectors/fp8.json' with { type: 'json' };
 import fp8Fixtures from './fixtures/rpc-responses-fp8.json' with { type: 'json' };
+import testnet2 from './fixtures/testnet2-fp8-blocks.json' with { type: 'json' };
 import { fakeFetch, type Fixture } from './rpc-helpers.js';
 import { bytesToHex, hexToBytes, networkNamed } from './vector-helpers.js';
 
@@ -246,5 +249,38 @@ describe('RPC on the fp8 branch', () => {
     expect(network).toMatchObject({ version: 1060000, protocolversion: 3, subversion: expect.stringContaining('pearld:1.6.0-fp8-testnet1') });
     expect(network.relayfee).toBe(relayFee);
     expect(await client.getMiningInfo()).toMatchObject({ blocks: 0, genproclimit: 1, generate: false });
+  });
+});
+
+describe('testnet2 blocks around its FP8 fork', () => {
+  for (const expected of testnet2.blocks) {
+    it(`parse, bind and meet the rules at height ${expected.height}`, () => {
+      const network = networkNamed('testnet2');
+      const raw = hexToBytes(expected.hex);
+      const block = parseBlock(raw);
+      expect(blockHashHex(block.header)).toBe(expected.hash);
+      expect(displayHex(block.header.prevBlock)).toBe(expected.previousBlockHash);
+      expect(bytesToHex(serializeBlock(block))).toBe(expected.hex);
+      expect(blockSize(block)).toBe(expected.size);
+      expect(block.transactions).toHaveLength(expected.txCount);
+      expect(block.certificate!.version).toBe(requiredCertVersion(network, expected.height));
+      checkCertificateBinding(block);
+      checkCertificateRules(block.certificate, network, expected.height);
+      checkMerkleRoot(block);
+      checkWitnessCommitment(block);
+    });
+  }
+
+  it('key the V4 proofs at the fork by the last V3 block, through the headers in between', () => {
+    const [last, first, third] = testnet2.blocks.map((item) => parseBlock(hexToBytes(item.hex)));
+    expect(last!.certificate!.version).toBe(3);
+    expect(first!.certificate!.ancestorHeaders).toEqual([]);
+    expect(third!.certificate!.ancestorHeaders).toHaveLength(2);
+    for (const block of [first!, third!]) {
+      expect(blockHashHex(certificateAncestorHeader(block.certificate!)!)).toBe(blockHashHex(last!.header));
+    }
+    expect(blockHashHex(third!.certificate!.ancestorHeaders![1]!)).toBe(blockHashHex(first!.header));
+    // A decoder without the fork refuses the chain from here on.
+    expect(() => parseBlock(hexToBytes(testnet2.blocks[1]!.hex), { fp8: false })).toThrow('unsupported certificate version: 4');
   });
 });
