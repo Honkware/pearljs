@@ -12,7 +12,6 @@ import {
   type BlockbookBackendOptions,
   type WalletBackend,
 } from '../src/index.js';
-// @ts-expect-error a plain ES module the node scripts share; it has no type declarations
 import { budgetFetch, requestsUsed } from '../scripts/testnet/blockbook-budget.mjs';
 import { blockbookUrl, network, node } from './env.js';
 

@@ -25,7 +25,7 @@ import {
   pearldBackend,
   type PearlNetwork,
   type PearlNetworkName,
-  type SigningAccount,
+  type PearlSigningAccount,
   type WalletBackend,
 } from '../src/index.js';
 import { createFileStore } from '../src/store-file.js';
@@ -75,7 +75,7 @@ interface Secrets {
 export const secrets = (): Secrets => JSON.parse(readFileSync(join(walletDir, 'secrets.json'), 'utf8')) as Secrets;
 
 /** Account n of the test wallet's phrase, for signing outside the wallet. */
-export function account(n: number): SigningAccount {
+export function account(n: number): PearlSigningAccount {
   return deriveSigningAccountFromSeed(mnemonicToSeed(secrets().mnemonic), network, n);
 }
 
@@ -86,7 +86,7 @@ export const backend = (): WalletBackend => pearldBackend(node, { network });
 
 export async function openWallet(chain: WalletBackend = backend()): Promise<PearlWallet> {
   const wallet = await PearlWallet.open({ store: createFileStore(join(walletDir, 'store'), { breakStaleLock: true }), backend: chain, quietSyncInterval: 1 });
-  await wallet.unlock(secrets().passphrase, { timeout: null });
+  await wallet.unlock(secrets().passphrase);
   return wallet;
 }
 
