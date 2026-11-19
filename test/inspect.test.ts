@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  coinbaseScript,
   coinbaseText,
   addressInfo,
   blockSubsidy,
@@ -395,5 +396,13 @@ describe('coinbaseText', () => {
     expect(coinbaseText(Uint8Array.of(0x03, 0x0b, 0x4b, 0x02, 0x4c, 0x20, ...bytes('cut short')))).toBe('cut short');
     expect(coinbaseText(Uint8Array.of(0x03, 0x0b, 0x4b, 0x02, 0x00))).toBe('');
     expect(coinbaseText(new Uint8Array(0))).toBe('');
+  });
+
+  it('turns bidirectional overrides, isolates, zero-width characters and line separators into spaces', () => {
+    const script = (text: string) => coinbaseScript(1000, 5n, text);
+    expect(coinbaseText(script('pool\u202elatot\u202c'))).toBe('pool latot');
+    expect(coinbaseText(script('\u2066evil\u2069\u200eok\u200f'))).toBe('evil ok');
+    expect(coinbaseText(script('a\u200bb\ufeffc'))).toBe('a b c');
+    expect(coinbaseText(script('line1\u2028line2\u2029end'))).toBe('line1 line2 end');
   });
 });

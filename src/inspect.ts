@@ -262,10 +262,15 @@ const isPrintableAscii = (data: Uint8Array): boolean => data.every((byte) => byt
  * starts it is skipped, as are opcodes and pushes of up to 8 bytes that are
  * not all printable ASCII, which is how extra nonces and numbers look
  * (pearld's own miner writes the height, an extra nonce and "/P2SH/pearld/").
- * Each remaining push is read as UTF-8; control characters and bytes that are
- * not UTF-8 become one space per run, and the pushes are joined with a space.
- * A push that runs past the end of the script is read up to the end. An
- * empty string when there is no text.
+ * Each remaining push is read as UTF-8; control characters, format characters
+ * (bidirectional overrides and isolates, zero-width characters), line and
+ * paragraph separators and bytes that are not UTF-8 become one space per run,
+ * and the pushes are joined with a space. A push that runs past the end of
+ * the script is read up to the end. An empty string when there is no text.
+ *
+ * The result is safe to print on one line, in a terminal or a page, without
+ * reordering what is around it. It is still text the miner chose: a pool
+ * name in it is a claim, not an identity.
  */
 export function coinbaseText(script: Uint8Array): string {
   const parts: string[] = [];
@@ -290,7 +295,7 @@ export function coinbaseText(script: Uint8Array): string {
       continue;
     }
     if (data.length === 0 || (data.length <= NONCE_LENGTH && !isPrintableAscii(data))) continue;
-    const text = decoder.decode(data).replace(/[\p{Cc}\uFFFD]+/gu, ' ').trim();
+    const text = decoder.decode(data).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\uFFFD]+/gu, ' ').trim();
     if (text !== '') parts.push(text);
   }
   return parts.join(' ');
