@@ -6,7 +6,7 @@ import { BaseSequencer, type TestSpecification } from 'vitest/node';
 // them, so a test waits for them, and files run one at a time because they
 // share one wallet store. The coin-free files come first, then the funded
 // ones in the order they spend.
-const ORDER = ['relay', 'messages', 'public-backends', 'wallet', 'backends', 'fees', 'p2mr', 'htlc', 'sweep-psbt', 'invoices'];
+const ORDER = ['relay', 'messages', 'public-backends', 'wallet', 'backends', 'fees', 'p2mr', 'htlc', 'sweep-psbt', 'invoices', 'return'];
 const rank = (spec: TestSpecification): number => {
   const id = spec.moduleId;
   const name = id.slice(id.lastIndexOf('/') + 1).replace('.test.ts', '');

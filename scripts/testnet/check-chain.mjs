@@ -14,6 +14,7 @@
 //
 //   node scripts/testnet/check-chain.mjs [--once]
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { Buffer } from 'node:buffer';
 import { join } from 'node:path';
 import {
   checkCertificateBinding,
@@ -43,7 +44,7 @@ const record = (event) => appendFileSync(eventsFile, `${JSON.stringify({ at: new
 const save = (cursor) => writeFileSync(stateFile, JSON.stringify({ ...state, cursor, saved: Date.now() }, null, 1));
 
 const rpc = client({ maxConcurrentRequests: 2 });
-const controller = new AbortController();
+const controller = new globalThis.AbortController();
 process.on('SIGTERM', () => controller.abort());
 process.on('SIGINT', () => controller.abort());
 

@@ -48,7 +48,7 @@ export function budgetFetch() {
   /** @type {(() => void)[]} */
   const waiting = [];
   return async (input, init) => {
-    const url = input instanceof Request ? input.url : String(input);
+    const url = input instanceof globalThis.Request ? input.url : String(input);
     if (!url.startsWith(BLOCKBOOK_URL)) throw new Error(`budgetFetch only talks to ${BLOCKBOOK_URL}, not ${url}`);
     while (active >= IN_FLIGHT) await new Promise((resolve) => waiting.push(resolve));
     active++;
