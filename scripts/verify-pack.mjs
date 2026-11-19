@@ -6,9 +6,8 @@ import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { build } from 'esbuild';
-import { installTarball, pack, root, run } from './lib/pack.mjs';
+import { installTarball, npm, npx, pack, root, run } from './lib/pack.mjs';
 
-const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 const tsc = createRequire(import.meta.url).resolve('typescript/bin/tsc');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const failures = [];
@@ -64,7 +63,7 @@ for (const [sub, target] of Object.entries(pkg.exports)) {
     if (!files.includes(t.replace(/^\.\//, ''))) fail(`export ${sub} points at ${t}, which is not packed`);
   }
 }
-ok(`${files.length} files packed, ${(JSON.parse(run('npm', ['pack', '--dry-run', '--json'], { cwd: root }))[0].size / 1024).toFixed(0)} kB`);
+ok(`${files.length} files packed, ${(JSON.parse(run(npm, ['pack', '--dry-run', '--json'], { cwd: root }))[0].size / 1024).toFixed(0)} kB`);
 
 // 2. Install the tarball into a fresh project.
 const dir = installTarball(tarball);

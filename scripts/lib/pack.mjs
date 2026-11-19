@@ -7,10 +7,18 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const root = fileURLToPath(new URL('../..', import.meta.url));
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const win = process.platform === 'win32';
+export const npm = win ? 'npm.cmd' : 'npm';
+export const npx = win ? 'npx.cmd' : 'npx';
+
+// Node refuses to run a .cmd without a shell (EINVAL since CVE-2024-27980). Arguments
+// are ours, not user input; quoting only covers spaces in temp paths.
+const quote = (a) => (/^[\w@./:=\\-]+$/.test(a) ? a : `"${a}"`);
 
 export function run(cmd, args, options = {}) {
-  return execFileSync(cmd, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], ...options });
+  const shell = win && cmd.endsWith('.cmd');
+  const argv = shell ? args.map(quote) : args;
+  return execFileSync(cmd, argv, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], shell, ...options });
 }
 
 /** Pack into a new temp directory. Returns the tarball path and npm's file list. */
