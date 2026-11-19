@@ -50,3 +50,5 @@ export * from './wallet.js';
 export * from './wif.js';
 export * from './ws.js';
 export * from './xmss.js';
+export * from './mining.js';
+export * from './gateway.js';

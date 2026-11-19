@@ -203,6 +203,14 @@
       "types": "./dist/xmss-file-store.d.ts",
       "default": "./dist/xmss-file-store.js"
     },
+    "./mining": {
+      "types": "./dist/mining.d.ts",
+      "default": "./dist/mining.js"
+    },
+    "./gateway": {
+      "types": "./dist/gateway.d.ts",
+      "default": "./dist/gateway.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
