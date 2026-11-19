@@ -182,10 +182,10 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   // The height read to and its block: the server's best, or with crossCheck the lowest server's, which all must share.
   const tip = async (): Promise<BlockRef> => {
     const status = await client.getStatus();
-    if (status.blockbook.initialSync === true) throw bad('is still on its initial sync, so its index is not complete');
-    let height = safe(status.blockbook.bestHeight, 'a best height');
+    if (status.blockbook?.initialSync === true) throw bad('is still on its initial sync, so its index is not complete');
+    let height = safe(status.blockbook?.bestHeight, 'a best height');
     if (others.length > 0) {
-      const theirs = await Promise.all(others.map((_, i) => ask(i, async (other) => safe((await other.getStatus()).blockbook.bestHeight, 'a best height'))));
+      const theirs = await Promise.all(others.map((_, i) => ask(i, async (other) => safe((await other.getStatus()).blockbook?.bestHeight, 'a best height'))));
       const all = [height, ...theirs];
       if (Math.max(...all) - Math.min(...all) > crossCheckLag) {
         throw new PearlError('CROSS_CHECK_FAILED', `the server's tip is at height ${height} and the cross-check servers' at ${theirs.join(', ')}, more than crossCheckLag (${crossCheckLag}) blocks apart`);

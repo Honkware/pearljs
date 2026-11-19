@@ -831,14 +831,19 @@ export class BlockbookWsClient {
       s.onmessage = (event) => this.#receive(s, event.data);
     });
     this.#socket = socket;
-    const info = (await this.#request('getInfo', {})) as Partial<BlockbookWsInfo>;
-    if (info.block0Hash !== this.network.genesisHash) {
+    try {
+      const info = (await this.#request('getInfo', {})) as Partial<BlockbookWsInfo> | null;
+      if (info?.block0Hash !== this.network.genesisHash) {
+        throw new PearlError('BACKEND_WRONG_NETWORK', `the Blockbook at ${this.#origin} serves a chain whose block 0 is ${String(info?.block0Hash)}, not ${this.network.name}`);
+      }
+      for (const [id, sub] of this.#subscriptions) await this.#request(sub.method, sub.params, id);
+    } catch (err) {
+      // A session that never got going is closed, so the next connect starts clean.
       this.#socket = null;
       socket.close(1000);
-      throw new PearlError('BACKEND_WRONG_NETWORK', `the Blockbook at ${this.#origin} serves a chain whose block 0 is ${String(info.block0Hash)}, not ${this.network.name}`);
+      throw err;
     }
     this.#attempt = 0;
-    for (const [id, sub] of this.#subscriptions) await this.#request(sub.method, sub.params, id);
   }
 
   #dropped(socket: Socket): void {
