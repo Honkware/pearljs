@@ -697,6 +697,8 @@ const MAX_SUBSCRIBED_ADDRESSES_WITH_BLOCKS = 100;
  */
 export class BlockbookWsClient {
   readonly network: PearlNetwork;
+  /** The websocket URL. */
+  readonly url: string;
   readonly #url: string;
   readonly #origin: string;
   readonly #ctor: new (url: string, init?: Record<string, unknown>) => Socket;
@@ -724,6 +726,7 @@ export class BlockbookWsClient {
       url.pathname = url.pathname.replace(/\/$/, '');
     }
     this.#url = url.href;
+    this.url = url.href;
     this.#origin = url.host;
     this.network = options.network;
     const ctor = options.WebSocket ?? (globalThis as { WebSocket?: unknown }).WebSocket;
@@ -786,6 +789,21 @@ export class BlockbookWsClient {
   async sendTransaction(tx: string | Uint8Array): Promise<string> {
     const hex = typeof tx === 'string' ? tx : toHex(tx);
     return (await this.call<{ result: string }>('sendTransaction', { hex })).result;
+  }
+
+  /**
+   * The fee rate for confirmation within `blocks`, grain per 1000 vbytes:
+   * the websocket's estimateFee, whose feePerUnit is per 1000 bytes
+   * (server/websocket.go divides by 1000 for feePerTx). Blockbook asks
+   * pearld for estimatesmartfee there, which pearld does not have, so a
+   * Pearl server answers with an error.
+   */
+  async estimateFee(blocks: number, options: { conservative?: boolean } = {}): Promise<FeeRate> {
+    checkHeight(blocks, 'blocks');
+    const reply = await this.call<{ feePerUnit?: unknown }[]>('estimateFee', { blocks: [blocks], ...(options.conservative === undefined ? {} : { specific: { conservative: options.conservative } }) });
+    const unit = Array.isArray(reply) ? reply[0]?.feePerUnit : undefined;
+    if (typeof unit !== 'string' || !/^\d+$/.test(unit)) throw new PearlRpcError('response', 'estimateFee', `${this.#origin} sent no fee rate`);
+    return BigInt(unit);
   }
 
   /** Calls `listener` for every block the server connects from now on. Resolves to a function that ends the subscription. */

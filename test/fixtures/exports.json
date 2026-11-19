@@ -1587,6 +1587,7 @@
       "ReorgOptions",
       "SimulatedBlock",
       "SimulatedBlockbook",
+      "SimulatedBlockbookOptions",
       "SimulatedBlockbookSocket",
       "SimulatedBlockbookWebSocket",
       "SimulatedChainOptions",

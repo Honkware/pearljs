@@ -30,6 +30,16 @@
 // there, the wallet still reads the history of every address the hint calls
 // used, and what the server derived no further than is asked address by
 // address.
+//
+// Over the websocket alone (a BlockbookWsClient, for a page Pearl's servers
+// refuse REST to, since they send no CORS headers) the same queries are
+// made with getAccountInfo, getTransaction, getBlockHash and getInfo. What
+// the websocket cannot give is a raw block (getBlock is Blockbook's parsed
+// block, with no proof commitment to rebuild the header from), so blocks
+// are not verified and verifyBlocks must be false; whether the server is
+// still on its initial sync (getInfo does not say); and the spender a REST
+// reply with spending=true names, which is found in the output's address
+// history instead.
 
 /**
  * A wallet backend over a Blockbook server that checks what the server
@@ -42,14 +52,15 @@ import { fromOutputScript, toOutputScript } from './address.js';
 import type { FeeRate } from './amount.js';
 import { checkCertificateBinding, checkMerkleRoot, checkWitnessCommitment, parseBlock } from './block.js';
 import { blockHashHex } from './blockheader.js';
-import { BLOCKBOOK_MAX_HISTORY_OFFSET, BLOCKBOOK_MAX_PAGE_SIZE, isBlockbookNotFound } from './blockbook.js';
-import type { BlockbookAddress, BlockbookClient, BlockbookTx, BlockbookXpubQuery } from './blockbook.js';
+import { BLOCKBOOK_MAX_HISTORY_OFFSET, BLOCKBOOK_MAX_PAGE_SIZE, BlockbookWsClient, isBlockbookNotFound } from './blockbook.js';
+import type { BlockbookAddress, BlockbookAddressQuery, BlockbookClient, BlockbookTx, BlockbookXpubQuery } from './blockbook.js';
 import type { AddressPayment, BlockRef, ChainTransaction } from './client.js';
 import { bitsToTarget, checkCertificateRules } from './consensus.js';
 import { PearlError, PearlRpcError } from './errors.js';
 import { BLOCKBOOK_CACHE_LIMITS, BoundedMap } from './internal/bounded.js';
 import { fromHex, toHex } from './internal/bytes.js';
 import { mapLimit } from './internal/filter-scan.js';
+import type { PearlNetwork } from './networks.js';
 import { DEFAULT_RELAY_FEE_RATE } from './policy.js';
 import type { OutPointParam } from './rpc.js';
 import { parseTransaction, transactionId } from './transaction.js';
@@ -67,6 +78,8 @@ export interface BlockbookBackendOptions {
    * pearld checks them before it verifies a proof. Default true. When false,
    * a transaction's block and height are the server's word, held only to the
    * `crossCheck` servers, each asked where it places the transaction.
+   * Over a BlockbookWsClient, which cannot fetch a raw block, this must be
+   * given as false; true or leaving it out throws a TypeError.
    */
   verifyBlocks?: boolean;
   /**
@@ -77,7 +90,7 @@ export interface BlockbookBackendOptions {
    * transaction is called unknown or an output unspent. One that cannot be
    * asked or disagrees fails the query with CROSS_CHECK_FAILED.
    */
-  crossCheck?: readonly BlockbookClient[];
+  crossCheck?: readonly (BlockbookClient | BlockbookWsClient)[];
   /**
    * How many blocks apart the servers' tips may be. The backend reads no
    * further than the lowest of them, and fails with CROSS_CHECK_FAILED when
@@ -103,7 +116,7 @@ export interface BlockbookBackendOptions {
 
 /** blockbookBackend's result: a WalletChain that also answers the wallet's per-sync question. */
 export interface BlockbookChain extends WalletChain, ActivityScanner {
-  readonly client: BlockbookClient;
+  readonly client: BlockbookClient | BlockbookWsClient;
   /** Which of these addresses have been paid or spent from, by the servers' counts. */
   findUsed(addresses: readonly string[], accounts?: readonly AccountAddresses[]): Promise<string[]>;
 }
@@ -143,8 +156,57 @@ interface XpubHint {
   unconfirmed: number;
 }
 
+// What the backend asks of a server, which the REST client and, through getAccountInfo and friends, the websocket client both answer.
+interface Source {
+  readonly network: PearlNetwork;
+  readonly url: string;
+  readonly websocket: boolean;
+  getStatus(): Promise<{ blockbook?: { bestHeight?: unknown; initialSync?: boolean } }>;
+  getBlockHash(height: number): Promise<string | null>;
+  getRawBlock(hash: string): Promise<string>;
+  getTransaction(txid: string, options?: { spending?: boolean }): Promise<BlockbookTx>;
+  getAddress(address: string, query: BlockbookAddressQuery): Promise<BlockbookAddress>;
+  getXpub(xpub: string, query: BlockbookXpubQuery): Promise<BlockbookAddress>;
+  sendTransaction(hex: string): Promise<string>;
+  estimateFee(blocks: number): Promise<FeeRate>;
+}
+
+function sourceOf(client: BlockbookClient | BlockbookWsClient): Source {
+  if (!(client instanceof BlockbookWsClient)) {
+    return {
+      network: client.network,
+      url: client.url,
+      websocket: false,
+      getStatus: () => client.getStatus(),
+      getBlockHash: (height) => client.getBlockHash(height),
+      getRawBlock: (hash) => client.getRawBlock(hash),
+      getTransaction: (txid, options) => client.getTransaction(txid, options),
+      getAddress: (address, query) => client.getAddress(address, query),
+      getXpub: (xpub, query) => client.getXpub(xpub, query),
+      sendTransaction: (hex) => client.sendTransaction(hex),
+      estimateFee: (blocks) => client.estimateFee(blocks),
+    };
+  }
+  return {
+    network: client.network,
+    url: client.url,
+    websocket: true,
+    // getInfo has the best height and nothing on whether the initial sync is done.
+    getStatus: async () => ({ blockbook: { bestHeight: (await client.getInfo()).bestHeight } }),
+    getBlockHash: (height) => client.getBlockHash(height),
+    getRawBlock: () => Promise.reject(new PearlError('BACKEND_UNSUPPORTED', 'Blockbook\'s websocket serves no raw blocks')),
+    // The websocket's getTransaction is REST's without spending=true.
+    getTransaction: (txid) => client.getTransaction(txid),
+    getAddress: (address, query) => client.getAccountInfo({ ...query, descriptor: address }),
+    getXpub: (xpub, query) => client.getAccountInfo({ ...query, descriptor: xpub }),
+    sendTransaction: (hex) => client.sendTransaction(hex),
+    estimateFee: (blocks) => client.estimateFee(blocks),
+  };
+}
+
 /**
- * A wallet backend over a Blockbook serving Pearl (BlockbookClient). It
+ * A wallet backend over a Blockbook serving Pearl: its REST API through a
+ * BlockbookClient, or its websocket alone through a BlockbookWsClient. It
  * sees P2TR and P2MR addresses alike, needs no node of your own, and is a
  * WalletChain and an ActivityScanner, so PearlWallet, discovery, invoices
  * and sweep run over it unchanged.
@@ -156,9 +218,11 @@ interface XpubHint {
  * place a transaction in a block that does not hold it (with verifyBlocks),
  * or say an output is spent by a transaction that does not spend it.
  */
-export function blockbookBackend(client: BlockbookClient, options: BlockbookBackendOptions = {}): BlockbookChain {
+export function blockbookBackend(given: BlockbookClient | BlockbookWsClient, options: BlockbookBackendOptions = {}): BlockbookChain {
   const { verifyBlocks = true, crossCheckLag = 6, concurrency = 8, minFeeRate = DEFAULT_RELAY_FEE_RATE, useXpub = false } = options;
-  const others = options.crossCheck ?? [];
+  const client = sourceOf(given);
+  const others = (options.crossCheck ?? []).map(sourceOf);
+  if (client.websocket && verifyBlocks) throw new TypeError('Blockbook\'s websocket serves no raw blocks, so blocks cannot be verified over a BlockbookWsClient; pass verifyBlocks: false, and crossCheck servers to hold placements to');
   if (!Number.isSafeInteger(crossCheckLag) || crossCheckLag < 0) throw new RangeError('crossCheckLag must be a number of blocks');
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new RangeError('concurrency must be a positive integer');
   if (typeof minFeeRate !== 'bigint' || minFeeRate < 0n) throw new RangeError('minFeeRate must be a bigint of grain per 1000 vbytes');
@@ -187,7 +251,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
 
   const bad = (message: string): PearlError => new PearlError('BACKEND_RESPONSE', `the Blockbook at ${new URL(client.url).host} ${message}`);
   const disagree = (i: number, message: string): PearlError => new PearlError('CROSS_CHECK_FAILED', `cross-check server ${i + 1} ${message}`);
-  const ask = async <T>(i: number, run: (other: BlockbookClient) => Promise<T>): Promise<T> => {
+  const ask = async <T>(i: number, run: (other: Source) => Promise<T>): Promise<T> => {
     try {
       return await run(others[i]!);
     } catch (err) {
@@ -197,7 +261,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   };
 
   // The transaction, from its serialization, or null when the server has none.
-  const fetchTx = async (txid: string, spending = false, source = client): Promise<{ tx: Transaction; reply: BlockbookTx } | null> => {
+  const fetchTx = async (txid: string, spending = false, source: Source = client): Promise<{ tx: Transaction; reply: BlockbookTx } | null> => {
     let reply: BlockbookTx;
     try {
       reply = await source.getTransaction(txid, { spending });
@@ -326,7 +390,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   };
 
   // Every confirmed txid of an address from `from` to `to`, page by page, with where the server says each is.
-  const confirmedOf = async (source: BlockbookClient, address: string, from: number, to: number): Promise<Listed[]> => {
+  const confirmedOf = async (source: Source, address: string, from: number, to: number): Promise<Listed[]> => {
     const listed: Listed[] = [];
     if (from > to) return listed;
     for (let page = 1; ; page++) {
@@ -494,7 +558,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
 
   // What one server's reply for a transaction says spent its output `vout`, with the spender in hand: fetched, hashing
   // to its txid, spending the output and, when it is in a block, placed. A spend with no spender named is unknown.
-  const spentBy = async (source: BlockbookClient, reply: BlockbookTx, txid: string, vout: number, upTo: BlockRef): Promise<SpendStatus | null> => {
+  const spentBy = async (source: Source, reply: BlockbookTx, txid: string, vout: number, upTo: BlockRef): Promise<SpendStatus | null> => {
     const id = `${txid}:${vout}`;
     const said = reply.vout?.find((item) => item?.n === vout);
     if (said?.spent !== true) return null;
@@ -509,12 +573,31 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
     return { status: 'spent', spender, confirmed: inBlock };
   };
 
-  const usedBy = async (source: BlockbookClient, addresses: readonly string[]): Promise<Set<string>> => {
+  // The confirmed transaction in the output's address history, at or after the output's own block, that spends it.
+  const historySpender = async (script: Uint8Array, outpoint: string, upTo: BlockRef, from: number): Promise<SpendStatus | null> => {
+    let address: string;
+    try {
+      address = fromOutputScript(script, network);
+    } catch {
+      return null;
+    }
+    const after = Number.isSafeInteger(from) && from >= 0 ? from : upTo.height + 1;
+    for (const item of await confirmedHistory(address, upTo)) {
+      if (item.at === null || item.at.height < after) continue;
+      const tx = await txOf(item.txid);
+      if (tx.isCoinbase() || !tx.ins.some((input) => outpointOf(input) === outpoint)) continue;
+      await place(item.txid, item.at, upTo);
+      return { status: 'spent', spender: item.txid, confirmed: true };
+    }
+    return null;
+  };
+
+  const usedBy = async (source: Source, addresses: readonly string[]): Promise<Set<string>> => {
     const counts = await mapLimit(addresses, concurrency, (address) => source.getAddress(address, { details: 'basic' }));
     return new Set(addresses.filter((_, i) => (counts[i]!.txs ?? 0) > 0 || (counts[i]!.unconfirmedTxs ?? 0) > 0));
   };
 
-  const badAt = (source: BlockbookClient, message: string): PearlError => new PearlError('BACKEND_RESPONSE', `the Blockbook at ${new URL(source.url).host} ${message}`);
+  const badAt = (source: Source, message: string): PearlError => new PearlError('BACKEND_RESPONSE', `the Blockbook at ${new URL(source.url).host} ${message}`);
   const scriptOf = (address: string): string => toHex(toOutputScript(address, network));
   const accountGap = (account: AccountAddresses, least = 1): number => {
     if (!Number.isSafeInteger(account.gap) || account.gap < 1) throw new RangeError('an account\'s gap must be a positive integer');
@@ -522,7 +605,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   };
 
   // An xpub query, or null when the server will not answer it, as one without xpub support or past its derivation limit does.
-  const xpubQuery = async (source: BlockbookClient, xpub: string, query: BlockbookXpubQuery): Promise<BlockbookAddress | null> => {
+  const xpubQuery = async (source: Source, xpub: string, query: BlockbookXpubQuery): Promise<BlockbookAddress | null> => {
     try {
       return await source.getXpub(xpub, query);
     } catch (err) {
@@ -531,7 +614,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
     }
   };
 
-  const readHint = (source: BlockbookClient, reply: BlockbookAddress): XpubHint => {
+  const readHint = (source: Source, reply: BlockbookAddress): XpubHint => {
     const chains: XpubHint['chains'] = [new Map(), new Map()];
     const tokens = reply.tokens ?? [];
     if (!Array.isArray(tokens)) throw badAt(source, 'sent the derived addresses of an xpub as something other than a list');
@@ -556,7 +639,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   };
 
   // The server's word on a child, where it derived that far without a hole; null past that. Its address must be the one the account derives there.
-  const tokenFor = (source: BlockbookClient, hint: XpubHint, address: string, child: { change: boolean; index: number }): { transfers: number } | null => {
+  const tokenFor = (source: Source, hint: XpubHint, address: string, child: { change: boolean; index: number }): { transfers: number } | null => {
     const chain = child.change ? 1 : 0;
     if (child.index >= hint.derived[chain]) return null;
     const token = hint.chains[chain].get(child.index)!;
@@ -568,7 +651,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   // and counts them in unconfirmedTxs of the same reply, which the page of one confirmed transaction then follows.
   // Unlike an address's, the xpub page is not cut to the page size: GetXpubAddress (api/xpub.go, 81f52f21) appends
   // every mempool entry first and pages only the confirmed transactions after them.
-  const pendingOf = async (source: BlockbookClient, xpub: string, gap: number): Promise<{ txid: string; tx: Transaction }[] | null> => {
+  const pendingOf = async (source: Source, xpub: string, gap: number): Promise<{ txid: string; tx: Transaction }[] | null> => {
     const reply = await xpubQuery(source, xpub, { details: 'txids', pageSize: 1, tokens: 'used', gap });
     if (reply === null) return null;
     const txids = reply.txids ?? [];
@@ -582,7 +665,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   };
 
   // An account's hint for a scan: its derived addresses, and the scripts its mempool transactions pay.
-  const scanHintOf = async (source: BlockbookClient, xpub: string, gap: number): Promise<{ hint: XpubHint; paid: Set<string> } | null> => {
+  const scanHintOf = async (source: Source, xpub: string, gap: number): Promise<{ hint: XpubHint; paid: Set<string> } | null> => {
     const reply = await xpubQuery(source, xpub, { details: 'tokens', tokens: 'derived', gap });
     if (reply === null) return null;
     const hint = readHint(source, reply);
@@ -599,7 +682,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   // about each index once, so an index asked again is a new scan, which asks the server again; so does a batch asked
   // SCAN_HINT_AGE after the hint, which a caller going on with its own scan later would otherwise get stale.
   const scans = new Map<string, { gap: number; at: number; asked: Set<string>; hint: Promise<{ hint: XpubHint; paid: Set<string> } | null> }>();
-  const scanHint = (i: number, source: BlockbookClient, account: AccountAddresses, children: readonly (readonly [string, { change: boolean; index: number }])[]) => {
+  const scanHint = (i: number, source: Source, account: AccountAddresses, children: readonly (readonly [string, { change: boolean; index: number }])[]) => {
     const gap = accountGap(account);
     const key = `${i}:${account.xpub}`;
     const marks = children.map(([, child]) => `${child.change ? 1 : 0}/${child.index}`);
@@ -615,7 +698,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
   };
 
   // Which addresses one server calls used: account addresses it derived by its xpub hint, the rest one query each.
-  const usedVia = async (i: number, source: BlockbookClient, addresses: readonly string[], accounts: readonly AccountAddresses[]): Promise<Set<string>> => {
+  const usedVia = async (i: number, source: Source, addresses: readonly string[], accounts: readonly AccountAddresses[]): Promise<Set<string>> => {
     const used = new Set<string>();
     const rest = new Set(addresses);
     if (useXpub) {
@@ -641,7 +724,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
 
   // The account's confirmed transactions after `after` as one server lists them, with its hint. Blockbook leaves the
   // mempool out of a listing with `from` and still counts it in unconfirmedTxs.
-  const listSince = async (source: BlockbookClient, xpub: string, gap: number, after: number): Promise<{ hint: XpubHint; listed: Listed[] } | null> => {
+  const listSince = async (source: Source, xpub: string, gap: number, after: number): Promise<{ hint: XpubHint; listed: Listed[] } | null> => {
     const listed: Listed[] = [];
     let hint: XpubHint | null = null;
     for (let page = 1; ; page++) {
@@ -727,7 +810,7 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
 
   return {
     network,
-    client,
+    client: given,
     getTip: tip,
 
     async getAddressActivity(address): Promise<AddressPayment[]> {
@@ -782,7 +865,8 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
         rate = await client.estimateFee(blocks);
       } catch (err) {
         // pearld without an estimate yet makes Blockbook answer HTTP 500.
-        if (!(err instanceof PearlRpcError && err.kind === 'rpc' && err.status === 500)) throw err;
+        // Over the websocket a Pearl server refuses estimateFee, which asks pearld for estimatesmartfee.
+        if (!(err instanceof PearlRpcError && err.kind === 'rpc' && (err.status === 500 || client.websocket))) throw err;
       }
       return rate > minFeeRate ? rate : minFeeRate;
     },
@@ -795,7 +879,14 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
       if (fetched === null || out === undefined) return { status: 'unknown' };
       const id = `${txid}:${vout}`;
       const said = await spentBy(client, fetched.reply, txid, vout, upTo);
-      if (said !== null) return said;
+      if (said !== null && said.status !== 'unknown') return said;
+      // A spend without its spender named (the websocket names none without the extended index) is in the output's
+      // address history, read and held to the cross-check servers as any history is.
+      if (said !== null || client.websocket) {
+        const found = await historySpender(out.script, id, upTo, fetched.reply.blockHeight);
+        if (found !== null) return found;
+        if (said !== null) return said;
+      }
       // Blockbook marks confirmed spends only, so a mempool spend is looked for among the address's mempool transactions.
       const pending = await pendingSpender(out.script, id, upTo);
       if (pending !== null) return { status: 'spent', spender: pending, confirmed: false };

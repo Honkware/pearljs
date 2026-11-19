@@ -90,7 +90,19 @@ class ApiError extends Error {
 }
 
 /** Blockbook's REST and websocket APIs over `chain`. */
-export function simulatedBlockbook(chain: SimulatedChain): SimulatedBlockbook {
+/** Options for simulatedBlockbook. */
+export interface SimulatedBlockbookOptions {
+  /**
+   * Blockbook's extended index (`-extendedindex`), on unless given: a
+   * confirmed spend comes with its spender's txid, index and height. Without
+   * it a reply says only `spent: true`, and REST names the spender with
+   * `spending=true` (Worker.setSpendingTxToVout); the websocket never does.
+   */
+  extendedIndex?: boolean;
+}
+
+export function simulatedBlockbook(chain: SimulatedChain, options: SimulatedBlockbookOptions = {}): SimulatedBlockbook {
+  const extendedIndex = options.extendedIndex ?? true;
   const requests: string[] = [];
   const network = chain.network;
   const mempoolOrder = (): Transaction[] => [...chain.mempool.values()].map((entry) => entry.tx);
@@ -103,9 +115,10 @@ export function simulatedBlockbook(chain: SimulatedChain): SimulatedBlockbook {
   const valueIn = (tx: Transaction): bigint => (tx.isCoinbase() ? 0n : tx.ins.reduce((sum, input) => sum + (chain.output(prevTxid(input), input.index)?.value ?? 0n), 0n));
   const valueOut = (tx: Transaction): bigint => tx.outs.reduce((sum, out) => sum + out.value, 0n);
   const fees = (tx: Transaction): bigint => (tx.isCoinbase() ? 0n : valueIn(tx) - valueOut(tx) > 0n ? valueIn(tx) - valueOut(tx) : 0n);
-  const spentFields = (txid: string, vout: number): Record<string, unknown> => {
+  const spentFields = (txid: string, vout: number, naming = false): Record<string, unknown> => {
     const spender = chain.spender(txid, vout);
     if (spender === null || !spender.confirmed) return {};
+    if (!extendedIndex && !naming) return { spent: true };
     const spending = chain.transaction(spender.txid)!;
     const index = spending.tx.ins.findIndex((input) => prevTxid(input) === txid && input.index === vout);
     return { spent: true, spentTxId: spender.txid, ...(index > 0 ? { spentIndex: index } : {}), spentHeight: spending.block!.height };
@@ -121,7 +134,7 @@ export function simulatedBlockbook(chain: SimulatedChain): SimulatedBlockbook {
   };
 
   // api.Tx as GetTransactionFromBchainTx builds it.
-  const fullTx = (tx: Transaction, block: SimulatedBlock | null): Record<string, unknown> => {
+  const fullTx = (tx: Transaction, block: SimulatedBlock | null, naming = false): Record<string, unknown> => {
     const txid = tx.getId();
     const vin = tx.isCoinbase()
       ? [{ ...omitZero('sequence', tx.ins[0]!.sequence), n: 0, isAddress: false, coinbase: toHex(tx.ins[0]!.script) }]
@@ -134,7 +147,7 @@ export function simulatedBlockbook(chain: SimulatedChain): SimulatedBlockbook {
             ...(out === null ? {} : { value: out.value.toString() }), ...(input.script.length > 0 ? { hex: toHex(input.script) } : {}),
           };
         });
-    const vout = tx.outs.map((out, n) => ({ value: out.value.toString(), n, ...(block === null ? {} : spentFields(txid, n)), hex: toHex(out.script), ...addressesOf(out.script) }));
+    const vout = tx.outs.map((out, n) => ({ value: out.value.toString(), n, ...(block === null ? {} : spentFields(txid, n, naming)), hex: toHex(out.script), ...addressesOf(out.script) }));
     const time = block === null ? chain.mempool.get(txid)!.time : block.time;
     const rbf = block === null && tx.ins.some((input) => input.sequence < 0xfffffffe);
     return {
@@ -546,7 +559,7 @@ export function simulatedBlockbook(chain: SimulatedChain): SimulatedBlockbook {
     if ((arg = tail('api/v2/tx/')) !== null) {
       const found = chain.transaction(arg);
       if (found === null) throw new ApiError(`Transaction '${arg}' not found`);
-      return fullTx(found.tx, found.block);
+      return fullTx(found.tx, found.block, query.get('spending') === 'true');
     }
     if ((arg = tail('api/v2/address/')) !== null) return address(arg, query);
     if ((arg = tail('api/v2/xpub/')) !== null) return xpub(arg, query, { tokens: 'nonzero' });
