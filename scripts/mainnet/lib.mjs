@@ -57,8 +57,11 @@ class Gate {
 const rpcGate = new Gate(Number(process.env.PEARL_RPC_INFLIGHT ?? 2));
 
 // The same limit across processes: a request holds one of PEARL_RPC_SLOTS
-// (default 2) lock directories while it is in flight.
+// (default 2) lock directories while it is in flight. PEARL_RPC_SLOT_FIRST
+// keeps a process off the lower slots, so a long job on slot 0 and a
+// follower on slot 1 never wait for each other.
 const SLOTS = Number(process.env.PEARL_RPC_SLOTS ?? 2);
+const FIRST_SLOT = Number(process.env.PEARL_RPC_SLOT_FIRST ?? 0);
 const LOCKS = join(WORK, 'mainnet-walk', 'rpc-slots');
 mkdirSync(LOCKS, { recursive: true });
 
@@ -73,7 +76,7 @@ function alive(pid) {
 
 async function withSlot(fn) {
   for (;;) {
-    for (let i = 0; i < SLOTS; i++) {
+    for (let i = FIRST_SLOT; i < SLOTS; i++) {
       const dir = join(LOCKS, `slot-${i}`);
       try {
         mkdirSync(dir);

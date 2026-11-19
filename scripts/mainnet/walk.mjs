@@ -15,6 +15,7 @@
 
 import { writeFileSync, appendFileSync, existsSync, renameSync, openSync, writeSync, closeSync, createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
+import { setImmediate } from 'node:timers';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
@@ -350,8 +351,15 @@ function processBlock(height, hash, raw, verbose) {
     if (hasP2mr) T.p2mrTxs += 1;
     if (hasScriptPath) T.scriptPathTxs += 1;
     if (hasNonDefault) T.nonDefaultSighashTxs += 1;
-    void hasOpReturn;
 
+    // The interpreter hashes every input and output again for each input, so
+    // a 1500-input consolidation takes seconds. All inputs of every 50th
+    // block, every transaction with something unusual in it, and every one
+    // of up to 64 inputs; the rest are counted as skipped.
+    const unusual = hasP2mr || hasScriptPath || hasNonDefault || hasOpReturn || info.inputs.some((input) => input.annex !== undefined);
+    if (height % 50 !== 0 && !unusual && tx.ins.length > 64) {
+      T.interpreterSkipped = (T.interpreterSkipped ?? 0) + tx.ins.length;
+    } else {
     const t0 = performance.now();
     const verdict = interp.verifyTransaction(tx, prevouts);
     T.interpreterMs += performance.now() - t0;
@@ -359,6 +367,7 @@ function processBlock(height, hash, raw, verbose) {
     else {
       T.interpreterFailed += 1;
       fail(height, 'interpreter', { txid, input: verdict.inputIndex, code: verdict.code, message: verdict.message }, raw);
+    }
     }
 
     T.standardChecked += 1;
@@ -438,6 +447,8 @@ while (pending !== null) {
   for (const item of range) {
     if (item.verbose.height !== item.height) fail(item.height, 'node.height', { node: item.verbose.height });
     processBlock(item.height, item.hash, item.raw, item.verbose);
+    // Let replies land and RPC slots be released between blocks.
+    await new Promise((resolve) => setImmediate(resolve));
     state.next = item.height + 1;
     sinceSave += 1;
     windowBlocks += 1;
