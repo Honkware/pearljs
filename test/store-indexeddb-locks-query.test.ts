@@ -4,8 +4,9 @@
 // even once close waited for the request (scratch extension, 2026-11-19).
 
 import 'fake-indexeddb/auto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { openIndexedDbStore } from '../src/index.js';
+import { useNavigatorLocks } from './navigator-locks.js';
 
 const held = new Set<string>();
 const locks = {
@@ -18,15 +19,7 @@ const locks = {
   },
   query: async () => ({ held: [...held].map((name) => ({ name })) }),
 };
-let previous: PropertyDescriptor | undefined;
-beforeAll(() => {
-  previous = Object.getOwnPropertyDescriptor(globalThis.navigator, 'locks');
-  Object.defineProperty(globalThis.navigator, 'locks', { value: locks, configurable: true });
-});
-afterAll(() => {
-  if (previous === undefined) delete (globalThis.navigator as { locks?: unknown }).locks;
-  else Object.defineProperty(globalThis.navigator, 'locks', previous);
-});
+useNavigatorLocks(locks);
 
 describe('IndexedDB store tab lock, released late', () => {
   it('reopens at once after close when the lock shows free only after the request settles', async () => {

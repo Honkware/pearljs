@@ -5,10 +5,11 @@
 // lets the tab lock be tested too.
 
 import 'fake-indexeddb/auto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { PearlWallet, openIndexedDbStore, parsePearl } from '../src/index.js';
 import type { JsonValue } from '../src/index.js';
 import { FakeChain, PASSPHRASE, newWallet } from './wallet-chain.js';
+import { useNavigatorLocks } from './navigator-locks.js';
 
 const held = new Set<string>();
 const locks = {
@@ -22,15 +23,7 @@ const locks = {
     }
   },
 };
-let previous: PropertyDescriptor | undefined;
-beforeAll(() => {
-  previous = Object.getOwnPropertyDescriptor(globalThis.navigator, 'locks');
-  Object.defineProperty(globalThis.navigator, 'locks', { value: locks, configurable: true });
-});
-afterAll(() => {
-  if (previous === undefined) delete (globalThis.navigator as { locks?: unknown }).locks;
-  else Object.defineProperty(globalThis.navigator, 'locks', previous);
-});
+useNavigatorLocks(locks);
 
 let n = 0;
 const fresh = (): string => `pearljs-test-${++n}`;

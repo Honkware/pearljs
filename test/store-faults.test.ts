@@ -310,6 +310,8 @@ describe('file store lock under a takeover', () => {
     let other: Awaited<ReturnType<typeof createFileStore>> | undefined;
     // Another process opens the store with breakLock just before this one links its next revision, and clears the unfinished write.
     hooks.link = (fs, from, to) => {
+      // The second store links too; without this it would come back in here before `other` is set.
+      delete hooks.link;
       if (from.endsWith('.tmp') && other === undefined) other = createFileStore(path, { breakLock: true });
       fs.linkSync(from, to);
     };

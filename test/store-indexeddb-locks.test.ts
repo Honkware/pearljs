@@ -3,8 +3,9 @@
 // smoke test: a store reopened right after close failed with STORE_LOCKED.
 
 import 'fake-indexeddb/auto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { openIndexedDbStore } from '../src/index.js';
+import { useNavigatorLocks } from './navigator-locks.js';
 
 const held = new Set<string>();
 const locks = {
@@ -22,15 +23,7 @@ const locks = {
     );
   },
 };
-let previous: PropertyDescriptor | undefined;
-beforeAll(() => {
-  previous = Object.getOwnPropertyDescriptor(globalThis.navigator, 'locks');
-  Object.defineProperty(globalThis.navigator, 'locks', { value: locks, configurable: true });
-});
-afterAll(() => {
-  if (previous === undefined) delete (globalThis.navigator as { locks?: unknown }).locks;
-  else Object.defineProperty(globalThis.navigator, 'locks', previous);
-});
+useNavigatorLocks(locks);
 
 describe('IndexedDB store tab lock', () => {
   it('reopens at once after close, when the lock manager releases a task later', async () => {
