@@ -50,7 +50,9 @@
     "src/wif.ts",
     "src/ws.ts",
     "src/xmss.ts",
-    "src/xmss-file-store.ts"
+    "src/xmss-file-store.ts",
+    "src/mining.ts",
+    "src/gateway.ts"
   ],
   "tsconfig": "tsconfig.build.json",
   "out": "docs/api",
