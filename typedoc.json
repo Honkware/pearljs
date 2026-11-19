@@ -53,7 +53,8 @@
     "src/xmss.ts",
     "src/xmss-file-store.ts",
     "src/mining.ts",
-    "src/gateway.ts"
+    "src/gateway.ts",
+    "src/verify-proof.ts"
   ],
   "tsconfig": "tsconfig.build.json",
   "out": "docs/api",
