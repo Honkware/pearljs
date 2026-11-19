@@ -298,7 +298,8 @@ export function blockbookBackend(client: BlockbookClient, options: BlockbookBack
     await Promise.all(others.map(async (_, i) => {
       const theirs = await ask(i, (other) => other.getTransaction(txid).catch((err: unknown) => (isBlockbookNotFound(err) ? null : Promise.reject(err))));
       if (theirs?.blockHeight !== at.height || theirs.blockHash !== at.hash) {
-        throw disagree(i, `places ${txid} ${theirs === null ? 'nowhere' : `at height ${String(theirs.blockHeight)} in block ${String(theirs.blockHash)}`}, where the server places it at height ${at.height} in ${at.hash}`);
+        const where = theirs === null ? 'nowhere' : typeof theirs.blockHash !== 'string' ? 'in its mempool' : `at height ${String(theirs.blockHeight)} in block ${theirs.blockHash}`;
+        throw disagree(i, `places ${txid} ${where}, where the server places it at height ${at.height} in ${at.hash}`);
       }
     }));
     confirmed.set(key, true);
