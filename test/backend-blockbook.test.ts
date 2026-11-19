@@ -385,7 +385,7 @@ describe('cross-checked against other Blockbooks', () => {
       if (path === `api/v2/tx/${first.txid}`) return notFound(first.txid);
       const tx = /^api\/v2\/tx\/([0-9a-f]{64})$/.exec(path)?.[1];
       const reply = body as { vout?: { spent?: boolean; spentTxId?: string }[]; txids?: string[] };
-      if (tx !== undefined && funding.has(tx)) return { ...reply, vout: reply.vout!.map(({ spentTxId: _, ...out }) => ({ ...out, spent: true })) };
+      if (tx !== undefined && funding.has(tx)) return { ...reply, vout: reply.vout!.map((out) => ({ ...out, spent: true, spentTxId: undefined })) };
       return Array.isArray(reply.txids) ? { ...reply, txids: reply.txids.filter((txid) => txid !== first.txid) } : body;
     };
     const conflicts: unknown[] = [];
@@ -432,7 +432,7 @@ describe('cross-checked against other Blockbooks', () => {
       current: (path, body) => {
         if (path !== `api/v2/tx/${paid.getId()}`) return body;
         const reply = body as { vout: { spent?: boolean; spentTxId?: string }[] };
-        return { ...reply, vout: reply.vout.map(({ spent: _, spentTxId: __, ...out }) => out) };
+        return { ...reply, vout: reply.vout.map((out) => ({ ...out, spent: undefined, spentTxId: undefined })) };
       },
     });
     const outpoint = { txid: paid.getId(), vout: 0 };
