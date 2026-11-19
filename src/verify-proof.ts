@@ -85,7 +85,17 @@ interface Verifier {
   broken: boolean;
 }
 
-const besideModule: Locate = (asset) => new URL(`./verify-proof/${asset}`, import.meta.url);
+// One literal URL per asset: bundlers emit a file named in `new URL('literal', import.meta.url)`, and only that file.
+const besideModule: Locate = (asset) => {
+  switch (asset) {
+    case 'verifier.wasm':
+      return new URL('./verify-proof/verifier.wasm', import.meta.url);
+    case 'v2-cache.bin':
+      return new URL('./verify-proof/v2-cache.bin', import.meta.url);
+    case 'v4-cache.bin':
+      return new URL('./verify-proof/v4-cache.bin', import.meta.url);
+  }
+};
 let compiled: Promise<WebAssembly.Module> | null = null;
 let current: Promise<Verifier> | null = null;
 // What current resolved to, so a failed call can drop it before anything else runs.
