@@ -5,7 +5,6 @@
 // change, signs every input with account 0 of the phrase in the secrets file
 // named by PEARL_SIGNER_SECRETS, and writes the signed transaction's hex.
 import { readFileSync } from 'node:fs';
-import { Buffer } from 'node:buffer';
 import { checkPsbtPayment, deriveSigningAccountFromSeed, finalizePsbt, mnemonicToSeed, networks, parsePsbt, serializeTransaction } from 'pearljs';
 
 let input = '';
@@ -22,6 +21,6 @@ const summary = checkPsbtPayment(psbt, account.watchOnlyAccount(), {
   nextChangeIndex: request.nextChangeIndex,
 });
 for (let i = 0; i < psbt.inputCount; i += 1) account.signInput(psbt, i);
-const hex = Buffer.from(serializeTransaction(finalizePsbt(psbt))).toString('hex');
+const hex = serializeTransaction(finalizePsbt(psbt));
 account.destroy();
 process.stdout.write(JSON.stringify({ hex, sent: String(summary.sent), change: String(summary.change), fee: String(summary.fee) }));

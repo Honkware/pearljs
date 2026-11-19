@@ -12,6 +12,8 @@ let wallet: PearlWallet;
 describeTestnet('returning everything to the first address', () => {
   beforeAll(async () => {
     wallet = await openWallet();
+    // A test that failed between prepareSend and submitSigned leaves coins held.
+    for (const prepared of wallet.preparedSends()) await wallet.cancelPrepared(prepared.id);
     await wallet.sync();
   });
   afterAll(async () => {
