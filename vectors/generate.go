@@ -312,10 +312,12 @@ type Vectors struct {
 }
 
 // RecoveryWalletVector is a wallet Oyster's own code created from Input, as
-// its --createfromfile does (wallet/walletsetup.go): a valid BIP39 mnemonic
-// becomes bip39.NewSeed(Input, ""), anything else is read as a hex seed. Its
+// its --createfromfile does (wallet/walletsetup.go): the input is trimmed
+// with strings.TrimSpace, a valid BIP39 mnemonic then becomes
+// bip39.NewSeed(trimmed, ""), anything else is read as a hex seed. Its
 // addresses are the first ones Oyster's address manager hands out on the
-// receive and change branches of Account.
+// receive and change branches of Account. Kind "refused" is an input Oyster
+// takes as neither, with no wallet.
 type RecoveryWalletVector struct {
 	Name        string   `json:"name"`
 	Network     string   `json:"network"`
@@ -2466,6 +2468,18 @@ func recoveryVectors(nets []*chaincfg.Params) RecoveryVectors {
 		// so a double space or a newline makes another seed.
 		{"abandon-double-space", strings.Replace(abandon, " ", "  ", 1), 0},
 		{"abandon-newlines", strings.ReplaceAll(abandon, " about", "\nabout"), 0},
+		// strings.Fields splits on unicode.IsSpace, and NewSeed hashes the
+		// UTF-8 bytes as they are, with no NFKD.
+		{"abandon-no-break-space", strings.Replace(abandon, " ", "\u00a0", 1), 0},
+		{"abandon-ideographic-space", strings.Replace(abandon, " ", "\u3000", 1), 0},
+		{"abandon-em-space", strings.Replace(abandon, " ", "\u2003", 1), 0},
+		{"abandon-next-line", strings.Replace(abandon, " ", "\u0085", 1), 0},
+		{"abandon-tab", strings.Replace(abandon, " ", "\t", 1), 0},
+		{"abandon-crlf", strings.ReplaceAll(abandon, " about", "\r\nabout"), 0},
+		{"abandon-padded", " \u00a0\t" + abandon + "\u3000\r\n", 0},
+		{"abandon-padded-no-break-space", "\u00a0" + strings.Replace(abandon, " ", "\u00a0", 1) + " ", 0},
+		{"abandon-byte-order-mark", strings.Replace(abandon, " ", "\ufeff", 1), 0},
+		{"abandon-zero-width-space", strings.Replace(abandon, " ", "\u200b", 1), 0},
 		{"hex-seed", "000102030405060708090a0b0c0d0e0f", 0},
 		{"abandon-account-1", abandon, 1},
 	}
@@ -2479,12 +2493,17 @@ func recoveryVectors(nets []*chaincfg.Params) RecoveryVectors {
 				AccountPath: fmt.Sprintf("m/86'/%d'/%d'", params.HDCoinType, item.account),
 			}
 			var seed []byte
-			if bip39.IsMnemonicValid(item.input) {
+			trimmed := strings.TrimSpace(item.input)
+			if bip39.IsMnemonicValid(trimmed) {
 				vector.Kind = "mnemonic"
-				seed = bip39.NewSeed(item.input, "")
-			} else {
+				seed = bip39.NewSeed(trimmed, "")
+			} else if decoded, err := hex.DecodeString(strings.ToLower(trimmed)); err == nil {
 				vector.Kind = "hex"
-				seed = mustHex(item.input)
+				seed = decoded
+			} else {
+				vector.Kind = "refused"
+				out.Wallets = append(out.Wallets, vector)
+				continue
 			}
 			vector.Seed = hex.EncodeToString(seed)
 			vector.AccountXPub, vector.Receive, vector.Change = oysterWallet(params, seed, item.account, 3)

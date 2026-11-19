@@ -11,8 +11,9 @@
 // - Oyster's command line hashes the phrase as typed: --createfromfile takes
 //   it trimmed, the --create prompt trimmed and lowercased
 //   (wallet/walletsetup.go, wallet/internal/prompt/prompt.go). go-bip39
-//   validates with strings.Fields, so a double space or a line break passes
-//   and makes another seed.
+//   validates with strings.Fields, so any Unicode space between words
+//   passes, and hashes the raw bytes without NFKD, so each makes another
+//   seed.
 // - A hex seed of 16 to 64 bytes, used as the BIP32 seed itself.
 // - Accounts made with createnewaccount, m/86'/coin'/N', which a restore
 //   never scans.
@@ -44,7 +45,7 @@ import { discoverAccount, OYSTER_RECOVERY_WINDOW } from './discovery.js';
 import { PearlError } from './errors.js';
 import type { KeyOrigin, PearlAccount } from './keys.js';
 import { deriveAccountFromSeed, importWatchOnlyAccount } from './keys.js';
-import { normalizeMnemonic, parseSeedInput } from './mnemonic.js';
+import { normalizeMnemonic, parseSeedInput, validateMnemonic } from './mnemonic.js';
 import { customNetwork, networks } from './networks.js';
 import type { PearlNetwork } from './networks.js';
 import { xmssLeafScript } from './script.js';
@@ -212,15 +213,32 @@ function positive(value: number, name: string): number {
   return value;
 }
 
-/** The phrase as Oyster's command line would hash it, or null when go-bip39 would refuse it. */
+// Go's unicode.IsSpace, which strings.TrimSpace and strings.Fields split on.
+// JS's \s differs: it adds U+FEFF and leaves out U+0085.
+const GO_SPACE = '\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000';
+const GO_TRIM = new RegExp(`^[${GO_SPACE}]+|[${GO_SPACE}]+$`, 'g');
+const GO_FIELDS = new RegExp(`[${GO_SPACE}]+`);
+
+/**
+ * The phrase as Oyster's command line hashes it: --createfromfile takes
+ * strings.TrimSpace of the input, the --create prompt strings.ToLower of
+ * that, and either is used only when go-bip39's IsMnemonicValid accepts it.
+ */
 function asTyped(raw: string): string[] {
-  const trimmed = raw.trim();
-  // go-bip39 splits with strings.Fields and looks words up case-sensitively.
-  const fieldsValid = (text: string): boolean => {
-    const words = text.split(/\s+/);
-    return [12, 15, 18, 21, 24].includes(words.length) && words.every((word) => wordlist.includes(word));
+  const trimmed = raw.replace(GO_TRIM, '');
+  // strings.ToLower maps U+0130 to a plain i, where JS adds a combining dot.
+  const lowered = trimmed.replace(/\u0130/g, 'i').toLowerCase();
+  // go-bip39 splits with strings.Fields, looks words up case-sensitively and checks the checksum.
+  const goValid = (text: string): boolean => {
+    const words = text.split(GO_FIELDS).filter((word) => word !== '');
+    return words.every((word) => wordlist.includes(word)) && validateMnemonic(words.join(' '));
   };
-  return [trimmed, trimmed.toLowerCase()].filter((text, i, all) => all.indexOf(text) === i && fieldsValid(text));
+  return [trimmed, lowered].filter((text, i, all) => all.indexOf(text) === i && goValid(text));
+}
+
+/** bip39.NewSeed in go-bip39 v1.1.0: PBKDF2 over the UTF-8 bytes as they are, with no NFKD. */
+function goBip39Seed(phrase: string): Uint8Array {
+  return pbkdf2(sha512, encoder.encode(phrase), encoder.encode('mnemonic'), { c: 2048, dkLen: 64 });
 }
 
 function bip39Seed(phrase: string, passphrase: string): Uint8Array {
@@ -547,17 +565,19 @@ export async function diagnoseSeed(
     add(Uint8Array.from(input), 'seed', true);
   } else if (typeof input === 'string') {
     const parsed = parseSeedInput(input);
-    if (parsed.kind === 'invalid') {
+    const typed = asTyped(input);
+    if (parsed.kind === 'invalid' && typed.length === 0) {
       const reason = parsed.reason.endsWith('is not a BIP39 word') ? 'a word is not in the BIP39 list' : parsed.reason;
       throw new PearlError('SEED_INVALID', `invalid seed: ${reason}`);
     }
     if (parsed.kind === 'hex') {
       add(parsed.seed, 'hex', true);
     } else {
-      add(parsed.seed, 'oyster', true);
-      for (const typed of asTyped(input)) add(bip39Seed(typed, ''), 'as-typed', false);
+      // A space only Go splits on (U+0085) leaves the desktop wallet nothing to restore.
+      if (parsed.kind === 'mnemonic') add(parsed.seed, 'oyster', true);
+      for (const text of typed) add(goBip39Seed(text), 'as-typed', false);
       for (const [i, passphrase] of (options.passphrases ?? []).entries()) {
-        if (passphrase !== '') add(bip39Seed(normalizeMnemonic(input), passphrase), 'passphrase', false, i);
+        if (passphrase !== '' && parsed.kind === 'mnemonic') add(bip39Seed(normalizeMnemonic(input), passphrase), 'passphrase', false, i);
       }
     }
   } else {

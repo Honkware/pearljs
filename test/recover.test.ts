@@ -24,6 +24,7 @@ import {
   PearlError,
   PearlWallet,
   seedFromInput,
+  validateMnemonic,
 } from '../src/index.js';
 import type { PearlNetwork, WalletBackend } from '../src/index.js';
 import { SimulatedChain } from '../src/testing.js';
@@ -40,10 +41,13 @@ describe("Oyster's derivations", () => {
     expect(vectors.recovery.recoveryWindow).toBe(OYSTER_RECOVERY_WINDOW);
   });
 
-  for (const expected of vectors.recovery.wallets) {
+  for (const expected of vectors.recovery.wallets.filter((item) => item.kind !== 'refused')) {
     it(`derives the first addresses Oyster hands out for ${expected.name} on ${expected.network}`, () => {
       const network = byName(expected.network);
-      if (expected.input.trim() === normalizeMnemonic(expected.input) || expected.kind === 'hex') {
+      if (!validateMnemonic(expected.input) && expected.kind !== 'hex') {
+        // A space the desktop wallet does not split on.
+        expect(() => seedFromInput(expected.input)).toThrow();
+      } else if (expected.input.trim() === normalizeMnemonic(expected.input) || expected.kind === 'hex') {
         expect(bytesToHex(seedFromInput(expected.input))).toBe(expected.seed);
       } else {
         // Oyster hashed the phrase with its odd whitespace; the desktop wallet would not.
@@ -62,8 +66,8 @@ describe("Oyster's derivations", () => {
       } else {
         expect(account.extendedPublicKey()).toBe(expected.accountXpub);
       }
-      expect(expected.receive.map((_, i) => account.deriveAddress(i))).toEqual(expected.receive);
-      expect(expected.change.map((_, i) => account.deriveAddress(i, true))).toEqual(expected.change);
+      expect(expected.receive!.map((_, i) => account.deriveAddress(i))).toEqual(expected.receive);
+      expect(expected.change!.map((_, i) => account.deriveAddress(i, true))).toEqual(expected.change);
     });
   }
 
@@ -98,6 +102,30 @@ function chainWithFunds(): { chain: SimulatedChain; network: PearlNetwork } {
 }
 
 describe('diagnoseSeed', () => {
+  for (const expected of vectors.recovery.wallets.filter((item) => item.network === 'mainnet' && item.kind !== 'hex' && item.account === 0)) {
+    it(`finds the wallet Oyster's --createfromfile makes from ${expected.name}${expected.kind === 'refused' ? ', which Oyster refuses' : ''}`, async () => {
+      const chain = new SimulatedChain();
+      const desktopSeed = validateMnemonic(expected.input) ? bytesToHex(seedFromInput(expected.input)) : null;
+      if (expected.kind === 'refused' && desktopSeed === null) {
+        await expect(diagnoseSeed(expected.input, chain)).rejects.toMatchObject({ code: 'SEED_INVALID' });
+        return;
+      }
+      if (expected.kind === 'refused') {
+        const report = await diagnoseSeed(expected.input, chain, { gap: 2, accounts: 1, otherCoinType: false });
+        expect(report.variants.map((v) => v.variant.source)).toEqual(['oyster']);
+        return;
+      }
+      chain.pay(deriveAccountFromSeed(hexToBytes(expected.seed), chain.network).deriveAddress(0), parsePearl('1'));
+      chain.mine();
+      const report = await diagnoseSeed(expected.input, chain, { gap: 2, accounts: 1, otherCoinType: false });
+      expect(report.recommended!.receive.used.map((child) => child.index)).toEqual([0]);
+      expect(report.recommended!.variant.source).toBe(desktopSeed === expected.seed ? 'oyster' : 'as-typed');
+      // Two variants are merged only when their seeds are equal.
+      const seeds = new Set([desktopSeed, expected.seed].filter((seed) => seed !== null));
+      expect(report.variants.map((v) => v.variant.source)).toEqual(seeds.size === 2 ? ['oyster', 'as-typed'] : desktopSeed === null ? ['as-typed'] : ['oyster']);
+    });
+  }
+
   it('finds coins past the recovery window, on other accounts, coin types and as-typed phrases, and says why', async () => {
     const { chain, network } = chainWithFunds();
     const seed = mnemonicToSeed(ABANDON);

@@ -12080,6 +12080,190 @@
         ]
       },
       {
+        "name": "abandon-no-break-space",
+        "network": "mainnet",
+        "input": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "kind": "mnemonic",
+        "seed": "c7ad9131901e6d36031ba9f0289ca9f3eae574dff10f0736b977ca2f8494e84e87c060290677601790b015d100a05d4dccc83d54595ea13242632be5644eb0e9",
+        "account": 0,
+        "accountPath": "m/86'/808276'/0'",
+        "accountXpub": "zpub6rncqM9VepsN5phNRoWo8jjsoy2KnKXqxbuLKEZ9jH3Te1UYPsMBiaKMee63wgf6Sx35p91wJ5SEyrsmWjwPLGMKgaRKqsA1qLX62xgAhT5",
+        "receive": [
+          "prl1p0lp88jywa8cajnzrkpz3z0y6q7uj0q6u9tlhp48ums07cn6d5gmqyfxsd9",
+          "prl1p7r0zwqgvuay7ccwwqvuze5ypw3h2zuc0d07j5m7untdq8nrm6lrqf3aq9x",
+          "prl1pquwfy90q9cuz63zmpvue9yfj3upphv08rhvjg760tla7qdk4vh9sejrhtn"
+        ],
+        "change": [
+          "prl1pepnayfm7p5ulvqxk7zs5m6qd22e2n6dvs3tzak5luyfzhdk9wm0s2lywqw",
+          "prl1pw3fzp3r3ardqtml7788ln0d3437dy2e280wjmlqwas98zcxtxrasyh80uw",
+          "prl1p70pt0alk83xnn256twq3r6zvttzhuvg79lzwdt9rp799n9y48ytqylna8g"
+        ]
+      },
+      {
+        "name": "abandon-ideographic-space",
+        "network": "mainnet",
+        "input": "abandon　abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "kind": "mnemonic",
+        "seed": "9a648ca4d21cba8ca42bebe01fed8b6675b4d18e3975c60a7f16f52cc8be9c8f8140a0fcce38bd0c93e4ec83586e14f1e6725182e0a331d6fe427b920e407b83",
+        "account": 0,
+        "accountPath": "m/86'/808276'/0'",
+        "accountXpub": "zpub6rsgUKE8j9xwPM8q2nz4FhkdzvXocYU3pTKRdGxJXphujE1kfaHSpyq8GkqCeeqv7GveToxokfCwN1N4DT92UNjdxNZDe2pUeCgkcoxK9CA",
+        "receive": [
+          "prl1pwuzkzdlaw2agr4p2yex0z8ctqcjwsullz5nvneelxq87dqljuums5th0ef",
+          "prl1pwpnv44zxa09lynaz0y84wmlrtnfy9d4xvy45fqx35rmwtxnvtl9spxtumm",
+          "prl1pt9rcvdmpltktg6epdg9mlxp4tmmf9nt7n6mhmnp3m0u7avzeen2sze4c23"
+        ],
+        "change": [
+          "prl1p6qhks0z39y0lrcfnymgylaww9tx0yjt9q04j2gk3x553dnw2083sv65hw3",
+          "prl1pygx97rjrspr2lku89ggp86dk8nr40vaxzesc0h9hd8grwvjtt0rq4mwk5t",
+          "prl1p8f0lu5ct0rt3crv4fw8pmysqjf0reydjxn3xmztwu3rca2mvktjsfh7jqc"
+        ]
+      },
+      {
+        "name": "abandon-em-space",
+        "network": "mainnet",
+        "input": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "kind": "mnemonic",
+        "seed": "13815fd81c1dd01e735929d03935180e36d9977a43b090295bfdb3c69dfd09e969d794f370933f1accc2b668c6fb59536615f72072af34212be16d48d36d6c80",
+        "account": 0,
+        "accountPath": "m/86'/808276'/0'",
+        "accountXpub": "zpub6rzGoYqqpoPm2Vvo7HPERb9NbzvbztPkM6oyaCFiN28h6odX1ZUddjztU62Ni26318iHG9FWjUPXHgaAWymXaVBgbrDGHHNzWrBQhvCByux",
+        "receive": [
+          "prl1p6kky3q0gnz8gqlsjz68eqy8t6z6ul3krvqjmmvveyhu9r3rg7y4sna5q5z",
+          "prl1ppt028vwwmjd6hfz7mgsmhu47hrmpa35czrlhps4t4xnsr673juvszxkmgn",
+          "prl1ppnq0ls5dls0dgs0hwfx5fxtp8jhrz6v4zmfes95hdvsgmz7shggq6kheuk"
+        ],
+        "change": [
+          "prl1pqk7npk9r7h9wnqvgmjxej2ue0ncsd2rjg8hay5cq464ac4pcwx9s3m56sp",
+          "prl1p2jcn9e5ug2mta995e44sngtq590xyazkddl4kssprusep8lgqleqtpjnu0",
+          "prl1pxfv8hwu4ft0tqd73e65c9hplsdprnapp3uk0chnsl46sufesrzhq4nw9we"
+        ]
+      },
+      {
+        "name": "abandon-next-line",
+        "network": "mainnet",
+        "input": "abandonabandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "kind": "mnemonic",
+        "seed": "4b94c1c9beed5fa0b61c3bd83df54565abbf1b2cfaa6bf285a2dd28de559db7289977af9eb58a47c3ad1cd10edcd70d36b30e72661b1aed98942ba6368d137fb",
+        "account": 0,
+        "accountPath": "m/86'/808276'/0'",
+        "accountXpub": "zpub6qVvpDD2dVY5daQhBjNREFaZK9MPwcVtsS6sYs1ePKJXiJuPskXqsuN61eD9ix6Mj5XPEddNw4AP6drGd4ESiAb43JvjUeknn4UARNNy1y4",
+        "receive": [
+          "prl1pfwq9srt7t0eee9a0pdshwjuvpc7mtt8kapvegs930ldkh3ld9mxq07ctwd",
+          "prl1pckag2265h4fu73t9l4w53k3aq43tmeev0gujf6xaepj5ccrnextscnc625",
+          "prl1p07fa7zy4fze4sy9c9fa9uyqsmd0kclcqycx0qd3d8pt7dqt9tr5spl0sms"
+        ],
+        "change": [
+          "prl1prl2udnu9stw4arjjjsnfu2ekujnjswuts2ztp5l5r88uyyc99xusyfw9qp",
+          "prl1pvl6zzyszz43wmvmqgs2rtgxj65ucp5k2f60sgk07zdvx64f8snls3kmpul",
+          "prl1p8h2rr3rjdhaezscr7lazvpj6wtnzddz7x7nkafk43zzh4pdd420sp78pg7"
+        ]
+      },
+      {
+        "name": "abandon-tab",
+        "network": "mainnet",
+        "input": "abandon\tabandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "kind": "mnemonic",
+        "seed": "b64b62cea06da200810d6fd975b5ffde65aec53b56495b4114e45f0113d3fc2734a2e75546cdd7d3c7674cd1f1969ea92edac9ee6b99ec0ba8e18a78bafcc88f",
+        "account": 0,
+        "accountPath": "m/86'/808276'/0'",
+        "accountXpub": "zpub6rA6Cnxdws4p13VLRuiUMyQM1bWFTn1j45ETDQedSU8aSCXczk23JBiovwhq3s2Z6uaKtb5pmWLiu4Vv544CyUYHgk7QquJV4h4zzwFDNKg",
+        "receive": [
+          "prl1p4kv0sssxdg7tpryy7k785enyqwkv74ja2zxy4p60l4qyad48jw4qxdsc03",
+          "prl1p79utgg53xdakn4cy0r3jgt87q756wrc9uxqvfs2tax52h4vxc23s0feurj",
+          "prl1ptfp4p0xy285mcvzmt8fd75ttnut7yl2qunk08ve0luqe9pkhpkashsn3hc"
+        ],
+        "change": [
+          "prl1pepkuux2tkffq0902ytx2k0fxz4sqmr5mamnc7zsp8za39e9szjesr2z6yz",
+          "prl1psgxjpswqxgx3z57mcj8969y8a8ycpe6u6vuxcgrmrlu6wnd5wdjqlpw3cs",
+          "prl1p55pq6c65kyhx89rwzjw7dqs5d4fpjfqlygw5cyly75n60kqeh2zsn778g3"
+        ]
+      },
+      {
+        "name": "abandon-crlf",
+        "network": "mainnet",
+        "input": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon\r\nabout",
+        "kind": "mnemonic",
+        "seed": "07f7cc1a19c0ae92834794fa2429a63a805fd317216ee1929f23c1c2f7d2ee3a6027034b43e5750bc233142ac6a036510e008d0d55d525c51c726a7bddc9eda4",
+        "account": 0,
+        "accountPath": "m/86'/808276'/0'",
+        "accountXpub": "zpub6rD11nKjuW6DBDCjmuZXxsR2Wn8oLgGyRxtmaoHqYSJfQCVSf45iE3SQeoFgrB63iBwVN74TtbjBZcsBU5VCzTqvwdniwLVQGjBRLBZLb87",
+        "receive": [
+          "prl1p5tfu6rg3h9fg2ecp44n3eg6jq74upyc6tmwn2emdmjrnwpf300fsrj9s37",
+          "prl1pcluffn2w8qauks8h43nnyh6mu4uvqdgk3efd4vw46j625fd04fqqy978gd",
+          "prl1py3wr4fzreumjjm9uupwxdn2h5kckvw5h83yy54t2xwpa5cwpkfnsysle59"
+        ],
+        "change": [
+          "prl1pc797dy39uadj38328d7qy3khz6lgzxld9mmthctjwj08066jrn8s7mlvru",
+          "prl1pm000rtkfz4pmskzhwqmuh2wwk2hn6p3x8xgahcv2cq8m5nt2xn5qd5w2wy",
+          "prl1p3m644k9fndmmmsu6ry62xavn33wed9m8ke5dvmpmtr4evh6vv3zq4uzcj7"
+        ]
+      },
+      {
+        "name": "abandon-padded",
+        "network": "mainnet",
+        "input": "  \tabandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about　\r\n",
+        "kind": "mnemonic",
+        "seed": "5eb00bbddcf069084889a8ab9155568165f5c453ccb85e70811aaed6f6da5fc19a5ac40b389cd370d086206dec8aa6c43daea6690f20ad3d8d48b2d2ce9e38e4",
+        "account": 0,
+        "accountPath": "m/86'/808276'/0'",
+        "accountXpub": "zpub6s66goCpFBSqGDZyyD6a1Xf8C5TseQYcPFQNpjMzFeTCZpZD6ShaEzAKqv8tDiv81N1RmPyRTu1D65iQv59c7wHZyCbQmnaARE7P6UFNJeG",
+        "receive": [
+          "prl1pr6yuq8u2r95wjzzgpdy8cpnncpl7l8zgy6x5q0367pnc53s2famqg7pt74",
+          "prl1pyx3nlscz8rvsxqhcjtyqt2g5szuk9ss7m5saszu3afwwhvn9zp2sz62rhm",
+          "prl1pfrfqcvcmghjc3mpsazm9p9ktttyuewzlfmn40dzkwh0muejgkr3sfx9jwd"
+        ],
+        "change": [
+          "prl1puwagcza86exfh3cx6ur08wq7njc32e66ep0zje7le6c7cak8lqeq655gqa",
+          "prl1padwhxxehrnsjfw6dvfygwk7m8z486q75el0j097znrvss24434rsgfnu5u",
+          "prl1pafzs04tn3qkgf4dcl7y5mh4arzvc3ks4nwewaffkdakps5vz73jswj4flx"
+        ]
+      },
+      {
+        "name": "abandon-padded-no-break-space",
+        "network": "mainnet",
+        "input": " abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about ",
+        "kind": "mnemonic",
+        "seed": "c7ad9131901e6d36031ba9f0289ca9f3eae574dff10f0736b977ca2f8494e84e87c060290677601790b015d100a05d4dccc83d54595ea13242632be5644eb0e9",
+        "account": 0,
+        "accountPath": "m/86'/808276'/0'",
+        "accountXpub": "zpub6rncqM9VepsN5phNRoWo8jjsoy2KnKXqxbuLKEZ9jH3Te1UYPsMBiaKMee63wgf6Sx35p91wJ5SEyrsmWjwPLGMKgaRKqsA1qLX62xgAhT5",
+        "receive": [
+          "prl1p0lp88jywa8cajnzrkpz3z0y6q7uj0q6u9tlhp48ums07cn6d5gmqyfxsd9",
+          "prl1p7r0zwqgvuay7ccwwqvuze5ypw3h2zuc0d07j5m7untdq8nrm6lrqf3aq9x",
+          "prl1pquwfy90q9cuz63zmpvue9yfj3upphv08rhvjg760tla7qdk4vh9sejrhtn"
+        ],
+        "change": [
+          "prl1pepnayfm7p5ulvqxk7zs5m6qd22e2n6dvs3tzak5luyfzhdk9wm0s2lywqw",
+          "prl1pw3fzp3r3ardqtml7788ln0d3437dy2e280wjmlqwas98zcxtxrasyh80uw",
+          "prl1p70pt0alk83xnn256twq3r6zvttzhuvg79lzwdt9rp799n9y48ytqylna8g"
+        ]
+      },
+      {
+        "name": "abandon-byte-order-mark",
+        "network": "mainnet",
+        "input": "abandon﻿abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "kind": "refused",
+        "seed": "",
+        "account": 0,
+        "accountPath": "m/86'/808276'/0'",
+        "accountXpub": "",
+        "receive": null,
+        "change": null
+      },
+      {
+        "name": "abandon-zero-width-space",
+        "network": "mainnet",
+        "input": "abandon​abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        "kind": "refused",
+        "seed": "",
+        "account": 0,
+        "accountPath": "m/86'/808276'/0'",
+        "accountXpub": "",
+        "receive": null,
+        "change": null
+      },
+      {
         "name": "hex-seed",
         "network": "mainnet",
         "input": "000102030405060708090a0b0c0d0e0f",
