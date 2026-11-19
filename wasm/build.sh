@@ -5,6 +5,7 @@
 #                  for wasm32-unknown-unknown and optimized with wasm-opt
 #   v2-cache.bin   the V2 and V3 circuit cache, from zk-pow's build_cache
 #   v4-cache.bin   the V4 verifier setups, from zk-pow's build_cache
+#   LICENSES.txt   the licences of the crates compiled into verifier.wasm
 #
 # from a checkout of Pearl's fp8-scheme branch:
 #
@@ -35,6 +36,8 @@ rm -rf "$here/target/bindgen"
 wasm-bindgen --target web --no-typescript --out-dir "$here/target/bindgen" target/wasm32-unknown-unknown/release/pearljs_verify_proof.wasm
 wasm-opt -O3 --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals \
   --enable-reference-types --enable-multivalue "$here/target/bindgen/pearljs_verify_proof_bg.wasm" -o "$out/verifier.wasm"
+
+python3 "$here/licenses.py" "$pearl" "$out/LICENSES.txt"
 
 if [ "${1:-}" != "--no-caches" ]; then
   cargo build --locked --release -p zk-pow --no-default-features --bin build_cache

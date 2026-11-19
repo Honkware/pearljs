@@ -26,3 +26,7 @@ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+Proof verifier
+
+dist/verify-proof/verifier.wasm, which pearljs/verify-proof loads, is compiled from Rust: zk-pow and pearl-blake3 from Pearl's fp8-scheme branch (commit 1dd75a52e073b4a67079c7b6758228d71865ccea), under the ISC License above, with the changes in wasm/patches; Pearl's fork of plonky2 and starky, under the MIT License (Copyright (c) 2022-2025 The Plonky2 Authors, Copyright (c) 2025-2026 Pearl Research Labs) or the Apache License 2.0; and crates from crates.io under the terms each names, MIT, Apache-2.0, BSD-2-Clause, Zlib, Unlicense, CC0-1.0, MIT-0 and Unicode-3.0 among them. dist/verify-proof/LICENSES.txt holds the licence text each of those crates ships, and wasm/licenses.py writes it from the build's dependency graph. v2-cache.bin and v4-cache.bin beside it are the verifier setups zk-pow's build_cache generates from the same source.

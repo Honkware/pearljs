@@ -70,7 +70,12 @@ ok(`${files.length} files packed, ${(JSON.parse(run('npm', ['pack', '--dry-run',
 const dir = installTarball(tarball);
 const specs = ['pearljs', ...Object.keys(pkg.exports).filter((s) => s !== '.' && s !== './package.json').map((s) => `pearljs/${s.slice(2)}`)];
 
-// 3. Node ESM import of every subpath, and require().
+// 3. Node ESM import of every subpath, and require(). The proof verifier reads its packed files.
+const proofVectors = JSON.parse(readFileSync(join(root, 'vectors/mining/proofs.json'), 'utf8'));
+writeFileSync(
+  join(dir, 'proofs.json'),
+  JSON.stringify(['V3 dense', 'V4 B200'].map((name) => ({ ...proofVectors.cases.find((c) => c.name === name), proof: proofVectors.proofs[name] }))),
+);
 writeFileSync(
   join(dir, 'esm.mjs'),
   `const specs = ${JSON.stringify(specs)};
@@ -80,6 +85,17 @@ for (const s of specs) {
 const root = await import('pearljs');
 for (const [name, value] of Object.entries(root)) if (value === undefined) throw new Error(name + ' is undefined');
 console.log('esm', specs.length, 'specifiers,', Object.keys(root).length, 'root exports');
+if (Object.keys(root).some((name) => name.toLowerCase().includes('proof') && name.toLowerCase().includes('verif'))) throw new Error('the root entry exports the proof verifier');
+const { verifyProof } = await import('pearljs/verify-proof');
+const { parseBlockHeader } = await import('pearljs/blockheader');
+const { readFileSync } = await import('node:fs');
+for (const c of JSON.parse(readFileSync('proofs.json', 'utf8'))) {
+  const unhex = (h) => Uint8Array.from(Buffer.from(h, 'hex'));
+  const certificate = { version: c.certificate.version, hash: unhex(c.certificate.hash), publicData: unhex(c.certificate.publicData), proof: unhex(c.proof), ancestorHeaders: [] };
+  const verdict = await verifyProof(parseBlockHeader(unhex(c.header)), certificate);
+  if (!verdict.valid) throw new Error(c.name + ': ' + verdict.message);
+}
+console.log('verify-proof verified V3 and V4 proofs from the packed files');
 `,
 );
 try {
@@ -124,7 +140,7 @@ try {
 for (const node of nodes) {
   try {
     process.stdout.write(run(node, ['cjs.cjs'], { cwd: dir }));
-    ok(`require() of the ESM package, keys (WebAssembly) and xmss under ${node === process.execPath ? 'the running Node' : node}`);
+    ok(`require() of the ESM package, keys (WebAssembly), xmss and verify-proof under ${node === process.execPath ? 'the running Node' : node}`);
   } catch {
     fail(`require() of the ESM package under ${node}`);
   }
@@ -218,6 +234,7 @@ for (const spec of light) {
   const [output] = Object.values(result.metafile.outputs);
   const inputs = Object.entries(output.inputs).filter(([, v]) => v.bytesInOutput > 0).map(([k]) => k);
   const secp = inputs.filter((i) => i.includes('tiny-secp256k1'));
+  if (inputs.some((i) => i.includes('verify-proof'))) fail(`${spec} pulls in pearljs/verify-proof`);
   if (spec === 'pearljs/keys') {
     // Control: the check must be able to see tiny-secp256k1 when it is used.
     if (secp.length) ok('control: pearljs/keys does include tiny-secp256k1');
