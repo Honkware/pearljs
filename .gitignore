@@ -6,3 +6,5 @@ coverage/
 .env
 .check-docs/
 docs/api/
+wasm/target/
+wasm/vendor/

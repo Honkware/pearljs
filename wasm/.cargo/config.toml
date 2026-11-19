@@ -1,0 +1,4 @@
+# getrandom 0.3 (through rand 0.9) has no default source on wasm32-unknown-unknown;
+# this selects its WebCrypto backend, the one getrandom 0.2 already uses here.
+[target.wasm32-unknown-unknown]
+rustflags = ["--cfg", 'getrandom_backend="wasm_js"']

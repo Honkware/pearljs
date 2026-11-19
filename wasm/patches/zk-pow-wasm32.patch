@@ -1,0 +1,57 @@
+--- src/v1/circuit/chip/blake3/program.rs
++++ src/v1/circuit/chip/blake3/program.rs
+@@ -289,7 +289,7 @@
+                 | (is_last_in_chunk as u8 * (B3F_CHUNK_END | root_flag));
+             let tweak = Blake3Tweak {
+                 counter_low: chunk_idx as u32,
+-                counter_high: (chunk_idx >> 32) as u16,
++                counter_high: ((chunk_idx as u64) >> 32) as u16,
+                 block_len: block_len as u32,
+                 flags: flags.into(),
+             };
+--- src/v1/circuit/circuit_utils.rs
++++ src/v1/circuit/circuit_utils.rs
+@@ -288,7 +288,8 @@
+                 .read_bytes(chunk_len)
+                 .map_err(|_| anyhow::anyhow!("unexpected end of cache data"))?;
+ 
+-            let key_size = size_of::<FirstCircuitKey>();
++            // bincode writes each of the five usize fields as a u64, whatever the target.
++            let key_size = 5 * size_of::<u64>();
+             let key: FirstCircuitKey = bincode::deserialize(
+                 chunk
+                     .get(..key_size)
+--- src/v2/circuit/chip/blake3/program.rs
++++ src/v2/circuit/chip/blake3/program.rs
+@@ -390,7 +390,7 @@
+                 | (is_last_in_chunk as u8 * (B3F_CHUNK_END | root_flag));
+             let tweak = Blake3Tweak {
+                 counter_low: chunk_idx as u32,
+-                counter_high: (chunk_idx >> 32) as u16,
++                counter_high: ((chunk_idx as u64) >> 32) as u16,
+                 block_len: block_len as u32,
+                 flags: flags.into(),
+             };
+--- src/v2/circuit/circuit_utils.rs
++++ src/v2/circuit/circuit_utils.rs
+@@ -288,7 +288,8 @@
+                 .read_bytes(chunk_len)
+                 .map_err(|_| anyhow::anyhow!("unexpected end of cache data"))?;
+ 
+-            let key_size = size_of::<FirstCircuitKey>();
++            // bincode writes each of the five usize fields as a u64, whatever the target.
++            let key_size = 5 * size_of::<u64>();
+             let key: FirstCircuitKey = bincode::deserialize(
+                 chunk
+                     .get(..key_size)
+--- src/v4/circuit/chip/blake3/program.rs
++++ src/v4/circuit/chip/blake3/program.rs
+@@ -637,7 +637,7 @@
+                 | (is_last_in_chunk as u8 * (B3F_CHUNK_END | root_flag));
+             let tweak = Blake3Tweak {
+                 counter_low: chunk_idx as u32,
+-                counter_high: (chunk_idx >> 32) as u16,
++                counter_high: ((chunk_idx as u64) >> 32) as u16,
+                 block_len: block_len as u32,
+                 flags: flags.into(),
+             };
