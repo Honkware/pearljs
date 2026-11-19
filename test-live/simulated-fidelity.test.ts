@@ -17,6 +17,9 @@ import {
   feeForVsize,
   finalizePsbt,
   mnemonicToSeed,
+  blockHash,
+  certificateAncestorHeader,
+  checkCertificateBinding,
   parseBlock,
   parseTransaction,
   PearlRpcError,
@@ -73,7 +76,7 @@ function realSide(): Side {
 }
 
 function simulatedSide(height: number): Side {
-  const chain = new SimulatedChain({ premine: height });
+  const chain = new SimulatedChain({ network, premine: height });
   const ws = new PearlWsClient({ url: 'ws://simulated', WebSocket: chain.WebSocket });
   const coinbaseTo = miner.deriveAddress(0);
   return {
@@ -232,5 +235,27 @@ describeLive('the simulated chain against pearld', () => {
     expect(differences).toEqual([]);
     // The script reached every kind of answer it was written for.
     expect(fromNode.filter((outcome) => !outcome.accepted).map((outcome) => outcome.code).sort()).toEqual([-25, -25, -25, -25, -25, -26, -26, -26, -26, -26, -26, -27]);
+  });
+
+  it('mines certificates of the version, shape and binding pearld mines at the same height', async () => {
+    const height = await pearld.getBlockCount();
+    const chain = new SimulatedChain({ network, premine: height });
+    chain.mine(1);
+    await mine(1);
+    const shape = (block: ReturnType<typeof parseBlock>) => {
+      const certificate = block.certificate!;
+      const ancestor = certificateAncestorHeader(certificate);
+      return {
+        version: certificate.version,
+        publicData: certificate.publicData.length,
+        ancestorHeaders: certificate.ancestorHeaders?.length,
+        keyedByParent: ancestor === null ? null : Buffer.from(blockHash(ancestor)).equals(Buffer.from(block.header.prevBlock)),
+      };
+    };
+    const real = parseBlock(await pearld.getRawBlock(await pearld.getBlockHash(height + 1)));
+    const simulated = parseBlock(await chain.rpc.getRawBlock(await chain.rpc.getBlockHash(height + 1)));
+    expect(shape(simulated)).toEqual(shape(real));
+    checkCertificateBinding(real);
+    checkCertificateBinding(simulated);
   });
 });

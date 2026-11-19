@@ -56,14 +56,14 @@ describeLive('consensus data', () => {
       minted += paid - fees;
     }
     expect(withFees).toBeGreaterThan(10);
-    expect(versions).toEqual(new Set([3]));
+    expect(versions).toEqual(new Set([requiredCertVersion(network, 1)]));
     expect(minted).toBe(totalSupply(network, info.blocks));
     expect(difficultyForBits(tip!.header.bits, network)).toBe(await pearld.getDifficulty());
     expect(info.difficulty).toBe(difficultyForBits(tip!.header.bits, network));
 
     // A certificate of another version is refused in Pearl's words.
     expect(() => checkCertificateRules({ ...tip!.certificate!, version: 2 }, network, info.blocks)).toThrow(
-      `certificate version 2 is not allowed at height ${info.blocks} (require version 3)`,
+      `certificate version 2 is not allowed at height ${info.blocks} (require version ${requiredCertVersion(network, info.blocks)})`,
     );
   });
 

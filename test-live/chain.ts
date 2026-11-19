@@ -7,6 +7,7 @@ import { describe, expect, inject } from 'vitest';
 import {
   createPsbt,
   createTransaction,
+  customNetwork,
   deriveSigningAccountFromSeed,
   estimateVsize,
   feeForVsize,
@@ -36,7 +37,8 @@ export const pearld = pearldClient(live?.pearld ?? nowhere);
 export const limited = pearldClient(live?.pearld ?? nowhere, live?.limited);
 export const oyster = oysterClient(live?.oyster ?? nowhere);
 
-export const network = networks.regtest;
+/** Regtest as the suite's pearld runs it: without the FP8 fork when it was built from Pearl master. */
+export const network = live?.fp8 === false ? customNetwork(networks.regtest, { forkHeights: { fp8: 0 } }) : networks.regtest;
 
 // Every transaction a test puts to the suite's node through this client,
 // with sendrawtransaction or testmempoolaccept, is first judged by the script

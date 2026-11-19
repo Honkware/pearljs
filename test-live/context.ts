@@ -26,6 +26,8 @@ export interface LiveContext {
   oyster: LiveEndpoint | null;
   /** The run's temporary directory. */
   dir: string;
+  /** Whether pearld forks to V4 certificates on regtest, as Pearl's fp8-scheme branch does from height 1. */
+  fp8: boolean;
 }
 
 // Throwaway regtest wallets. Never fund these anywhere else.
@@ -58,13 +60,13 @@ export function oysterClient(endpoint: LiveEndpoint): OysterClient {
 /**
  * Mines n blocks with pearld's generate. Each block carries a real ZK
  * certificate on regtest, so blocks are mined in small batches to keep each
- * request well under fetch's timeouts.
+ * request well under fetch's timeouts: a V4 block takes some 20 seconds.
  */
 export async function mineBlocks(client: PearldClient, n: number): Promise<string[]> {
   const hashes: string[] = [];
   while (hashes.length < n) {
     try {
-      hashes.push(...(await client.call<string[]>('generate', [Math.min(10, n - hashes.length)])));
+      hashes.push(...(await client.call<string[]>('generate', [Math.min(5, n - hashes.length)])));
     } catch (error) {
       // A test that timed out leaves its generate running; wait for it instead of failing every test after it.
       if (!(error instanceof PearlRpcError) || !error.message.includes('already CPU mining')) throw error;

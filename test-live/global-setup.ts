@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { TestProject } from 'vitest/node';
-import { deriveSigningAccountFromSeed, mnemonicToSeed, networks } from '../src/index.js';
+import { deriveSigningAccountFromSeed, mnemonicToSeed, networks, parseBlock } from '../src/index.js';
 import { MINER_MNEMONIC, OYSTER_MNEMONIC, OYSTER_PASSPHRASE, mineBlocks, type LiveContext } from './context.js';
 import { startOyster, startPearld, type RunningPearld } from './processes.js';
 
@@ -86,12 +86,15 @@ export default async function setup(project: TestProject): Promise<() => Promise
     } else {
       console.warn('Skipping Oyster tests: set OYSTER to an oyster binary to run them.');
     }
+    // A pearld from Pearl's fp8-scheme branch mines V4 certificates from height 1, one from master V3.
+    const first = parseBlock(await node.client.getRawBlock(await node.client.getBlockHash(1)));
     project.provide('live', {
       pearld: node.endpoint,
       limited: node.limited,
       p2p: node.p2p,
       oyster: oyster?.endpoint ?? null,
       dir: root,
+      fp8: first.certificate?.version === 4,
     });
   } catch (error) {
     await teardown();
