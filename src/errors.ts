@@ -181,7 +181,8 @@ export type PearlErrorCode =
   // Mining
   | 'MINING_TEMPLATE_INVALID'
   | 'JACKPOT_ABOVE_TARGET'
-  | 'GATEWAY_MESSAGE_INVALID';
+  | 'GATEWAY_MESSAGE_INVALID'
+  | 'PROOF_VERIFIER_UNAVAILABLE';
 
 /** What toJSON returns and fromJSON reads. */
 export interface PearlErrorJson {

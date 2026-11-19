@@ -215,6 +215,10 @@
       "types": "./dist/gateway.d.ts",
       "default": "./dist/gateway.js"
     },
+    "./verify-proof": {
+      "types": "./dist/verify-proof.d.ts",
+      "default": "./dist/verify-proof.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
