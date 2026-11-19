@@ -84,6 +84,8 @@ export interface DerivationVariant {
   account: number | null;
   /** Oyster's pq=true addresses: the BIP86 key tweaked with a one-leaf XMSS tree. */
   pq: boolean;
+  /** For a passphrase variant, the passphrase's index in `passphrases`; null otherwise. */
+  passphraseIndex: number | null;
   /** Whether a wallet restored the way Oyster and the desktop wallet restore would scan this variant. */
   oysterScans: boolean;
 }
@@ -216,7 +218,15 @@ function variantId(prefix: string, path: string): string {
   return `${prefix} ${path}`;
 }
 
-function seedCandidates(seed: Uint8Array, source: DerivationSource, label: string, network: PearlNetwork, options: Required<Pick<SeedRecoveryOptions, 'accounts' | 'otherCoinType' | 'pqAddresses'>>): Candidate[] {
+function seedCandidates(
+  seed: Uint8Array,
+  source: DerivationSource,
+  passphraseIndex: number | null,
+  network: PearlNetwork,
+  options: Required<Pick<SeedRecoveryOptions, 'accounts' | 'otherCoinType' | 'pqAddresses'>>,
+): Candidate[] {
+  // The passphrase itself never goes into an id, only where it sits in the caller's list.
+  const label = passphraseIndex === null ? source : `${source}[${passphraseIndex}]`;
   const coinTypes = [network.coinType];
   if (options.otherCoinType) {
     const other = network.coinType === networks.mainnet.coinType ? networks.testnet.coinType : networks.mainnet.coinType;
@@ -237,6 +247,7 @@ function seedCandidates(seed: Uint8Array, source: DerivationSource, label: strin
           coinType,
           account: number,
           pq: false,
+          passphraseIndex,
           oysterScans: source !== 'as-typed' && source !== 'passphrase' && coinType === network.coinType && number === 0,
         },
         account,
@@ -269,7 +280,7 @@ function pqCandidate(seed: Uint8Array, source: DerivationSource, label: string, 
   const path = `m/86'/${network.coinType}'/0'`;
   const cache = new Map<string, string>();
   return {
-    variant: { id: variantId(`${label} pq`, path), source, accountPath: path, coinType: network.coinType, account: 0, pq: true, oysterScans: false },
+    variant: { id: variantId(`${label} pq`, path), source, accountPath: path, coinType: network.coinType, account: 0, pq: true, passphraseIndex: null, oysterScans: false },
     account: {
       deriveAddress(index: number, change = false): string {
         const key = `${change ? 1 : 0}/${index}`;
@@ -478,14 +489,14 @@ export async function diagnoseSeed(
   if (!Number.isInteger(settings.pqAddresses) || settings.pqAddresses < 0) throw new RangeError('pqAddresses must be a non-negative integer');
   const candidates: Candidate[] = [];
   const seen = new Set<string>();
-  const add = (seed: Uint8Array, source: DerivationSource, label: string, pq: boolean): void => {
+  const add = (seed: Uint8Array, source: DerivationSource, pq: boolean, passphraseIndex: number | null = null): void => {
     const key = toHex(seed);
     if (seen.has(key)) return;
     seen.add(key);
-    candidates.push(...seedCandidates(seed, source, label, network, { ...settings, pqAddresses: pq ? settings.pqAddresses : 0 }));
+    candidates.push(...seedCandidates(seed, source, passphraseIndex, network, { ...settings, pqAddresses: pq ? settings.pqAddresses : 0 }));
   };
   if (input instanceof Uint8Array) {
-    add(Uint8Array.from(input), 'seed', 'seed', true);
+    add(Uint8Array.from(input), 'seed', true);
   } else if (typeof input === 'string') {
     const parsed = parseSeedInput(input);
     if (parsed.kind === 'invalid') {
@@ -493,12 +504,12 @@ export async function diagnoseSeed(
       throw new PearlError('SEED_INVALID', `invalid seed: ${reason}`);
     }
     if (parsed.kind === 'hex') {
-      add(parsed.seed, 'hex', 'hex', true);
+      add(parsed.seed, 'hex', true);
     } else {
-      add(parsed.seed, 'oyster', 'oyster', true);
-      for (const typed of asTyped(input)) add(bip39Seed(typed, ''), 'as-typed', 'as-typed', false);
-      for (const passphrase of options.passphrases ?? []) {
-        if (passphrase !== '') add(bip39Seed(normalizeMnemonic(input), passphrase), 'passphrase', 'passphrase', false);
+      add(parsed.seed, 'oyster', true);
+      for (const typed of asTyped(input)) add(bip39Seed(typed, ''), 'as-typed', false);
+      for (const [i, passphrase] of (options.passphrases ?? []).entries()) {
+        if (passphrase !== '') add(bip39Seed(normalizeMnemonic(input), passphrase), 'passphrase', false, i);
       }
     }
   } else {
@@ -537,6 +548,7 @@ export async function diagnoseAccount(
           coinType,
           account: number,
           pq: false,
+          passphraseIndex: null,
           // A key without its origin is taken to be the account a restore scans.
           oysterScans: path === null || (coinType === backend.network.coinType && number === 0),
         },

@@ -204,6 +204,21 @@ describe('diagnoseSeed', () => {
     expect(withIt.reasons[0]!.message).toContain('BIP39 passphrase');
   });
 
+  it('names each passphrase variant by its place in the list, never by the passphrase', async () => {
+    const { chain, network } = chainWithFunds();
+    chain.pay(deriveAccountFromSeed(mnemonicToSeed(ABANDON, 'second'), network, 0).deriveAddress(0), parsePearl('1'));
+    chain.mine();
+    const report = await diagnoseSeed(ABANDON, chain, { gap: 2, accounts: 1, otherCoinType: false, passphrases: ['first', '', 'second'] });
+    expect(report.variants.map((v) => [v.variant.id, v.variant.passphraseIndex])).toEqual([
+      ["oyster m/86'/1'/0'", null],
+      ["passphrase[0] m/86'/1'/0'", 0],
+      ["passphrase[2] m/86'/1'/0'", 2],
+    ]);
+    expect(report.recommended!.variant.id).toBe("passphrase[2] m/86'/1'/0'");
+    expect(report.reasons.map((reason) => reason.variant)).toEqual(["passphrase[2] m/86'/1'/0'"]);
+    expect(JSON.stringify(report, (_, value: unknown) => (typeof value === 'bigint' ? String(value) : value))).not.toContain('second');
+  });
+
   it('finds Oyster pq=true addresses when asked to look at them', async () => {
     const { chain, network } = chainWithFunds();
     const seed = mnemonicToSeed(ABANDON);
