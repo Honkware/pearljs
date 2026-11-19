@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  coinbaseText,
   addressInfo,
   blockSubsidy,
   createTransaction,
@@ -25,6 +26,7 @@ import {
 import type { InputSpend, TxOutput } from '../src/index.js';
 import vectors from '../vectors/pearl-go.json' with { type: 'json' };
 import mainnetSpend from './fixtures/pr111-mainnet-xmss-spend.json' with { type: 'json' };
+import testnet2Blocks from './fixtures/testnet2-fp8-blocks.json' with { type: 'json' };
 import { bytesToHex, hexToBytes } from './vector-helpers.js';
 
 const network = networks.mainnet;
@@ -355,5 +357,43 @@ describe('inspectTransaction details an explorer shows', () => {
     expect(dataOf(Uint8Array.from([0x6a, 0x01, 0xaa, 0x01, 0xbb]))).toBeUndefined();
     expect(dataOf(Uint8Array.from([0x6a, 0x05, 0xaa]))).toBeUndefined();
     expect(dataOf(Uint8Array.from([0x6a, 0x4c]))).toBeUndefined();
+  });
+});
+
+describe('coinbaseText', () => {
+  const coinbaseOf = (hex: string, fp8 = true) => parseBlock(hexToBytes(hex), { fp8 }).transactions[0]!;
+
+  it('reads what pearld\'s miner writes on a real chain, past the height and the extra nonce', () => {
+    for (const block of testnet2Blocks.blocks) {
+      const coinbase = coinbaseOf(block.hex);
+      // <height> OP_0 "/P2SH/pearld/": mining.standardCoinbaseScript.
+      expect(bytesToHex(coinbase.ins[0]!.script)).toMatch(/^03[0-9a-f]{6}000d/);
+      expect(coinbaseText(coinbase.ins[0]!.script)).toBe('/P2SH/pearld/');
+      expect(inspectTransaction(coinbase, [], networks.testnet2).coinbase!.text).toBe('/P2SH/pearld/');
+    }
+  });
+
+  it('reads the genesis messages and skips the bits and nonce pushes before them', () => {
+    const text = (name: string) => coinbaseText(coinbaseOf(vectors.blocks.find((block) => block.name === name)!.hex, false).ins[0]!.script);
+    expect(text('mainnet-genesis')).toMatch(/^The native currency for machines and humans\. Total 2\.1e9 Pearls/);
+    expect(text('testnet-genesis')).toBe('03/May/2024 000000000000000000001ebd58c244970b3aa9d783bb001011fbe8ea8e98e00e');
+    // A one-byte height of 100 is a printable "d", and still not text.
+    expect(text('no-certificate-coinbase-only')).toBe('pearljs');
+  });
+
+  it('turns control characters and bytes that are not UTF-8 into one space a run, and keeps other UTF-8', () => {
+    const push = (data: Uint8Array) => Uint8Array.of(data.length, ...data);
+    const bytes = (text: string) => new TextEncoder().encode(text);
+    const script = Uint8Array.of(
+      0x03, 0x0b, 0x4b, 0x02, // height 150283
+      ...push(Uint8Array.of(0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04)), // an 8-byte extra nonce
+      0x52, // OP_2
+      ...push(Uint8Array.of(...bytes('pool'), 0x00, 0x0a, 0xff, 0xfe, ...bytes('珍珠\t'))),
+      ...push(bytes('AB')),
+    );
+    expect(coinbaseText(script)).toBe('pool 珍珠 AB');
+    expect(coinbaseText(Uint8Array.of(0x03, 0x0b, 0x4b, 0x02, 0x4c, 0x20, ...bytes('cut short')))).toBe('cut short');
+    expect(coinbaseText(Uint8Array.of(0x03, 0x0b, 0x4b, 0x02, 0x00))).toBe('');
+    expect(coinbaseText(new Uint8Array(0))).toBe('');
   });
 });

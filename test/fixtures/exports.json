@@ -145,6 +145,7 @@
       "codeSeparatorPositions",
       "coinFromJson",
       "coinToJson",
+      "coinbaseText",
       "compileScript",
       "confirmationsFromHeight",
       "connectPearld",
@@ -869,6 +870,7 @@
   },
   "inspect": {
     "values": [
+      "coinbaseText",
       "inspectTransaction"
     ],
     "types": [

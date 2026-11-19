@@ -109,6 +109,8 @@ export interface InspectedCoinbase {
   height: number | null;
   /** The coinbase script: the height, then whatever the miner added. */
   script: Uint8Array;
+  /** What the miner wrote in the script, as coinbaseText reads it: "/P2SH/pearld/" for pearld's own miner. */
+  text: string;
   /** Everything the outputs pay. */
   reward: bigint;
   /** blockSubsidy at the height given in the options or read from the script; left out when neither is known. */
@@ -240,6 +242,7 @@ function inspectCoinbase(tx: Transaction, reward: bigint, network: PearlNetwork,
   return {
     height,
     script,
+    text: coinbaseText(script),
     reward,
     ...(subsidy === undefined ? {} : { subsidy }),
     ...(options.blockFees === undefined ? {} : { fees: options.blockFees }),
@@ -248,6 +251,49 @@ function inspectCoinbase(tx: Transaction, reward: bigint, network: PearlNetwork,
     witnessCommitment:
       witnessCommitmentIndex < 0 ? null : tx.outs[witnessCommitmentIndex]!.script.slice(WITNESS_MAGIC.length, WITNESS_COMMITMENT_LENGTH),
   };
+}
+
+// A push this short that is not all printable is taken for an extra nonce or a number, not text.
+const NONCE_LENGTH = 8;
+const isPrintableAscii = (data: Uint8Array): boolean => data.every((byte) => byte >= 0x20 && byte <= 0x7e);
+
+/**
+ * The text a miner wrote in a coinbase input script. The BIP 34 height that
+ * starts it is skipped, as are opcodes and pushes of up to 8 bytes that are
+ * not all printable ASCII, which is how extra nonces and numbers look
+ * (pearld's own miner writes the height, an extra nonce and "/P2SH/pearld/").
+ * Each remaining push is read as UTF-8; control characters and bytes that are
+ * not UTF-8 become one space per run, and the pushes are joined with a space.
+ * A push that runs past the end of the script is read up to the end. An
+ * empty string when there is no text.
+ */
+export function coinbaseText(script: Uint8Array): string {
+  const parts: string[] = [];
+  const decoder = new TextDecoder('utf-8', { fatal: false });
+  let at = 0;
+  let skipFirst = coinbaseHeight(script) !== null;
+  while (at < script.length) {
+    const opcode = script[at]!;
+    let start = at + 1;
+    let length = 0;
+    if (opcode >= 0x01 && opcode <= 0x4b) length = opcode;
+    else if (opcode === 0x4c) [start, length] = [at + 2, script[at + 1] ?? 0];
+    else if (opcode === 0x4d) [start, length] = [at + 3, (script[at + 1] ?? 0) | ((script[at + 2] ?? 0) << 8)];
+    else if (opcode === 0x4e) {
+      start = at + 5;
+      length = start <= script.length ? new DataView(script.buffer, script.byteOffset + at + 1, 4).getUint32(0, true) : 0;
+    }
+    const data = script.subarray(Math.min(start, script.length), Math.min(start + length, script.length));
+    at = start + length;
+    if (skipFirst) {
+      skipFirst = false;
+      continue;
+    }
+    if (data.length === 0 || (data.length <= NONCE_LENGTH && !isPrintableAscii(data))) continue;
+    const text = decoder.decode(data).replace(/[\p{Cc}\uFFFD]+/gu, ' ').trim();
+    if (text !== '') parts.push(text);
+  }
+  return parts.join(' ');
 }
 
 // OP_RETURN, a push of 36 bytes, then the tag aa21a9ed (blockchain.WitnessMagicBytes).
