@@ -385,6 +385,9 @@ export interface PlainProofJob {
   readonly certVersion: number;
 }
 
+/** The longest plain proof verifyPlainProof reads unless told otherwise: the cap zk-pow's FFI suggests to pools. */
+export const DEFAULT_MAX_PLAIN_PROOF_SIZE = 8 * 1024 * 1024;
+
 /**
  * Verify a miner's plain proof, the solution it sends pearl-gateway with
  * submitPlainProof, as a pool checks a share with zk-pow's
@@ -399,7 +402,10 @@ export interface PlainProofJob {
  * current or its first (no MoE field) layout, for versions 1 to 3, and
  * `PlainProofV4.to_bytes()` for version 4. The bytes are copied into the
  * verifier's memory, which keeps its largest size, and Pearl's FFI bounds
- * neither their length nor the work they cause, so bound what you accept.
+ * neither their length nor the work they cause, so a proof longer than
+ * `maxSize` bytes (DEFAULT_MAX_PLAIN_PROOF_SIZE, the 8 MiB zk-pow suggests
+ * to pools, unless given; Infinity lifts it) is rejected here, unread, with
+ * `plain proof too large: ...`.
  *
  * The verdict carries the FFI's text in full: `accepted`, `rejected: ...`,
  * `deserialize: ...`, or for an `error`, `Null/empty input`, `header: ...` or
@@ -407,14 +413,16 @@ export interface PlainProofJob {
  * cannot be loaded, and with RangeError for a header that is not 76 bytes or
  * a version or bits that are not a uint32.
  */
-export async function verifyPlainProof(job: PlainProofJob, plainProof: Uint8Array, options: { readonly bits?: number } = {}): Promise<ProofVerdict> {
+export async function verifyPlainProof(job: PlainProofJob, plainProof: Uint8Array, options: { readonly bits?: number; readonly maxSize?: number } = {}): Promise<ProofVerdict> {
   const { incompleteHeader: header, certVersion } = job;
-  const { bits = 0 } = options;
+  const { bits = 0, maxSize = DEFAULT_MAX_PLAIN_PROOF_SIZE } = options;
+  if (typeof maxSize !== 'number' || Number.isNaN(maxSize) || maxSize < 0) throw new RangeError('maxSize must be a byte count');
   if (header.length !== 76) throw new RangeError('incompleteHeader must be 76 bytes');
   if (!Number.isInteger(certVersion) || certVersion < 0 || certVersion > 0xffffffff) throw new RangeError('certVersion must be a uint32');
   if (!Number.isInteger(bits) || bits < 0 || bits > 0xffffffff) throw new RangeError('bits must be a uint32');
   // Both FFI functions refuse an empty proof first, as bad input.
   if (plainProof.length === 0) return { valid: false, outcome: 'error', message: 'Null/empty input' };
+  if (plainProof.length > maxSize) return rejected(`plain proof too large: ${plainProof.length} bytes (max ${maxSize})`);
   return judge(
     null,
     (exports) =>

@@ -88,6 +88,21 @@ describe('verifyPlainProof', () => {
     expect(await verifyPlainProof(job, fromHex(base.proof))).toEqual({ valid: true, outcome: 'accepted', message: 'accepted' });
   });
 
+  it('rejects a proof longer than maxSize without reading it, 8 MiB unless given', async () => {
+    const { header, proof } = bases.get('V3 dense')!;
+    const job = { incompleteHeader: header, certVersion: 3 };
+    expect(await verifyPlainProof(job, proof, { maxSize: proof.length - 1 })).toEqual({
+      valid: false,
+      outcome: 'rejected',
+      message: `plain proof too large: ${proof.length} bytes (max ${proof.length - 1})`,
+    });
+    expect((await verifyPlainProof(job, proof, { maxSize: proof.length })).message).not.toContain('too large');
+    const huge = new Uint8Array(8 * 1024 * 1024 + 1);
+    expect((await verifyPlainProof(job, huge)).message).toBe(`plain proof too large: ${huge.length} bytes (max ${8 * 1024 * 1024})`);
+    expect((await verifyPlainProof(job, huge, { maxSize: Infinity })).message).not.toContain('too large');
+    await expect(verifyPlainProof(job, proof, { maxSize: -1 })).rejects.toBeInstanceOf(RangeError);
+  });
+
   it('refuses a header that is not 76 bytes', async () => {
     await expect(verifyPlainProof({ incompleteHeader: new Uint8Array(108), certVersion: 3 }, new Uint8Array(1))).rejects.toThrow(RangeError);
   });

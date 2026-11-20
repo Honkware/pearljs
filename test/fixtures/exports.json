@@ -1850,6 +1850,7 @@
   },
   "verify-proof": {
     "values": [
+      "DEFAULT_MAX_PLAIN_PROOF_SIZE",
       "loadProofVerifier",
       "verifyBlockProof",
       "verifyPlainProof",
