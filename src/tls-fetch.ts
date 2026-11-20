@@ -15,6 +15,7 @@
 import { Agent, request } from 'node:https';
 import type { IncomingMessage } from 'node:http';
 import { Readable } from 'node:stream';
+import { NOT_SENT } from './internal/rpc-wire.js';
 
 /** The certificate pearldFetch trusts, and how it keeps connections. */
 export interface PearldFetchOptions {
@@ -80,7 +81,8 @@ export function pearldFetch(options: PearldFetchOptions): PearldFetch {
         if (stream === null) res.resume();
         resolve(new Response(stream, { status, statusText: res.statusMessage ?? '', headers: responseHeaders(res) }));
       });
-      req.on('error', reject);
+      // node:https holds the body until the socket connects, so a connect that timed out carried nothing.
+      req.on('error', (err: NodeJS.ErrnoException) => reject(err.code === 'ETIMEDOUT' && err.syscall === 'connect' ? Object.assign(err, { [NOT_SENT]: true }) : err));
       req.end(body ?? undefined);
     });
   return Object.assign(fetch as typeof globalThis.fetch, { close: () => agent.destroy() });

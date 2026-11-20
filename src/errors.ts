@@ -284,17 +284,24 @@ export class PearlRpcError extends PearlError {
   readonly rpcCode: number | undefined;
   /** HTTP status, for kind "http". */
   readonly status: number | undefined;
+  /**
+   * True only when the transport is certain no server received the request,
+   * such as a connection that timed out before it opened. The clients then
+   * send even a payment again.
+   */
+  readonly notSent: boolean;
 
   constructor(
     kind: RpcErrorKind,
     method: string,
     message: string,
-    extra: { rpcCode?: number; status?: number; cause?: unknown } = {},
+    extra: { rpcCode?: number; status?: number; cause?: unknown; notSent?: boolean } = {},
   ) {
     super(RPC_CODES[kind], `${method}: ${message}`, extra);
     this.kind = kind;
     this.method = method;
     this.rpcCode = extra.rpcCode;
     this.status = extra.status;
+    this.notSent = extra.notSent === true;
   }
 }

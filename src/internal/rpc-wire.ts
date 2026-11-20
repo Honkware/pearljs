@@ -12,6 +12,10 @@ import { toHex } from './bytes.js';
 // getblocktemplate can long-poll.
 export const UNBOUNDED_METHODS: ReadonlySet<string> = new Set(['generate', 'importprivkey', 'getblocktemplate', 'rescan', 'rescanblocks']);
 
+// Set to true on an error by a fetch of pearljs's own that knows its request never left, as pearldFetch does for a
+// connect that timed out. A symbol from the registry, so two copies of the package agree.
+export const NOT_SENT: unique symbol = Symbol.for('pearljs.rpc.notSent') as never;
+
 /** A PRL amount among the params of a call; see prlAmount. */
 export class PrlAmount {
   constructor(readonly grain: bigint) {

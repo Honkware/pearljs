@@ -26,7 +26,7 @@ import type { BlockFilter } from './gcs.js';
 import type { PearlNetworkName } from './networks.js';
 import { fromHex, toHex as bytesToHex } from './internal/bytes.js';
 import { Limiter } from './internal/limiter.js';
-import { PrlAmount, UNBOUNDED_METHODS, basicAuth, encodeJson, isErrorReply, readBounded, readReply, rpcEndpoint, safeHeight } from './internal/rpc-wire.js';
+import { NOT_SENT, PrlAmount, UNBOUNDED_METHODS, basicAuth, encodeJson, isErrorReply, readBounded, readReply, rpcEndpoint, safeHeight } from './internal/rpc-wire.js';
 import { PearlRpcError } from './errors.js';
 import type { FeeRate } from './amount.js';
 
@@ -134,8 +134,10 @@ export interface RpcClientOptions extends Omit<HttpTransportOptions, 'url'> {
    * with a doubling delay. Off by default. `true` is `{ retries: 2 }`, so
    * three tries in all, and a number is the retry count. Methods that send,
    * sign, create addresses or change server state are never retried, except
-   * after a connection that timed out before it opened: no request was sent,
-   * so every method is tried again, twice when `retry` is off.
+   * after an error with `notSent` set: the transport is certain no server
+   * received the request, as for a connection the default fetch or
+   * pearldFetch timed out opening, so every method is tried again, twice when
+   * `retry` is off. A custom fetch's errors never set it.
    */
   readonly retry?: boolean | number | RetryOptions;
   /**
@@ -301,6 +303,8 @@ export function httpTransport(options: HttpTransportOptions): RpcTransport {
   const auth = endpoint.username || endpoint.password ? basicAuth(endpoint.username, endpoint.password) : undefined;
   const fetcher = options.fetch ?? globalThis.fetch;
   if (typeof fetcher !== 'function') throw new TypeError('no fetch implementation available');
+  // A custom fetch may have retried or fanned out underneath, so its connect timeout says nothing about the earlier tries.
+  const ownFetch = options.fetch === undefined;
   const init = options.init ?? {};
   const maxReplySize = options.maxReplySize ?? DEFAULT_MAX_REPLY_SIZE;
   if (!Number.isSafeInteger(maxReplySize) || maxReplySize < 1) throw new RangeError('maxReplySize must be a positive integer');
@@ -357,7 +361,8 @@ export function httpTransport(options: HttpTransportOptions): RpcTransport {
         } catch (err) {
           if (err instanceof PearlRpcError) throw err;
           const message = timedOut ? `no reply from ${origin} within ${timeout} ms` : networkMessage(err, origin);
-          throw new PearlRpcError('network', method, message, { cause: err });
+          const notSent = !timedOut && !controller.signal.aborted && (inCauses(err, markedNotSent) || (ownFetch && inCauses(err, connectTimeout)));
+          throw new PearlRpcError('network', method, message, { cause: err, notSent });
         }
         // A server that answers an RPC error with an HTTP error status still gets its error read.
         if (!response.ok && !holdsErrorReply(text)) {
@@ -382,7 +387,8 @@ export interface FallbackOptions {
  * Tries each transport in order until one answers. An RPC error reply is an answer and is not retried elsewhere,
  * and a call the caller aborted stops at once. A send that timed out on one
  * server may still have reached it: the next server can then answer that it
- * already has the transaction.
+ * already has the transaction. The error thrown at the end is the last
+ * transport's, marked `notSent` only when every transport tried marked its own.
  */
 export function fallbackTransport(transports: readonly RpcTransport[], options: FallbackOptions = {}): RpcTransport {
   if (transports.length === 0) throw new TypeError('fallbackTransport needs at least one transport');
@@ -391,14 +397,18 @@ export function fallbackTransport(transports: readonly RpcTransport[], options: 
     origin: transports.map((t) => t.origin).join(', '),
     async send(body, request) {
       let last: unknown;
+      let notSent = true;
       for (const transport of transports) {
         try {
           return await transport.send(body, request);
         } catch (err) {
           last = err;
-          if (request.signal?.aborted || !(err instanceof PearlRpcError) || !shouldFallback(err)) throw err;
+          notSent &&= err instanceof PearlRpcError && err.notSent;
+          if (request.signal?.aborted || !(err instanceof PearlRpcError) || !shouldFallback(err)) break;
         }
       }
+      // An earlier server may hold the request although this one never saw it.
+      if (last instanceof PearlRpcError && last.notSent && !notSent) throw renamed(last, last.method, false);
       throw last;
     },
   };
@@ -532,9 +542,15 @@ export class JsonRpcClient implements Rpc {
       try {
         return await this.#limited(info, (sent) => this.#transport.send(body, sent));
       } catch (err) {
-        // A 503 is pearld's --rpcmaxclients turning the request away unread, so a read is retried even without `retry`.
-        // A connection that never opened carried no request, so trying again cannot send anything twice.
-        const retry = connectTimedOut(err) ? (this.#retry ?? BUSY_RETRY) : !idempotent ? null : (this.#retry ?? (isBusy(err) ? BUSY_RETRY : null));
+        // A request the transport knows never left cannot arrive twice, so even a send is tried again. A 503 is
+        // pearld's --rpcmaxclients turning the request away unread, and a connect timeout from any fetch delays a
+        // read at worst, so those reads are retried even without `retry`.
+        const retry =
+          err instanceof PearlRpcError && err.notSent
+            ? (this.#retry ?? BUSY_RETRY)
+            : !idempotent
+              ? null
+              : (this.#retry ?? (isBusy(err) || (err instanceof PearlRpcError && err.kind === 'network' && inCauses(err.cause, connectTimeout)) ? BUSY_RETRY : null));
         if (retry === null || attempt >= retry.retries || info.signal?.aborted || !isTransient(err)) throw err;
         await new Promise((resolve) => setTimeout(resolve, Math.min(retry.maxDelay, retry.delay * 2 ** attempt)));
       }
@@ -621,16 +637,23 @@ function isBusy(err: unknown): boolean {
   return err instanceof PearlRpcError && err.kind === 'http' && err.status === 503;
 }
 
-// undici's connect timeout, or the kernel's from connect(2). ETIMEDOUT from a read on an open socket has another syscall.
-function connectTimedOut(err: unknown): boolean {
-  if (!(err instanceof PearlRpcError) || err.kind !== 'network') return false;
-  let cause: unknown = err.cause;
-  for (let depth = 0; depth < 4 && typeof cause === 'object' && cause !== null; depth++) {
-    const { code, syscall } = cause as { code?: unknown; syscall?: unknown };
-    if (code === 'UND_ERR_CONNECT_TIMEOUT' || (code === 'ETIMEDOUT' && syscall === 'connect')) return true;
+function inCauses(err: unknown, test: (cause: object) => boolean): boolean {
+  let cause = err;
+  for (let depth = 0; depth < 5 && typeof cause === 'object' && cause !== null; depth++) {
+    if (test(cause)) return true;
     cause = (cause as { cause?: unknown }).cause;
   }
   return false;
+}
+
+// undici's connect timeout, or the kernel's from connect(2). ETIMEDOUT from a read on an open socket has another syscall.
+function connectTimeout(cause: object): boolean {
+  const { code, syscall } = cause as { code?: unknown; syscall?: unknown };
+  return code === 'UND_ERR_CONNECT_TIMEOUT' || (code === 'ETIMEDOUT' && syscall === 'connect');
+}
+
+function markedNotSent(cause: object): boolean {
+  return (cause as { [NOT_SENT]?: unknown })[NOT_SENT] === true;
 }
 
 function isTransient(err: unknown): boolean {
@@ -638,12 +661,13 @@ function isTransient(err: unknown): boolean {
   return err.kind === 'network' || (err.kind === 'http' && (err.status === 429 || (err.status ?? 0) >= 500));
 }
 
-// The same failure under another method's name, for the calls of a batch.
-function renamed(err: PearlRpcError, method: string): PearlRpcError {
+// The same failure under another method's name, for the calls of a batch, or with notSent changed.
+function renamed(err: PearlRpcError, method: string, notSent = err.notSent): PearlRpcError {
   return new PearlRpcError(err.kind, method, err.message.slice(err.method.length + 2), {
     ...(err.rpcCode === undefined ? {} : { rpcCode: err.rpcCode }),
     ...(err.status === undefined ? {} : { status: err.status }),
     cause: err.cause,
+    notSent,
   });
 }
 

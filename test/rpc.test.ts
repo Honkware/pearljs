@@ -1112,7 +1112,13 @@ describe('transport options', () => {
 
     for (const cause of [{ code: 'UND_ERR_CONNECT_TIMEOUT' }, { code: 'ETIMEDOUT', syscall: 'connect' }]) {
       attempts = 0;
-      await new PearldClient({ url, fetch: failing(cause) }).sendRawTransaction('00');
+      // Only the default fetch's connect timeout is taken as certain to have carried nothing.
+      vi.stubGlobal('fetch', failing(cause));
+      try {
+        await new PearldClient({ url }).sendRawTransaction('00');
+      } finally {
+        vi.unstubAllGlobals();
+      }
       expect(attempts).toBe(3);
     }
 
