@@ -133,7 +133,9 @@ export interface RpcClientOptions extends Omit<HttpTransportOptions, 'url'> {
    * Retry read-only methods after a network failure or an HTTP 429 or 5xx,
    * with a doubling delay. Off by default. `true` is `{ retries: 2 }`, so
    * three tries in all, and a number is the retry count. Methods that send,
-   * sign, create addresses or change server state are never retried.
+   * sign, create addresses or change server state are never retried, except
+   * after a connection that timed out before it opened: no request was sent,
+   * so every method is tried again, twice when `retry` is off.
    */
   readonly retry?: boolean | number | RetryOptions;
   /**
@@ -531,7 +533,8 @@ export class JsonRpcClient implements Rpc {
         return await this.#limited(info, (sent) => this.#transport.send(body, sent));
       } catch (err) {
         // A 503 is pearld's --rpcmaxclients turning the request away unread, so a read is retried even without `retry`.
-        const retry = !idempotent ? null : this.#retry ?? (isBusy(err) ? BUSY_RETRY : null);
+        // A connection that never opened carried no request, so trying again cannot send anything twice.
+        const retry = connectTimedOut(err) ? (this.#retry ?? BUSY_RETRY) : !idempotent ? null : (this.#retry ?? (isBusy(err) ? BUSY_RETRY : null));
         if (retry === null || attempt >= retry.retries || info.signal?.aborted || !isTransient(err)) throw err;
         await new Promise((resolve) => setTimeout(resolve, Math.min(retry.maxDelay, retry.delay * 2 ** attempt)));
       }
@@ -616,6 +619,18 @@ const BUSY_RETRY: Required<RetryOptions> = { retries: 2, delay: 250, maxDelay: 5
 
 function isBusy(err: unknown): boolean {
   return err instanceof PearlRpcError && err.kind === 'http' && err.status === 503;
+}
+
+// undici's connect timeout, or the kernel's from connect(2). ETIMEDOUT from a read on an open socket has another syscall.
+function connectTimedOut(err: unknown): boolean {
+  if (!(err instanceof PearlRpcError) || err.kind !== 'network') return false;
+  let cause: unknown = err.cause;
+  for (let depth = 0; depth < 4 && typeof cause === 'object' && cause !== null; depth++) {
+    const { code, syscall } = cause as { code?: unknown; syscall?: unknown };
+    if (code === 'UND_ERR_CONNECT_TIMEOUT' || (code === 'ETIMEDOUT' && syscall === 'connect')) return true;
+    cause = (cause as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 function isTransient(err: unknown): boolean {

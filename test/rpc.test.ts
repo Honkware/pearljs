@@ -1099,6 +1099,30 @@ describe('transport options', () => {
     expect(attempts).toBe(1);
   });
 
+  it('sends again after a connection that timed out before it opened, and not after one that was reset', async () => {
+    let attempts = 0;
+    const failing = (cause: object) =>
+      (async (_url: string, init: RequestInit) => {
+        attempts++;
+        if (attempts < 3) throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('failed'), cause) });
+        const { id } = JSON.parse(init.body as string) as { id: number };
+        return new Response(fixture('sendrawtransaction').body.replace(/"id":\d+}/, `"id":${id}}`));
+      }) as unknown as typeof fetch;
+    const url = 'https://127.0.0.1:18334';
+
+    for (const cause of [{ code: 'UND_ERR_CONNECT_TIMEOUT' }, { code: 'ETIMEDOUT', syscall: 'connect' }]) {
+      attempts = 0;
+      await new PearldClient({ url, fetch: failing(cause) }).sendRawTransaction('00');
+      expect(attempts).toBe(3);
+    }
+
+    for (const cause of [{ code: 'ECONNRESET' }, { code: 'ETIMEDOUT', syscall: 'read' }]) {
+      attempts = 0;
+      expect((await rejection(new PearldClient({ url, fetch: failing(cause), retry: 5 }).sendRawTransaction('00'))).kind).toBe('network');
+      expect(attempts).toBe(1);
+    }
+  });
+
   it('retries a read that pearld turned away with 503 even without retry, and nothing else', async () => {
     let attempts = 0;
     const busy = (status: number) => (async (_url: string, init: RequestInit) => {
