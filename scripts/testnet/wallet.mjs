@@ -22,7 +22,7 @@ export function secrets() {
 
 export async function openWallet() {
   const rpc = client();
-  return PearlWallet.open({ store: createFileStore(join(dir, 'store'), { breakStaleLock: true }), backend: pearldBackend(rpc, { network }) });
+  return PearlWallet.open({ store: createFileStore(join(dir, 'store'), { breakStaleLock: true }), backend: pearldBackend(rpc, { network, scanFrom: Number(process.env.PEARL_TESTNET_SCAN_FROM ?? 0) }) });
 }
 
 const command = process.argv[1]?.endsWith('wallet.mjs') ? process.argv[2] : undefined;
