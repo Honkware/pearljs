@@ -23,6 +23,22 @@ async function funded(options: { allowSessionExport?: boolean } = { allowSession
 }
 
 describe('wallet sessions', () => {
+  it('gives the recovery phrase after a session unlock only with the passphrase', async () => {
+    const { chain, store, wallet } = await funded();
+    expect(await wallet.mnemonic()).toBe(MNEMONIC);
+    const session = await wallet.exportSession({ keyFormat: 'bytes' });
+    const entries = new Map(await store.list(''));
+    await wallet.close();
+    const reopened = await PearlWallet.open({ store: createMemoryStore(entries), backend: chain, transactions: chain });
+    await reopened.unlockWithSession(session);
+    await expect(reopened.mnemonic()).rejects.toMatchObject({ code: 'KEYSTORE_PASSPHRASE_REQUIRED' });
+    await expect(reopened.mnemonic('not the passphrase')).rejects.toMatchObject({ code: 'KEYSTORE_BAD_PASSPHRASE' });
+    expect(await reopened.mnemonic(PASSPHRASE)).toBe(MNEMONIC);
+    reopened.lock();
+    await reopened.unlock(PASSPHRASE);
+    expect(await reopened.mnemonic()).toBe(MNEMONIC);
+  });
+
   it('unlocks a reopened wallet from a session and sends from it', async () => {
     const { chain, store, wallet } = await funded();
     const session = await wallet.exportSession({ keyFormat: 'bytes' });

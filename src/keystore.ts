@@ -306,6 +306,7 @@ export class Keystore {
   #key: CryptoKey | null = null;
   // The data key again, extractable, for exportSession; null unless the unlock allowed sessions.
   #wrappable: CryptoKey | null = null;
+  #bySession = false;
   #timer: ReturnType<typeof setTimeout> | null = null;
   #random: (length: number) => Uint8Array;
   #listeners = new Set<() => void>();
@@ -329,6 +330,18 @@ export class Keystore {
 
   get locked(): boolean {
     return this.#key === null;
+  }
+
+  /** True while unlocked by unlockWithSession, so without anyone having typed the passphrase. */
+  get unlockedBySession(): boolean {
+    return this.#key !== null && this.#bySession;
+  }
+
+  /** Rejects with KEYSTORE_BAD_PASSPHRASE unless this is the keystore's passphrase. Runs scrypt; changes nothing. */
+  async checkPassphrase(passphrase: string | Uint8Array): Promise<void> {
+    const data = this.#data;
+    const kek = await deriveKek(passphrase, data.kdf);
+    (await open(kek, data.key, keyAad(data.kdf), 'KEYSTORE_BAD_PASSPHRASE', 'wrong passphrase for this keystore')).fill(0);
   }
 
   /** Ids of the secrets held, with their kinds. */
@@ -360,7 +373,7 @@ export class Keystore {
       throw new KeystoreError('KEYSTORE_TAMPERED', 'the keystore data key has the wrong length');
     }
     const [key, wrappable] = await importDataKey(raw, options.allowSessionExport === true);
-    await this.#finishUnlock(generation, data, key, wrappable, timeout);
+    await this.#finishUnlock(generation, data, key, wrappable, timeout, false);
   }
 
   /**
@@ -400,7 +413,7 @@ export class Keystore {
     } catch {
       throw new KeystoreError('KEYSTORE_SESSION_INVALID', SESSION_INVALID);
     }
-    await this.#finishUnlock(generation, data, key, wrappable, timeout);
+    await this.#finishUnlock(generation, data, key, wrappable, timeout, true);
   }
 
   /**
@@ -429,12 +442,13 @@ export class Keystore {
     return { format: 'pearljs-keystore-session', version: 1, keystore: binding, wrapped: { nonce: toHex(nonce), ciphertext: toHex(wrapped) }, key };
   }
 
-  async #finishUnlock(generation: number, data: EncryptedKeystore, key: CryptoKey, wrappable: CryptoKey | null, timeout: number | undefined): Promise<void> {
+  async #finishUnlock(generation: number, data: EncryptedKeystore, key: CryptoKey, wrappable: CryptoKey | null, timeout: number | undefined, bySession: boolean): Promise<void> {
     await open(key, data.manifest, manifestAad(data.secrets), 'KEYSTORE_TAMPERED', TAMPERED_SET);
     // The work above takes a second or so, in which lock() may have been called or the keystore changed: neither is undone here.
     if (generation !== this.#generation || data !== this.#data) throw new KeystoreError('KEYSTORE_LOCKED', 'the keystore was locked or changed while it was unlocking; it stays as that left it');
     this.#key = key;
     this.#wrappable = wrappable;
+    this.#bySession = bySession;
     this.#schedule(timeout);
   }
 
@@ -496,6 +510,7 @@ export class Keystore {
       if (this.#key !== null) {
         this.#key = key;
         this.#wrappable = wrappable;
+        this.#bySession = false;
       }
     });
   }

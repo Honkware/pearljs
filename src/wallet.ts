@@ -1122,10 +1122,18 @@ export class PearlWallet {
     });
   }
 
-  /** The recovery phrase, for showing to the user once. Needs the wallet unlocked; null for a wallet made from a raw seed. */
-  async mnemonic(): Promise<string | null> {
+  /**
+   * The recovery phrase, for showing to the user once. Needs the wallet
+   * unlocked; null for a wallet made from a raw seed. A wallet unlocked
+   * from a session needs the passphrase as well
+   * (KEYSTORE_PASSPHRASE_REQUIRED without it), and a passphrase given is
+   * always checked (KEYSTORE_BAD_PASSPHRASE).
+   */
+  async mnemonic(passphrase?: string | Uint8Array): Promise<string | null> {
     const keystore = this.#requireKeystore();
     if (!keystore.has('mnemonic')) return null;
+    if (passphrase !== undefined) await keystore.checkPassphrase(passphrase);
+    else if (keystore.unlockedBySession) throw new KeystoreError('KEYSTORE_PASSPHRASE_REQUIRED', 'the wallet was unlocked from a session; give the passphrase to read the recovery phrase');
     return keystore.useSecret('mnemonic', (bytes) => decoder.decode(bytes));
   }
 
