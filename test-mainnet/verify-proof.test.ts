@@ -24,9 +24,9 @@ describe('verifyBlockProof on mainnet', () => {
     expect(verdict).toEqual({ valid: false, outcome: 'rejected', message: 'unsupported certificate version 1 for FFI verification' });
   });
 
-  it('keeps its memory bounded over many proofs in one process', async () => {
-    // The module's memory grows by some 24 MB a proof and reached WebAssembly's
-    // 4 GB after about 250. Block 139000 verifies in about 60 ms.
+  it('keeps its memory flat over many proofs in one process', async () => {
+    // Before the patch freed each proof's circuit layout, the module kept some
+    // 24 MB a proof and reached WebAssembly's 4 GB after about 250.
     const block = mainnetBlock(139000);
     expect((await verifyBlockProof(block)).outcome).toBe('accepted');
     const before = process.memoryUsage().external;
@@ -36,6 +36,6 @@ describe('verifyBlockProof on mainnet', () => {
       globalThis.gc?.();
       most = Math.max(most, process.memoryUsage().external - before);
     }
-    expect(most).toBeLessThan(1024 * 1024 * 1024);
+    expect(most).toBeLessThan(32 * 1024 * 1024);
   });
 });

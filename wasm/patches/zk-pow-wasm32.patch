@@ -230,6 +230,21 @@
              let key: FirstCircuitKey = bincode::deserialize(
                  chunk
                      .get(..key_size)
+--- src/v2/circuit/pearl_preprocess.rs
++++ src/v2/circuit/pearl_preprocess.rs
+@@ -262,7 +262,12 @@
+     ];
+ 
+     if let Some(owned) = owned_circuit.take() {
++        // rayon's pool on wasm32 is the calling thread alone, which never runs a
++        // spawned job: the circuit would never be freed.
++        #[cfg(not(target_arch = "wasm32"))]
+         rayon::spawn(move || drop(owned));
++        #[cfg(target_arch = "wasm32")]
++        drop(owned);
+     }
+ 
+     Ok((res, noise_prep_slice))
 --- src/v4/api/layout.rs
 +++ src/v4/api/layout.rs
 @@ -33,10 +33,12 @@

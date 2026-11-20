@@ -17,8 +17,9 @@
 # cargo derives symbol hashes from where a path dependency lives, so the same
 # place on every machine gives the same binary. zk-pow is patched in that copy
 # (patches/: the chunk counter shift, the cache key size, and the byte
-# positions of the committed matrices computed in u64, which reach 2^40; none
-# changes anything on 64-bit); the checkout is not touched. Needs rustup's wasm32-unknown-unknown target,
+# positions of the committed matrices computed in u64, which reach 2^40, and
+# the circuit layout dropped in place where rayon would drop it on a pool thread
+# wasm32 never runs; none changes anything on 64-bit); the checkout is not touched. Needs rustup's wasm32-unknown-unknown target,
 # wasm-bindgen-cli 0.2.118 (the version Cargo.lock pins) and wasm-opt 116
 # (cargo install wasm-opt --version 0.116.1). Building the caches takes a few
 # minutes; pass --no-caches to keep the ones in src/verify-proof.
