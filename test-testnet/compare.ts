@@ -21,6 +21,17 @@ export function blockbookClient(): BlockbookClient {
   return new BlockbookClient({ url: blockbookUrl!, network, fetch: (budgetFetch as () => typeof fetch)(), maxConcurrentRequests: 2 });
 }
 
+/** Waits until the Blockbook has indexed the node's best block: it trails a new block by some seconds, and its mempool view by more. */
+export async function blockbookAtTip(timeout = 180_000): Promise<void> {
+  const client = blockbookClient();
+  for (const deadline = Date.now() + timeout; ; ) {
+    const tip = await node.getBestBlockHash();
+    if ((await client.getBlockHash()) === tip) return;
+    if (Date.now() > deadline) throw new Error(`the Blockbook has not indexed the node's best block ${tip} after ${timeout} ms`);
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+}
+
 export function backends(birthday: number, blockbook: BlockbookBackendOptions | null = { verifyBlocks: true }): Record<string, WalletBackend> {
   const all: Record<string, WalletBackend> = {
     pearld: pearldBackend(node, { network, scanFrom: birthday }),

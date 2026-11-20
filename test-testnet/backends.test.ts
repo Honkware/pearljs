@@ -17,7 +17,7 @@ import {
   pearldBackend,
   type WalletBackend,
 } from '../src/index.js';
-import { blockbookClient, blockbookRequests } from './compare.js';
+import { blockbookAtTip, blockbookClient, blockbookRequests } from './compare.js';
 import { blockbookUrl, confirmed, describeTestnet, feeRate, fundsOrSkip, home, network, node, openWallet, record } from './env.js';
 
 // Small, so a Blockbook asked address by address stays inside the request budget.
@@ -83,6 +83,7 @@ describeTestnet('one wallet through pearldBackend, filterBackend and blockbookBa
       ];
       if (blockbookUrl !== undefined) watchers.push(['blockbook', blockbookBackend(blockbookClient(), { verifyBlocks: true })]);
       for (const [name, backend] of watchers) {
+        if (name === 'blockbook') await blockbookAtTip();
         const before = blockbookRequests();
         const copy = await watcher(backend, xpub);
         expect(state(copy, copy.accounts()[0]!.id), name).toEqual(expected);
@@ -101,6 +102,7 @@ describeTestnet('one wallet through pearldBackend, filterBackend and blockbookBa
     const xpub = wallet.accounts().find((entry) => entry.id === '2')!.xpub;
     await atOneTip(async () => {
       await wallet.sync();
+      await blockbookAtTip();
       const before = blockbookRequests();
       const copy = await watcher(blockbookBackend(blockbookClient(), { verifyBlocks: true, useXpub: true }), xpub);
       console.log(`blockbook requests for account 2 by xpub: ${blockbookRequests() - before}`);
