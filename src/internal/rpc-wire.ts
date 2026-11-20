@@ -128,6 +128,11 @@ export function safeHeight(value: unknown, method: string): number {
   return value as number;
 }
 
+export function safeBlockHash(value: unknown, method: string): string {
+  if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) throw new PearlRpcError('response', method, `expected a block hash, got ${JSON.stringify(value)}`);
+  return value;
+}
+
 export function isErrorReply(reply: unknown): reply is { error: { code?: unknown; message?: unknown } } {
   const error = typeof reply === 'object' && reply !== null ? (reply as { error?: unknown }).error : undefined;
   return typeof error === 'object' && error !== null;

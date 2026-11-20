@@ -38,7 +38,7 @@ import {
 import { toHex } from './internal/bytes.js';
 import { fetchBlockFilters, mapLimit } from './internal/filter-scan.js';
 import type { ChainPoint } from './internal/filter-scan.js';
-import { safeHeight } from './internal/rpc-wire.js';
+import { safeBlockHash, safeHeight } from './internal/rpc-wire.js';
 import type { OutPointParam, Rpc, SearchRawTransactionsResult, TxOutResult, WalletTransactionEntry } from './rpc.js';
 import { PearlError } from './errors.js';
 import { parseTransaction } from './transaction.js';
@@ -699,7 +699,7 @@ export function oysterBackend(rpc: Rpc, options: OysterBackendOptions): WalletCh
 
   const getTip = async (): Promise<BlockRef> => {
     const best = await wallet.getBestBlock();
-    return { height: safeHeight(best.height, 'getbestblock'), hash: best.hash };
+    return { height: safeHeight(best.height, 'getbestblock'), hash: safeBlockHash(best.hash, 'getbestblock') };
   };
 
   // Oyster reports confirmations, not heights, counted from the block it has

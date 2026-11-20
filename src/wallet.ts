@@ -667,10 +667,19 @@ function invalid(what: string): StoreError {
 
 const isIndex = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 
-function isBirth(value: unknown): value is AddressBirth {
+const isBlockHash = (value: unknown): value is string => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+
+// A birth as stored. Earlier versions recorded a backend's tip hash unchecked as the parent, so a parent may be any
+// string: such a birth is kept, being part of what the keystore authenticates, and never used (usableBirth).
+function isStoredBirth(value: unknown): value is AddressBirth {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const { height, parent, ...rest } = value as { height?: unknown; parent?: unknown };
-  return Object.keys(rest).length === 0 && isIndex(height) && (parent === undefined || (typeof parent === 'string' && /^[0-9a-f]{64}$/.test(parent)));
+  return Object.keys(rest).length === 0 && isIndex(height) && (parent === undefined || typeof parent === 'string');
+}
+
+function usableBirth(record: XmssRecord): AddressBirth | undefined {
+  const { birth } = record;
+  return birth === undefined || birth.parent === undefined || isBlockHash(birth.parent) ? birth : undefined;
 }
 
 function originOf(account: PearlAccount): { masterFingerprint: string; path: string } | null {
@@ -1321,7 +1330,11 @@ export class PearlWallet {
       if (options.birthHeight !== undefined && !isIndex(options.birthHeight)) throw new RangeError('birthHeight must be a block height');
       // Nothing in the synced tip or below it can pay a key that did not exist when the tip was seen.
       const birth: AddressBirth | undefined =
-        options.birthHeight !== undefined ? { height: options.birthHeight } : given || this.#tip === null ? undefined : { height: this.#tip.height + 1, parent: this.#tip.hash };
+        options.birthHeight !== undefined
+          ? { height: options.birthHeight }
+          : given || this.#tip === null || !isBlockHash(this.#tip.hash)
+            ? undefined
+            : { height: this.#tip.height + 1, parent: this.#tip.hash };
       const seeds = new Uint8Array(XMSS_SEED_BYTES);
       if (given) {
         seeds.set(options.privateSeed!, 0);
@@ -1649,7 +1662,7 @@ export class PearlWallet {
     }
     const births = new Map<string, AddressBirth | null>();
     for (const record of this.#xmss.values()) {
-      const { birth } = record;
+      const birth = usableBirth(record);
       const trusted = birth !== undefined && record.synced !== false && (lowest.get(record.publicKey) ?? Number.POSITIVE_INFINITY) >= birth.height;
       births.set(record.address, trusted ? birth : null);
     }
@@ -2358,7 +2371,7 @@ export class PearlWallet {
         const record = asRecord<XmssRecord>(value, key);
         // The address is the key's own: one put in its place would send the key's payments elsewhere.
         if (record.publicKey !== name || !/^[0-9a-f]{128}$/.test(name) || !isIndex(record.next) || record.address !== encodeAddress({ version: 2, program: xmssTree(name).root }, this.network)) throw invalid(key);
-        if (record.birth !== undefined && !isBirth(record.birth)) throw invalid(key);
+        if (record.birth !== undefined && !isStoredBirth(record.birth)) throw invalid(key);
         this.#xmss.set(name, record);
         // A copy: the record above changes in memory before it is stored again.
         this.#xmssStored.set(name, structuredClone(value));
@@ -2861,7 +2874,7 @@ export class PearlWallet {
       remaining: Math.max(0, XMSS_MAX_SIGNATURES - record.next),
       highestOnChain: record.seenOnChain,
       frozen: record.frozen,
-      birthHeight: record.birth?.height ?? null,
+      birthHeight: usableBirth(record)?.height ?? null,
     };
   }
 

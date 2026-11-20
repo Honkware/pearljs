@@ -26,7 +26,7 @@ import type { BlockFilter } from './gcs.js';
 import type { PearlNetworkName } from './networks.js';
 import { fromHex, toHex as bytesToHex } from './internal/bytes.js';
 import { Limiter } from './internal/limiter.js';
-import { NOT_SENT, PrlAmount, UNBOUNDED_METHODS, basicAuth, encodeJson, isErrorReply, readBounded, readReply, rpcEndpoint, safeHeight } from './internal/rpc-wire.js';
+import { NOT_SENT, PrlAmount, UNBOUNDED_METHODS, basicAuth, encodeJson, isErrorReply, readBounded, readReply, rpcEndpoint, safeBlockHash, safeHeight } from './internal/rpc-wire.js';
 import { PearlRpcError } from './errors.js';
 import type { FeeRate } from './amount.js';
 
@@ -2155,7 +2155,7 @@ export function pearldChainClient(
       // One call, so the height and hash come from the same snapshot, and
       // one pearld's limited user may make.
       const best = await client.getBestBlock();
-      return { height: safeHeight(best.height, 'getbestblock'), hash: best.hash };
+      return { height: safeHeight(best.height, 'getbestblock'), hash: safeBlockHash(best.hash, 'getbestblock') };
     },
 
     async getAddressActivity(address) {
