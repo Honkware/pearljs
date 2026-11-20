@@ -66,8 +66,8 @@ function boundedBeforeModule(ours: string, pearl: string): boolean {
 }
 
 const suites = [
-  { file: 'plain.json', cases: vectors.cases as Case[], words: -1, bounded: -1 },
-  { file: 'plain-large.json', cases: large.cases as Case[], words: -1, bounded: -1 },
+  { file: 'plain.json', cases: vectors.cases as Case[], words: 22, bounded: 37 },
+  { file: 'plain-large.json', cases: large.cases as Case[], words: 37, bounded: 34 },
 ];
 const cases = suites.flatMap((s) => s.cases);
 
