@@ -294,21 +294,26 @@ export type SpendEstimate =
  *
  * spends has one entry per input, in input order. Throws when the counts differ,
  * when a leaf index is out of range, for a leaf it cannot size without
- * `stack`, and for an annexLength that is not a whole number of at least 1.
+ * `stack`, for an annexLength that is not a whole number of at least 1, and
+ * with RangeError for an item size that is not a whole number of bytes.
  */
 export function estimateVsize(tx: Transaction, spends: readonly SpendEstimate[]): number {
   if (spends.length !== tx.ins.length) throw new Error('spends must match the transaction inputs');
-  const copy = tx.clone();
-  spends.forEach((spend, i) => {
-    copy.setWitness(i, witnessSizes(spend).map((size) => new Uint8Array(size)));
-  });
-  return copy.virtualSize();
+  const witnesses = spends.map(witnessSizes);
+  for (const size of witnesses.flat()) {
+    if (!Number.isSafeInteger(size) || size < 0) throw new RangeError(`a witness item size must be a whole number of bytes, not ${size}`);
+  }
+  // Weight is 4 per byte without witnesses, 1 per witness byte: the marker and flag, then each input's item count
+  // and items with their lengths. No witness bytes at all when every input's witness is empty.
+  const itemBytes = (items: readonly number[]): number => items.reduce((sum, size) => sum + varIntSize(size) + size, varIntSize(items.length));
+  const witnessBytes = witnesses.some((items) => items.length > 0) ? witnesses.reduce((sum, items) => sum + itemBytes(items), 2) : 0;
+  return Math.ceil((tx.byteLength(false) * 4 + witnessBytes) / 4);
 }
 
 function witnessSizes(spend: SpendEstimate): number[] {
   if (spend.type === 'witness') return [...spend.items];
   const annex = spend.annexLength;
-  if (annex !== undefined && (!Number.isInteger(annex) || annex < 1)) {
+  if (annex !== undefined && (!Number.isSafeInteger(annex) || annex < 1)) {
     throw new RangeError('annexLength must be a whole number of bytes, at least 1 for the 0x50 tag');
   }
   const last = annex === undefined ? [] : [annex];

@@ -283,6 +283,20 @@ describe('estimateVsize', () => {
     expect(() => estimateVsize(unsigned, [{ type: 'keyPath', annexLength: 0 }])).toThrow(RangeError);
   });
 
+  it('sizes an annex or a witness item of 2 GiB by arithmetic, without allocating it, and refuses a size that is not a byte count', () => {
+    const unsigned = createTransaction(2);
+    unsigned.addInput(new Uint8Array(32), 0);
+    unsigned.addOutput(p2tr, 1000n);
+    // 9-byte length prefix past 2^32, 5 bytes below it.
+    expect(estimateVsize(unsigned, [{ type: 'keyPath', annexLength: 2 ** 33 }])).toBe(Math.ceil((94 * 4 + 2 + 1 + 65 + 9 + 2 ** 33) / 4));
+    expect(estimateVsize(unsigned, [{ type: 'witness', items: [2 ** 31] }])).toBe(Math.ceil((94 * 4 + 2 + 1 + 5 + 2 ** 31) / 4));
+    expect(estimateVsize(unsigned, [{ type: 'witness', items: [] }])).toBe(94);
+    for (const size of [-1, 1.5, Number.NaN, 2 ** 53]) {
+      expect(() => estimateVsize(unsigned, [{ type: 'witness', items: [size] }])).toThrow(RangeError);
+      expect(() => estimateVsize(unsigned, [{ type: 'keyPath', annexLength: size }])).toThrow(RangeError);
+    }
+  });
+
   for (const expected of vectors.multiASpends) {
     it(`is exact for multi_a ${expected.name}`, () => {
       const tree = assembleScriptTree([hexToBytes(expected.leafScript)]);
