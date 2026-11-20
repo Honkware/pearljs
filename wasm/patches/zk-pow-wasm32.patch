@@ -1,20 +1,51 @@
 --- src/v1/api/plain_proof.rs
 +++ src/v1/api/plain_proof.rs
+@@ -6,7 +6,7 @@
+ };
+ use crate::v1::circuit::chip::blake3::program::{AuxiliaryCvLocation, AuxiliaryMsgLocation};
+ use crate::v1::ensure_eq;
+-use pearl_blake3::BLAKE3_DIGEST_SIZE;
++use pearl_blake3::{BLAKE3_CHUNK_LEN, BLAKE3_DIGEST_SIZE};
+ 
+ use crate::v2::ffi::plain_proof::PlainProof;
+ 
+@@ -15,7 +15,7 @@
+         .iter()
+         .map(|&idx| {
+             proof
+-                .extract_bytes(idx * k, strip_len)
++                .extract_bytes(idx as pearl_blake3::Pos * k as pearl_blake3::Pos, strip_len)
+                 .map(|b| b.into_iter().map(|x| x as i8).collect())
+                 .context("Failed to extract strip")
+         })
 @@ -26,7 +26,7 @@
      locs.iter()
          .map(|loc| {
              let proof = if loc.is_b { &p.bt.proof } else { &p.a.proof };
 -            proof.extract_bytes(loc.global_start, 64).map(|b| b.try_into().unwrap())
-+            proof.extract_bytes(usize::try_from(loc.global_start)?, 64).map(|b| b.try_into().unwrap())
++            proof.extract_bytes(loc.global_start as pearl_blake3::Pos, 64).map(|b| b.try_into().unwrap())
          })
          .collect()
  }
-@@ -49,12 +49,13 @@
+@@ -39,8 +39,10 @@
+     k: usize,
+     key: [u8; BLAKE3_DIGEST_SIZE],
+ ) -> Result<Vec<[u8; BLAKE3_DIGEST_SIZE]>> {
+-    let a_ranges = p.a.proof.compute_sibling_ranges(pearl_blake3::padded_chunk_len(m * k));
+-    let b_ranges = p.bt.proof.compute_sibling_ranges(pearl_blake3::padded_chunk_len(n * k));
++    // Tree sizes reach 2^40 bytes: u64 whatever usize is, rounding as the 64-bit release build does.
++    let padded = |raw_len: u64| (raw_len.div_ceil(BLAKE3_CHUNK_LEN as u64).wrapping_mul(BLAKE3_CHUNK_LEN as u64)) as pearl_blake3::Pos;
++    let a_ranges = p.a.proof.compute_sibling_ranges(padded(m as u64 * k as u64));
++    let b_ranges = p.bt.proof.compute_sibling_ranges(padded(n as u64 * k as u64));
+ 
+     locs.iter()
+         .map(|loc| {
+@@ -49,12 +51,13 @@
              } else {
                  (&a_ranges, &p.a.proof)
              };
 -            if let Some(&(_, _, h)) = ranges.iter().find(|(s, e, _)| *s == loc.global_start && *e == loc.global_end) {
-+            let (start, end) = (usize::try_from(loc.global_start)?, usize::try_from(loc.global_end)?);
++            let (start, end) = (loc.global_start as pearl_blake3::Pos, loc.global_end as pearl_blake3::Pos);
 +            if let Some(&(_, _, h)) = ranges.iter().find(|(s, e, _)| *s == start && *e == end) {
                  return Ok(h);
              }
@@ -220,25 +251,65 @@
      Ok((res, noise_prep_slice))
 --- src/v2/api/plain_proof.rs
 +++ src/v2/api/plain_proof.rs
-@@ -66,7 +66,8 @@
+@@ -6,7 +6,7 @@
+ 
+ use anyhow::{Context, Result, bail, ensure};
+ use blake3::BLOCK_LEN;
+-use pearl_blake3::MerkleProof;
++use pearl_blake3::{MerkleProof, Pos};
+ 
+ use crate::ensure_eq;
+ use crate::v2::api::proof::{
+@@ -39,7 +39,7 @@
+     routing_blake_hotspot_rows(moe_public.expert_start_offset(), &inner)
+         .iter()
+         .map(|&hotspot_idx| {
+-            let block_start = hotspot_idx as usize * BLOCK_LEN;
++            let block_start = hotspot_idx as Pos * BLOCK_LEN as Pos;
+             moe_proof
+                 .routing_proof
+                 .extract_bytes(block_start, BLOCK_LEN)
+@@ -53,7 +53,7 @@
+         .iter()
+         .map(|&idx| {
+             proof
+-                .extract_bytes(idx * k, strip_len)
++                .extract_bytes(idx as Pos * k as Pos, strip_len)
+                 .map(|b| b.into_iter().map(|x| x as i8).collect())
+                 .context("Failed to extract strip")
+         })
+@@ -66,18 +66,20 @@
      k: usize,
      key: [u8; BLAKE3_DIGEST_SIZE],
  ) -> Result<Vec<[u8; BLAKE3_DIGEST_SIZE]>> {
--    let total_b_cols = total_b_cols(p);
-+    // A position past usize panics rather than rejecting a share the 64-bit verifier would judge.
-+    let total_b_cols = usize::try_from(total_b_cols(p)).expect("matrix position fits usize");
-     let a_ranges = p.a.proof.compute_sibling_ranges(pearl_blake3::padded_chunk_len(p.m * k));
++    // Tree sizes reach 2^40 bytes: u64 whatever usize is, rounding as the 64-bit release build does.
++    let padded = |raw_len: u64| -> Pos { (raw_len.div_ceil(BLAKE3_CHUNK_LEN as u64).wrapping_mul(BLAKE3_CHUNK_LEN as u64)) as Pos };
+     let total_b_cols = total_b_cols(p);
+-    let a_ranges = p.a.proof.compute_sibling_ranges(pearl_blake3::padded_chunk_len(p.m * k));
++    let a_ranges = p.a.proof.compute_sibling_ranges(padded(p.m as u64 * k as u64));
      let b_ranges =
          p.bt.proof
-@@ -93,12 +94,16 @@
+-            .compute_sibling_ranges(pearl_blake3::padded_chunk_len(total_b_cols * k));
++            .compute_sibling_ranges(padded(total_b_cols * k as u64));
+ 
+     let routing = p.moe.as_ref().map(|moe| {
+-        let total_routing_entries = p.m * moe.top_k;
+-        let raw_len = total_routing_entries * std::mem::size_of::<u32>();
++        let total_routing_entries = p.m as u64 * moe.top_k as u64;
++        let raw_len = total_routing_entries * std::mem::size_of::<u32>() as u64;
+         let ranges = moe
+             .routing_proof
+-            .compute_sibling_ranges(pearl_blake3::padded_chunk_len(raw_len));
++            .compute_sibling_ranges(padded(raw_len));
+         (&moe.routing_proof, ranges)
+     });
+ 
+@@ -93,12 +95,13 @@
                      (*proof, ranges)
                  }
              };
 -            if let Some(&(_, _, h)) = ranges.iter().find(|(s, e, _)| *s == loc.global_start && *e == loc.global_end) {
-+            let (start, end) = (
-+                usize::try_from(loc.global_start).expect("matrix position fits usize"),
-+                usize::try_from(loc.global_end).expect("matrix position fits usize"),
-+            );
++            let (start, end) = (loc.global_start as Pos, loc.global_end as Pos);
 +            if let Some(&(_, _, h)) = ranges.iter().find(|(s, e, _)| *s == start && *e == end) {
                  return Ok(h);
              }
@@ -249,12 +320,12 @@
                  .context("Failed to compute CV")
          })
          .collect()
-@@ -143,23 +148,26 @@
+@@ -143,23 +146,26 @@
      locs.iter()
          .map(|loc| {
              let proof = proof_for(p, loc.source)?;
 -            proof.extract_bytes(loc.global_start, 64).map(|b| b.try_into().unwrap())
-+            proof.extract_bytes(usize::try_from(loc.global_start).expect("matrix position fits usize"), 64).map(|b| b.try_into().unwrap())
++            proof.extract_bytes(loc.global_start as Pos, 64).map(|b| b.try_into().unwrap())
          })
          .collect()
  }
@@ -282,7 +353,7 @@
  }
  
  /// Rejects a proof whose committed Merkle trees don't have the leaf count
-@@ -171,9 +179,9 @@
+@@ -171,9 +177,9 @@
  /// interpretations. The A/B trees are row-major `m*k` / `total_b_cols*k`
  /// int8 bytes; the MoE routing tree is `m*top_k` little-endian `u32`s.
  fn check_declared_tree_sizes(p: &PlainProof) -> Result<()> {
@@ -294,7 +365,7 @@
          a_expected,
          "A Merkle tree declares {} leaves but m={} k={} imply {}",
          p.a.proof.total_leaves,
-@@ -182,9 +190,9 @@
+@@ -182,9 +188,9 @@
          a_expected
      );
  
@@ -306,7 +377,7 @@
          b_expected,
          "B^T Merkle tree declares {} leaves but n={} k={} (total columns {}) imply {}",
          p.bt.proof.total_leaves,
-@@ -195,9 +203,9 @@
+@@ -195,9 +201,9 @@
      );
  
      if let Some(moe) = &p.moe {
@@ -318,6 +389,36 @@
              routing_expected,
              "routing Merkle tree declares {} leaves but m={} top_k={} imply {}",
              moe.routing_proof.total_leaves,
+@@ -230,16 +236,17 @@
+     ensure!((moe.expert_idx as usize) < moe.e);
+     ensure!(moe.e == moe.routing_end_offsets.len());
+ 
+-    let weight_col_offset = (moe.expert_idx as usize) * p.n;
++    // expert_idx * n reaches 2^48 before the u32 check below, so it is u64 whatever usize is.
++    let weight_col_offset = moe.expert_idx as u64 * p.n as u64;
+     // p.bt.row_indices are already global indices (offset by expert_idx * n_e in mining).
+     for &idx in &p.bt.row_indices {
+         ensure!(
+-            idx >= weight_col_offset && idx < weight_col_offset + p.n,
++            idx as u64 >= weight_col_offset && (idx as u64) < weight_col_offset + p.n as u64,
+             "B column index {} out of range for expert {} (expected [{}, {}))",
+             idx,
+             moe.expert_idx,
+             weight_col_offset,
+-            weight_col_offset + p.n
++            weight_col_offset + p.n as u64
+         );
+     }
+     // In the MoE case, n represents the per-expert intermediate dimension n_e.
+@@ -396,7 +403,7 @@
+         idx => moe.routing_end_offsets[idx as usize - 1],
+     };
+     for (i, &inner_idx) in moe.inner_a_rows.iter().enumerate() {
+-        let byte_offset = (routing_start_offset as usize + inner_idx) * std::mem::size_of::<u32>();
++        let byte_offset = (routing_start_offset as Pos + inner_idx as Pos) * std::mem::size_of::<u32>() as Pos;
+         let bytes = moe
+             .routing_proof
+             .extract_bytes(byte_offset, std::mem::size_of::<u32>())
 --- src/v2/api/sanity_checks.rs
 +++ src/v2/api/sanity_checks.rs
 @@ -41,8 +41,9 @@
@@ -352,7 +453,7 @@
      pub source: ProofSource,
  }
  
-@@ -184,13 +184,14 @@
+@@ -184,13 +184,15 @@
          let mut instructions = Vec::new();
          let mut msgs: Vec<AuxiliaryMsgLocation> = vec![];
          let mut cvs: Vec<AuxiliaryCvLocation> = vec![];
@@ -361,7 +462,8 @@
 +        let m = params.m() as u64;
          let common_dim = params.common_dim();
 -        let total_b_cols = params.total_b_cols();
-+        let total_b_cols = params.total_b_cols() as u64;
++        // n*e reaches 2^34 for a plain proof's declared sizes, before the sanity check.
++        let total_b_cols = params.mining_config.moe.map_or(params.n as u64, |moe| params.n as u64 * moe.e as u64);
  
          let cv = recursive_compilation(
              0,
@@ -370,7 +472,7 @@
              m,
              common_dim,
              &params.a_rows_indices(),
-@@ -206,7 +207,7 @@
+@@ -206,7 +208,7 @@
  
          let cv = recursive_compilation(
              0,
@@ -379,13 +481,14 @@
              total_b_cols,
              common_dim,
              &params.b_cols_indices(),
-@@ -226,17 +227,17 @@
+@@ -226,17 +228,18 @@
              // (every token is routed to exactly `top_k` experts). We pad the entry
              // count up to a multiple of 16 so the byte length tiles evenly into the
              // 64-byte virtual rows the commitment uses below.
 -            let total_routing_entries = params.padded_routing_entries().expect("MoE params present");
 -            let full_routing_size = total_routing_entries * mem::size_of::<u32>();
-+            let total_routing_entries = (params.routing_entries().expect("MoE params present") as u64).next_multiple_of(16);
++            let moe_config = params.mining_config.moe.expect("MoE params present");
++            let total_routing_entries = (params.m as u64 * moe_config.top_k as u64).next_multiple_of(16);
 +            let full_routing_size = total_routing_entries * mem::size_of::<u32>() as u64;
              let routing_row_len = 64; // Just to satisfy the conditions.
 -            let num_rows = full_routing_size / routing_row_len;
@@ -401,7 +504,7 @@
                  num_rows,
                  routing_row_len,
                  &hotspots,
-@@ -331,11 +332,16 @@
+@@ -331,11 +334,16 @@
      }
  }
  
@@ -421,7 +524,7 @@
      row_len: usize,         // row length in bytes
      hotspot_strips: &[u32], // sorted global row indices into the committed matrix
      strip_len: usize,       // prefix length of each row exposed to the circuit
-@@ -360,37 +366,37 @@
+@@ -360,37 +368,37 @@
          ProofSource::A
      };
  
@@ -468,7 +571,7 @@
                  block_len: block_len as u32,
                  flags: flags.into(),
              };
-@@ -398,8 +404,8 @@
+@@ -398,8 +406,8 @@
              // Assumes row_len divisible by 64. Since row_len % 64 == 0, a 64-byte block contains at most one row.
              // Here, we check whether one of the hotpot strings is part of the current block.
              // The row this block falls in, and its byte offset within that row:
@@ -479,7 +582,7 @@
              if offset_in_row < strip_len {
                  // This block is within the strip prefix of its row — check if that
                  // row is one of the hotspot strips.
-@@ -440,7 +446,7 @@
+@@ -440,7 +448,7 @@
                  });
              }
              is_first_in_chunk = false;
@@ -515,6 +618,38 @@
      }
  
      Ok((res, noise_prep_slice))
+--- src/v2/ffi/plain_proof.rs
++++ src/v2/ffi/plain_proof.rs
+@@ -3,7 +3,7 @@
+ //! eligibility rules live in the shared binding layer, `crate::ffi`.
+ 
+ use anyhow::{Context, Result};
+-use pearl_blake3::MerkleProof;
++use pearl_blake3::{MerkleProof, Pos};
+ use serde::{Deserialize, Serialize};
+ 
+ use pearl_blake3::BLAKE3_DIGEST_SIZE;
+@@ -39,9 +39,9 @@
+     /// Construct from merkle proof components.
+     pub fn new(
+         leaf_data: Vec<Vec<u8>>,
+-        leaf_indices: Vec<usize>,
++        leaf_indices: Vec<Pos>,
+         row_indices: Vec<usize>,
+-        total_leaves: usize,
++        total_leaves: Pos,
+         root: [u8; BLAKE3_DIGEST_SIZE],
+         siblings: Vec<[u8; BLAKE3_DIGEST_SIZE]>,
+     ) -> Self {
+@@ -58,7 +58,7 @@
+     }
+ 
+     /// Returns the merkle indices and leaves for internal processing.
+-    pub fn data(&self) -> (&[usize], &[Vec<u8>]) {
++    pub fn data(&self) -> (&[Pos], &[Vec<u8>]) {
+         (&self.proof.leaf_indices, &self.proof.leaf_data)
+     }
+ }
 --- src/v4/api/layout.rs
 +++ src/v4/api/layout.rs
 @@ -33,10 +33,12 @@
@@ -535,53 +670,109 @@
          "h*w must be >= {} || h={h} w={w}",
 --- src/v4/api/openings.rs
 +++ src/v4/api/openings.rs
-@@ -228,7 +228,8 @@
-         let mut sibling_ranges: Vec<(usize, usize)> = cv_locs
+@@ -6,7 +6,7 @@
+ 
+ use anyhow::{Context, Result, ensure};
+ use blake3::BLOCK_LEN;
+-use pearl_blake3::{BLAKE3_DIGEST_SIZE, MerkleProof};
++use pearl_blake3::{BLAKE3_DIGEST_SIZE, MerkleProof, Pos};
+ 
+ use crate::ensure_eq;
+ use crate::v2::ffi::plain_proof::MatrixMerkleProof;
+@@ -211,24 +211,25 @@
+ /// checked against; NaN/Inf rejection is separate.
+ pub(crate) struct TreeSchedule {
+     pub(crate) hash_id: HashId,
+-    pub(crate) padded_len: usize,
++    // Tree positions reach 2^40 bytes and, at 128-byte chunks, 2^33 leaves: pearl_blake3::Pos.
++    pub(crate) padded_len: Pos,
+     /// Scheduled leaf chunk indices — the unique-minimal leaf set.
+-    pub(crate) leaf_indices: Vec<usize>,
++    pub(crate) leaf_indices: Vec<Pos>,
+     /// Aux-CV subtree byte ranges, sorted — the unique-minimal sibling set.
+-    pub(crate) sibling_ranges: Vec<(usize, usize)>,
++    pub(crate) sibling_ranges: Vec<(Pos, Pos)>,
+ }
+ 
+ impl TreeSchedule {
+     /// The compiler partitions a tree's padded bytes into leaf chunks and
+     /// unopened sibling subtrees, so the leaf set is the chunk-complement of
+     /// the tree's aux-CV ranges.
+-    pub(crate) fn new(cv_locs: &[AuxiliaryCvLocation], source: ProofSource, tree_bytes: usize, hash_id: HashId) -> Self {
+-        let chunk_len = hash_id.chunk_len();
+-        let padded_len = hash_id.padded_len(tree_bytes);
+-        let mut sibling_ranges: Vec<(usize, usize)> = cv_locs
++    pub(crate) fn new(cv_locs: &[AuxiliaryCvLocation], source: ProofSource, tree_bytes: Pos, hash_id: HashId) -> Self {
++        let chunk_len = hash_id.chunk_len() as Pos;
++        let padded_len = tree_bytes.div_ceil(chunk_len) * chunk_len;
++        let mut sibling_ranges: Vec<(Pos, Pos)> = cv_locs
              .iter()
              .filter(|loc| loc.source == source)
 -            .map(|loc| (loc.global_start, loc.global_end))
-+            // Plain-proof openings only; the ZK verifier never builds a schedule.
-+            .map(|loc| (usize::try_from(loc.global_start).expect("tree position fits usize"), usize::try_from(loc.global_end).expect("tree position fits usize")))
++            .map(|loc| (loc.global_start as Pos, loc.global_end as Pos))
              .collect();
          sibling_ranges.sort_unstable();
          debug_assert!(
-@@ -264,9 +265,11 @@
+@@ -264,8 +265,9 @@
  impl TreeSchedules {
      fn new(params: &PublicParams, cv_locs: &[AuxiliaryCvLocation]) -> Result<Self> {
          let schedule = |source, rows: usize, row_bytes: usize, hash_id, label: &str| -> Result<TreeSchedule> {
 -            let tree_bytes = rows
 -                .checked_mul(row_bytes)
-+            // Past usize this panics rather than rejecting a share the 64-bit verifier would judge.
-+            let tree_bytes = (rows as u64)
-+                .checked_mul(row_bytes as u64)
++            // Up to 2^24 rows of 2^16 bytes: u64 whatever usize is.
++            let tree_bytes = (rows as Pos)
++                .checked_mul(row_bytes as Pos)
                  .ok_or_else(|| anyhow::anyhow!("{label}: matrix byte length overflow"))?;
-+            let tree_bytes = usize::try_from(tree_bytes).expect("matrix byte length fits usize");
              Ok(TreeSchedule::new(cv_locs, source, tree_bytes, hash_id))
          };
-         let m = params.m() as usize;
-@@ -369,9 +372,10 @@
+@@ -280,7 +282,7 @@
+                     .num_padded_routing_entries()
+                     .ok_or_else(|| anyhow::anyhow!("MoE params present but padded routing length missing"))?;
+                 let bytes = entries * std::mem::size_of::<u32>();
+-                Ok::<_, anyhow::Error>(TreeSchedule::new(cv_locs, ProofSource::Routing, bytes, moe.hash_id_r))
++                Ok::<_, anyhow::Error>(TreeSchedule::new(cv_locs, ProofSource::Routing, bytes as Pos, moe.hash_id_r))
+             })
+             .transpose()?;
+         Ok(Self {
+@@ -338,7 +340,7 @@
+     );
+     ensure_eq!(
+         proof.total_leaves,
+-        schedule.padded_len / chunk_len,
++        schedule.padded_len / chunk_len as Pos,
+         "{label}: total_leaves mismatch"
+     );
+     let root = proof
+@@ -369,8 +371,8 @@
      let rows = row_indices
          .iter()
          .map(|&idx| {
 -            let start = idx
 -                .checked_mul(row_bytes)
-+            let start = (idx as u64)
-+                .checked_mul(row_bytes as u64)
++            let start = (idx as Pos)
++                .checked_mul(row_bytes as Pos)
                  .ok_or_else(|| anyhow::anyhow!("committed-row start overflow"))?;
-+            let start = usize::try_from(start).expect("committed-row start fits usize");
              proof.extract_bytes(start, row_bytes).context("Failed to extract strip")
          })
-         .collect::<Result<Vec<_>>>()?;
-@@ -419,7 +423,7 @@
+@@ -392,7 +394,7 @@
+         .opened_routing_blocks()
+         .iter()
+         .map(|&hotspot_idx| {
+-            let block_start = hotspot_idx as usize * BLOCK_LEN;
++            let block_start = hotspot_idx as Pos * BLOCK_LEN as Pos;
+             routing
+                 .extract_bytes(block_start, BLOCK_LEN)
+                 .with_context(|| format!("routing strip: extract 64 bytes at row_start={block_start}"))
+@@ -419,7 +421,7 @@
                  // Fully opened: the compiler never emits auxiliary offsets messages.
                  ProofSource::Offsets => anyhow::bail!("offsets tree cannot source auxiliary messages"),
              };
 -            proof.extract_bytes(loc.global_start, 64).map(|b| b.try_into().unwrap())
-+            proof.extract_bytes(usize::try_from(loc.global_start).expect("tree position fits usize"), 64).map(|b| b.try_into().unwrap())
++            proof.extract_bytes(loc.global_start as Pos, 64).map(|b| b.try_into().unwrap())
          })
          .collect()
  }
-@@ -461,7 +465,7 @@
+@@ -461,7 +463,7 @@
              };
              ranges
                  .iter()
@@ -614,6 +805,15 @@
          expected,
          "{label}: Merkle tree declares {} leaves but {dims:?} imply {expected}",
          proof.total_leaves
+@@ -409,7 +410,7 @@
+     let byte_start = start as usize * width;
+     let byte_len = (end - start) as usize * width;
+     let bytes = proof
+-        .extract_bytes(byte_start, byte_len)
++        .extract_bytes(byte_start as pearl_blake3::Pos, byte_len)
+         .with_context(|| format!("extract routing entries [{start}, {end})"))?;
+     Ok(bytes.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect())
+ }
 --- src/v4/circuit/chip/blake3/program.rs
 +++ src/v4/circuit/chip/blake3/program.rs
 @@ -267,14 +267,14 @@

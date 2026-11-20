@@ -18,10 +18,10 @@
 # cargo derives symbol hashes from where a path dependency lives, so a fixed place
 # gives the same binary on the same host platform. The host triple and the stage's
 # real path (/private/tmp on macOS) still enter those hashes, so other hosts give
-# a different, equivalent module; wasm/build-in-container.sh makes the canonical one. zk-pow is patched in that copy
+# a different, equivalent module; wasm/build-in-container.sh makes the canonical one. zk-pow and pearl-blake3 are patched in that copy
 # (patches/: the chunk counter shift, the cache key size, the byte positions
-# of the committed matrices and the tile products computed in u64, which reach
-# 2^40, and the circuit layout dropped in place where rayon would drop it on a
+# of the committed matrices, the Merkle openings' positions and leaf indices
+# and the tile products computed in u64, which reach 2^40, and the circuit layout dropped in place where rayon would drop it on a
 # pool thread wasm32 never runs, in V1 and V2; none changes anything on 64-bit); the checkout is not touched. Needs rustup's wasm32-unknown-unknown target,
 # wasm-bindgen-cli 0.2.118 (the version Cargo.lock pins) and wasm-opt 116
 # (cargo install wasm-opt --version 0.116.1). Building the caches takes a few
@@ -90,6 +90,7 @@ if [ "${1:-}" = --check-source ]; then
 fi
 
 patch -s -d "$stage/zk-pow" -p0 <"$here/patches/zk-pow-wasm32.patch"
+patch -s -d "$stage/pearl-blake3" -p0 <"$here/patches/pearl-blake3-wasm32.patch"
 cp -R "$here/src" "$here/.cargo" "$here/Cargo.toml" "$here/Cargo.lock" "$here/rust-toolchain.toml" "$here/licenses.py" "$stage/wasm/"
 
 cd "$stage/wasm"

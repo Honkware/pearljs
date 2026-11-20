@@ -1,0 +1,159 @@
+--- src/lib.rs
++++ src/lib.rs
+@@ -20,7 +20,7 @@
+     B3F_ROOT,
+ };
+ pub use merkle::{
+-    is_allowed_chunk_len, pad_to_chunk_boundary, padded_chunk_len, MerkleProof, MerkleTree,
++    is_allowed_chunk_len, pad_to_chunk_boundary, padded_chunk_len, MerkleProof, MerkleTree, Pos,
+     ALLOWED_CHUNK_LENS,
+ };
+ 
+--- src/merkle.rs
++++ src/merkle.rs
+@@ -18,6 +18,13 @@
+     ALLOWED_CHUNK_LENS.contains(&n)
+ }
+ 
++/// A byte position or leaf index in a committed tree. Trees reach 2^40 bytes, past a
++/// 32-bit usize, so these are u64 there; on 64-bit targets they stay usize.
++#[cfg(target_pointer_width = "64")]
++pub type Pos = usize;
++#[cfg(not(target_pointer_width = "64"))]
++pub type Pos = u64;
++
+ /// Round `raw_len` up to the next multiple of the native BLAKE3 chunk (1024).
+ pub fn padded_chunk_len(raw_len: usize) -> usize {
+     raw_len.div_ceil(CHUNK_LEN) * CHUNK_LEN
+@@ -164,8 +171,8 @@
+ 
+         MerkleProof {
+             leaf_data,
+-            leaf_indices: sorted_indices,
+-            total_leaves,
++            leaf_indices: sorted_indices.iter().map(|&i| i as Pos).collect(),
++            total_leaves: total_leaves as Pos,
+             root: self.root(),
+             siblings,
+         }
+@@ -215,8 +222,8 @@
+ pub struct MerkleProof {
+     /// Full chunks of one allowed length; never a truncated last leaf.
+     pub leaf_data: Vec<Vec<u8>>,
+-    pub leaf_indices: Vec<usize>,
+-    pub total_leaves: usize,
++    pub leaf_indices: Vec<Pos>,
++    pub total_leaves: Pos,
+     pub root: Digest,
+     pub siblings: Vec<Digest>,
+ }
+@@ -326,14 +333,14 @@
+ 
+         let leaf_hashes = self.leaf_hashes(key);
+ 
+-        let mut current: BTreeMap<usize, Digest> =
++        let mut current: BTreeMap<Pos, Digest> =
+             self.leaf_indices.iter().copied().zip(leaf_hashes).collect();
+         let mut level_len = self.total_leaves;
+ 
+         let mut sib_iter = self.siblings.iter();
+ 
+         while level_len > 2 {
+-            let mut next: BTreeMap<usize, Digest> = BTreeMap::new();
++            let mut next: BTreeMap<Pos, Digest> = BTreeMap::new();
+ 
+             for (&i, &cv) in &current {
+                 if i % 2 == 0 {
+@@ -392,13 +399,13 @@
+     /// `length`-byte allocation so a small proof cannot force a large one.
+     /// A leaf span whose arithmetic overflows `usize` cannot intersect the
+     /// range and is skipped.
+-    pub fn extract_bytes(&self, global_start: usize, length: usize) -> Result<Vec<u8>> {
+-        let global_end = global_start.checked_add(length).ok_or_else(|| {
++    pub fn extract_bytes(&self, global_start: Pos, length: usize) -> Result<Vec<u8>> {
++        let global_end = global_start.checked_add(length as Pos).ok_or_else(|| {
+             anyhow!("extraction range overflows usize: start={global_start} length={length}")
+         })?;
+ 
+-        let leaf_span = |(&leaf_idx, data): (&usize, &Vec<u8>)| -> Option<(usize, usize)> {
+-            let chunk_len = data.len();
++        let leaf_span = |(&leaf_idx, data): (&Pos, &Vec<u8>)| -> Option<(Pos, Pos)> {
++            let chunk_len = data.len() as Pos;
+             let start = leaf_idx.checked_mul(chunk_len)?;
+             Some((start, start.checked_add(chunk_len)?))
+         };
+@@ -409,7 +416,7 @@
+         for (leaf_idx, data) in self.leaf_indices.iter().zip(&self.leaf_data) {
+             if let Some((leaf_start, leaf_end)) = leaf_span((leaf_idx, data)) {
+                 if leaf_start < global_end && global_start < leaf_end {
+-                    covered += global_end.min(leaf_end) - global_start.max(leaf_start);
++                    covered += (global_end.min(leaf_end) - global_start.max(leaf_start)) as usize;
+                 }
+             }
+         }
+@@ -427,9 +434,10 @@
+             if leaf_start < global_end && global_start < leaf_end {
+                 let copy_start = global_start.max(leaf_start);
+                 let copy_end = global_end.min(leaf_end);
+-                let len = copy_end - copy_start;
+-                result[copy_start - global_start..][..len]
+-                    .copy_from_slice(&data[copy_start - leaf_start..][..len]);
++                // Each difference is at most `length` or a leaf's length.
++                let len = (copy_end - copy_start) as usize;
++                result[(copy_start - global_start) as usize..][..len]
++                    .copy_from_slice(&data[(copy_start - leaf_start) as usize..][..len]);
+                 copied += len;
+             }
+         }
+@@ -438,14 +446,14 @@
+     }
+ 
+     /// Compute byte ranges covered by proof siblings.
+-    pub fn compute_sibling_ranges(&self, total_size: usize) -> Vec<(usize, usize, Digest)> {
++    pub fn compute_sibling_ranges(&self, total_size: Pos) -> Vec<(Pos, Pos, Digest)> {
+         if self.leaf_indices.is_empty() || self.siblings.is_empty() {
+             return Vec::new();
+         }
+ 
+-        let mut current: BTreeSet<usize> = self.leaf_indices.iter().copied().collect();
++        let mut current: BTreeSet<Pos> = self.leaf_indices.iter().copied().collect();
+ 
+-        let chunk_len = self.chunk_len();
++        let chunk_len = self.chunk_len() as Pos;
+         let mut result = Vec::new();
+         let mut proof_idx = 0;
+         let mut level_size = total_size.div_ceil(chunk_len);
+@@ -482,17 +490,17 @@
+     /// Recursively compute a CV for a byte range from sibling ranges and leaf data.
+     pub fn compute_cv(
+         &self,
+-        start: usize,
+-        end: usize,
+-        ranges: &[(usize, usize, Digest)],
++        start: Pos,
++        end: Pos,
++        ranges: &[(Pos, Pos, Digest)],
+         key: Digest,
+     ) -> Result<Digest> {
+         if let Some(&(_, _, h)) = ranges.iter().find(|(s, e, _)| *s == start && *e == end) {
+             return Ok(h);
+         }
+-        let chunk_len = self.chunk_len();
++        let chunk_len = self.chunk_len() as Pos;
+         if end - start == chunk_len {
+-            let data = self.extract_bytes(start, end - start)?;
++            let data = self.extract_bytes(start, (end - start) as usize)?;
+             return Ok(Blake3Hasher::with_key(key).chunk_cv(&data, (start / chunk_len) as u64));
+         }
+         let mid = start + (end - start).next_power_of_two() / 2;
+@@ -562,8 +570,8 @@
+         #[derive(serde::Deserialize)]
+         struct Fields {
+             leaf_data: Vec<Vec<u8>>,
+-            leaf_indices: Vec<usize>,
+-            total_leaves: usize,
++            leaf_indices: Vec<Pos>,
++            total_leaves: Pos,
+             root: Digest,
+             siblings: Vec<Digest>,
+         }
