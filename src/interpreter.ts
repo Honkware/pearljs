@@ -1503,7 +1503,15 @@ export function debugInput(
   prevouts: readonly TxOutput[],
 ): Generator<ScriptStep, ScriptResult, void> {
   checkArguments(tx, prevouts);
-  return stepInput(new TxContext(tx, prevouts), inputIndex, true);
+  return stepInput(new TxContext(...snapshot(tx, prevouts)), inputIndex, true);
+}
+
+// A stepper runs between the caller's own statements, and its hashes are computed once and kept, so it works on
+// copies: a transaction changed between steps would otherwise be judged half as it was and half as it is.
+function snapshot(tx: Transaction, prevouts: readonly TxOutput[]): [Transaction, TxOutput[]] {
+  const copy = tx.clone();
+  copy.ins.forEach((input, i) => copy.setWitness(i, input.witness.map((item) => Uint8Array.from(item))));
+  return [copy, prevouts.map(({ script, value }) => ({ script: Uint8Array.from(script), value }))];
 }
 
 /**
@@ -1535,7 +1543,7 @@ export function executeScript(
   }
   prevouts ??= tx.ins.map(() => ({ script: concat([Uint8Array.of(OP.OP_2, 32), tapLeafHash(script)]), value: 0n }));
   checkArguments(tx, prevouts);
-  return stepInput(new TxContext(tx, prevouts), inputIndex, true, { script, stack, annex });
+  return stepInput(new TxContext(...snapshot(tx, prevouts)), inputIndex, true, { script, stack, annex });
 }
 
 /**

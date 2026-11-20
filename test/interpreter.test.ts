@@ -268,6 +268,20 @@ describe('debugInput', () => {
     expect(leaf.at(-1)!.sigOpsBudget).toBe(50 + witnessSize - 100);
   });
 
+  it('judges the transaction as it was when called, whatever the caller changes between steps', () => {
+    const item = vectors.multiASpends[0]!;
+    const tx = parseTransaction(item.finalTxHex);
+    const prevouts = prevoutsOf(item.prevouts);
+    const stepper = debugInput(tx, 0, prevouts);
+    stepper.next();
+    tx.locktime += 1;
+    tx.ins[0]!.sequence -= 1;
+    tx.outs[0]!.value -= 1n;
+    let next = stepper.next();
+    while (next.done !== true) next = stepper.next();
+    expect(next.value).toEqual({ ok: true });
+  });
+
   it('shows a key path as the output script leaving a single true', () => {
     const item = vectors.signing[0]!;
     const prevouts = [{ script: hexToBytes(`5120${item.tweakedPubKey}`), value: BigInt(item.value) }];
