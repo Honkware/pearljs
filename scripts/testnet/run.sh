@@ -14,7 +14,7 @@ export PEARL_TESTNET_WALLET_DIR="${PEARL_TESTNET_WALLET_DIR:-$dir/wallet}"
 export PEARL_TESTNET_DIR="$dir"
 case "${PEARL_TESTNET_BLOCKBOOK:-}" in
   off) unset PEARL_TESTNET_BLOCKBOOK ;;
-  '') export PEARL_TESTNET_BLOCKBOOK=https://blockbook.testnet.pearlresearch.ai ;;
+  '') export PEARL_TESTNET_BLOCKBOOK=https://blockbook.testnet2.pearlnetwork.net ;;
 esac
 if [ -f "$dir/oyster/rpc.cert" ] && [ -z "${PEARL_TESTNET_OYSTER_URL:-}" ]; then
   export PEARL_TESTNET_OYSTER_URL=https://127.0.0.1:44215 PEARL_TESTNET_OYSTER_CA="$dir/oyster/rpc.cert"

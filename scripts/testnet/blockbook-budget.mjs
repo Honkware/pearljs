@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { nodeDir } from './node.mjs';
 
-export const BLOCKBOOK_URL = 'https://blockbook.testnet.pearlresearch.ai';
+export const BLOCKBOOK_URL = 'https://blockbook.testnet2.pearlnetwork.net';
 export const COUNTER = process.env.PEARL_TESTNET_BLOCKBOOK_COUNTER ?? join(nodeDir, 'blockbook-requests');
 const LIMIT = Number(process.env.PEARL_TESTNET_BLOCKBOOK_BUDGET ?? 300);
 const IN_FLIGHT = 2;
