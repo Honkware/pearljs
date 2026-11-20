@@ -35,6 +35,7 @@ import { blockHash, serializeBlockHeader } from './blockheader.js';
 import { PearlError } from './errors.js';
 import { concat, equalBytes, toHex } from './internal/bytes.js';
 import { VERIFIER_FILE_DIGESTS } from './internal/verify-proof-digests.js';
+import { retirement } from './internal/verifier-retire.js';
 
 /** What the verifier made of a proof. */
 export interface ProofVerdict {
@@ -173,6 +174,14 @@ function instantiate(locate: Locate): Promise<Verifier> {
     exports.init();
     return { exports, loaded: new Set<Cache>(), locate, broken: false };
   });
+}
+
+// Calls already holding the instance still run on it; only later ones get a fresh one.
+function retire(verifier: Verifier): void {
+  if (live === verifier && verifier.exports.memory.buffer.byteLength > retirement.bytes) {
+    live = null;
+    current = null;
+  }
 }
 
 function discard(verifier: Verifier): void {
@@ -358,6 +367,7 @@ async function judge(cache: Cache | null, call: (exports: Exports) => number, pa
     return { valid: false, outcome: 'error', message: `Internal error: ${name}: ${text}` };
   }
   const text = message(exports);
+  retire(verifier);
   if (code === 0) return { valid: true, outcome: 'accepted', message: text };
   return { valid: false, outcome: code === 1 ? 'rejected' : 'error', message: text };
 }
@@ -401,11 +411,13 @@ export const DEFAULT_MAX_PLAIN_PROOF_SIZE = 8 * 1024 * 1024;
  * base64: `PlainProof` serialized by bincode with fixed-width integers, in its
  * current or its first (no MoE field) layout, for versions 1 to 3, and
  * `PlainProofV4.to_bytes()` for version 4. The bytes are copied into the
- * verifier's memory, which keeps its largest size, and Pearl's FFI bounds
- * neither their length nor the work they cause, so a proof longer than
- * `maxSize` bytes (DEFAULT_MAX_PLAIN_PROOF_SIZE, the 8 MiB zk-pow suggests
- * to pools, unless given; Infinity lifts it) is rejected here, unread, with
- * `plain proof too large: ...`.
+ * verifier's memory, and Pearl's FFI bounds neither their length nor the
+ * work they cause, so a proof longer than `maxSize` bytes
+ * (DEFAULT_MAX_PLAIN_PROOF_SIZE, the 8 MiB zk-pow suggests to pools, unless
+ * given; Infinity lifts it) is rejected here, unread, with `plain proof too
+ * large: ...`, and a version 1 to 3 proof declaring `noise_rank`, `k`, `m` or
+ * `n` past zk-pow's sanity bounds with the sanity check's message, before
+ * zk-pow allocates by them.
  *
  * The verdict carries the FFI's text in full: `accepted`, `rejected: ...`,
  * `deserialize: ...`, or for an `error`, `Null/empty input`, `header: ...` or
@@ -423,6 +435,10 @@ export async function verifyPlainProof(job: PlainProofJob, plainProof: Uint8Arra
   // Both FFI functions refuse an empty proof first, as bad input.
   if (plainProof.length === 0) return { valid: false, outcome: 'error', message: 'Null/empty input' };
   if (plainProof.length > maxSize) return rejected(`plain proof too large: ${plainProof.length} bytes (max ${maxSize})`);
+  if (certVersion !== 4) {
+    const outOfBounds = plainDimensionsOutOfBounds(plainProof);
+    if (outOfBounds !== null) return rejected(`rejected: ${outOfBounds}`);
+  }
   return judge(
     null,
     (exports) =>
@@ -431,4 +447,24 @@ export async function verifyPlainProof(job: PlainProofJob, plainProof: Uint8Arra
       ),
     'panic: ',
   );
+}
+
+// parse_plain_proof (zk-pow src/v2/api/plain_proof.rs) builds the statement and
+// allocates by k before the sanity check bounds it, so one share could grow the
+// module's memory by gigabytes. Bincode with fixed-width integers puts m, n, k
+// and noise_rank first, as u64, in both PlainProof layouts. Each bound is
+// public_params_sanity_check's (src/v2/api/sanity_checks.rs), with its text,
+// which every V1 to V3 plain proof must pass to be accepted. A V4 proof needs
+// nothing here: PlainProofV4::parse_proof bounds k in PublicParams::try_new
+// before it reads an opening.
+function plainDimensionsOutOfBounds(proof: Uint8Array): string | null {
+  // Shorter bytes fail to decode before anything is allocated.
+  if (proof.length < 32) return null;
+  const view = new DataView(proof.buffer, proof.byteOffset, 32);
+  const [m, n, k, r] = [0, 8, 16, 24].map((at) => view.getBigUint64(at, true)) as [bigint, bigint, bigint, bigint];
+  if (r > 1024n) return `Rank must be 2^5..2^10 || r=${r}`;
+  if (k > 1n << 16n) return `k must be <= 2^16 || k=${k}`;
+  if (m > 1n << 24n) return `m must be <= 2^24 || m=${m}`;
+  if (n > 1n << 24n) return `n must be <= 2^24 || n=${n}`;
+  return null;
 }

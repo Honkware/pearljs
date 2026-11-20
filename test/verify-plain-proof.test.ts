@@ -53,6 +53,14 @@ function decodedOnlyAt64Bits(ours: string, pearl: string): boolean {
   return ours.startsWith('deserialize: ') && (!pearl.startsWith('deserialize: ') || /expected usize|must fit in a usize/.test(ours));
 }
 
+// verifyPlainProof refuses m, n, k and noise_rank past zk-pow's sanity bounds
+// before the module allocates by them, with the sanity check's words, where
+// the FFI rejects the same proof at an earlier step. No accepted proof is past
+// them.
+function boundedBeforeModule(ours: string, pearl: string): boolean {
+  return /^rejected: (Rank must be 2\^5\.\.2\^10|k must be <= 2\^16|m must be <= 2\^24|n must be <= 2\^24) \|\| /.test(ours) && /^(rejected|deserialize): /.test(pearl);
+}
+
 const cases = vectors.cases as Case[];
 
 async function judge(c: Case): Promise<ProofVerdict> {
@@ -65,21 +73,23 @@ describe('verifyPlainProof', () => {
     const verdict = await judge(c);
     expect(code(verdict)).toBe(c.code);
     expect(verdict.valid).toBe(c.code === 0);
-    if (!decodedOnlyAt64Bits(verdict.message, c.message)) expect(cut(verdict.message)).toBe(c.message);
+    if (!decodedOnlyAt64Bits(verdict.message, c.message) && !boundedBeforeModule(verdict.message, c.message)) expect(cut(verdict.message)).toBe(c.message);
   });
 
-  it('gives Pearl\'s verdict for every proof with random edits, and its message unless bincode refuses a 64-bit size', async () => {
+  it('gives Pearl\'s verdict for every proof with random edits, and its message unless bincode refuses a 64-bit size or a dimension is past its bound', async () => {
     const differ: string[] = [];
     let words = 0;
+    let bounded = 0;
     for (const [i, c] of cases.entries()) {
       if (c.name !== undefined) continue;
       const verdict = await judge(c);
       if (code(verdict) === c.code && cut(verdict.message) === c.message) continue;
-      if (code(verdict) === c.code && decodedOnlyAt64Bits(verdict.message, c.message)) words += 1;
+      if (code(verdict) === c.code && boundedBeforeModule(verdict.message, c.message)) bounded += 1;
+      else if (code(verdict) === c.code && decodedOnlyAt64Bits(verdict.message, c.message)) words += 1;
       else differ.push(`${i} ${c.base}: ${code(verdict)} ${verdict.message} | Pearl: ${c.code} ${c.message}`);
     }
     expect(differ).toEqual([]);
-    expect(words).toBe(47);
+    expect([words, bounded]).toEqual([24, 37]);
   }, 600_000);
 
   it('accepts a MiningJob from pearljs/gateway as the job', async () => {
