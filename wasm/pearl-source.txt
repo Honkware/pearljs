@@ -1,0 +1,6 @@
+# Written by wasm/build.sh: the Pearl source of the files in src/verify-proof.
+# commit: a commit of Pearl's fp8-scheme branch. tree: SHA-256 over the SHA-256
+# and path of each file copied from it (zk-pow, plonky2, pearl-blake3 and
+# LICENSE, without target, bindings and *.bin), in byte order.
+commit 1dd75a52e073b4a67079c7b6758228d71865ccea
+tree c7091976cf7e2b9c98d47e3e6485d5dea59eb3539073280e351ce727e138bd77

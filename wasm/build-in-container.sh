@@ -4,8 +4,9 @@
 #
 #   PEARL_FP8=/path/to/pearl wasm/build-in-container.sh OUT [--no-caches]
 #
-# OUT gets verifier.wasm, v1-cache.bin, v2-cache.bin, v4-cache.bin, LICENSES.txt and
-# verify-proof-digests.ts. The build runs as linux/amd64, emulated on an arm64
+# OUT gets verifier.wasm, v1-cache.bin, v2-cache.bin, v4-cache.bin, LICENSES.txt,
+# verify-proof-digests.ts and pearl-source.txt. build.sh refuses a PEARL_FP8 that
+# is not the source pearl-source.txt names unless PEARL_COMMIT, passed in, is set. The build runs as linux/amd64, emulated on an arm64
 # host (about 12 minutes there without the caches): the files pearljs ships are
 # that platform's, because the host triple enters cargo's crate hashes and
 # another platform gives a different, equivalent module. PLATFORM overrides it
@@ -25,10 +26,10 @@ tag=pearljs-wasm-build:$(echo "$platform" | tr / -)
 docker build --platform "$platform" -t "$tag" - <"$here/Dockerfile"
 docker run --rm --platform "$platform" \
   -v "$repo/wasm:/repo/wasm:ro" -v "$repo/src/verify-proof:/repo/verify-proof:ro" \
-  -v "$pearl:/pearl:ro" -v "$out:/out" -e PEARL_FP8=/pearl "$tag" sh -euc '
+  -v "$pearl:/pearl:ro" -v "$out:/out" -e PEARL_FP8=/pearl -e PEARL_COMMIT="${PEARL_COMMIT:-}" "$tag" sh -euc '
     mkdir -p /work/wasm /work/src/verify-proof /work/src/internal
     (cd /repo/wasm && tar cf - --exclude ./target .) | (cd /work/wasm && tar xf -)
     cp /repo/verify-proof/v1-cache.bin /repo/verify-proof/v2-cache.bin /repo/verify-proof/v4-cache.bin /work/src/verify-proof/
     /work/wasm/build.sh "$@"
-    cp /work/src/verify-proof/* /work/src/internal/verify-proof-digests.ts /out/
+    cp /work/src/verify-proof/* /work/src/internal/verify-proof-digests.ts /work/wasm/pearl-source.txt /out/
   ' build "$@"

@@ -26,11 +26,20 @@
 # wasm-bindgen-cli 0.2.118 (the version Cargo.lock pins) and wasm-opt 116
 # (cargo install wasm-opt --version 0.116.1). Building the caches takes a few
 # minutes; pass --no-caches to keep the ones in src/verify-proof.
+#
+# pearl-source.txt here names the Pearl source the committed files were built
+# from: a commit of the fp8-scheme branch and a SHA-256 over what is copied from
+# it (each file's SHA-256 and path, in byte order, from zk-pow, plonky2,
+# pearl-blake3 and LICENSE). A PEARL_FP8 that gives another tree is refused
+# unless PEARL_COMMIT names the commit it holds; the build then rewrites the
+# file, to be committed with the new files. --check-source only compares.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd -P)
 out="$here/../src/verify-proof"
 pearl=$(cd "${PEARL_FP8:?set PEARL_FP8 to a Pearl fp8-scheme checkout}" && pwd -P)
 stage=/tmp/pearljs-verify-proof
+# A check alone stages elsewhere, leaving any build's stage as it is.
+[ "${1:-}" != --check-source ] || stage=$(mktemp -d)
 # rust-toolchain.toml names the compiler; rustup installs it on first use.
 RUSTUP_TOOLCHAIN=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$here/rust-toolchain.toml")
 export RUSTUP_TOOLCHAIN
@@ -43,6 +52,43 @@ copy "$pearl/zk-pow" "$stage/zk-pow"
 copy "$pearl/plonky2" "$stage/plonky2"
 copy "$pearl/pearl-blake3" "$stage/pearl-blake3"
 cp "$pearl/LICENSE" "$stage/LICENSE"
+
+source_file="$here/pearl-source.txt"
+tree=$(cd "$stage" && find zk-pow plonky2 pearl-blake3 LICENSE -type f | LC_ALL=C sort | tr '\n' '\0' | xargs -0 shasum -a 256 | shasum -a 256 | cut -d' ' -f1)
+recorded_commit=$(sed -n 's/^commit //p' "$source_file")
+recorded_tree=$(sed -n 's/^tree //p' "$source_file")
+commit=${PEARL_COMMIT:-$recorded_commit}
+if ! printf '%s' "$commit" | grep -Eqx '[0-9a-f]{40}'; then
+  echo "build.sh: PEARL_COMMIT must be a full commit id, not '$commit'" >&2
+  exit 1
+fi
+# A git checkout must be at that commit with nothing changed. An extract cannot say; its tree decides.
+if [ -e "$pearl/.git" ] && head=$(git -C "$pearl" rev-parse HEAD); then
+  if [ "$head" != "$commit" ] || [ -n "$(git -C "$pearl" status --porcelain -- zk-pow plonky2 pearl-blake3 LICENSE)" ]; then
+    echo "build.sh: $pearl is at $head, or has changes, not a clean $commit" >&2
+    exit 1
+  fi
+fi
+if [ "$tree" = "$recorded_tree" ] && [ "$commit" = "$recorded_commit" ]; then
+  echo "Pearl source: commit $commit, tree $tree, as in wasm/pearl-source.txt" >&2
+elif [ -n "${PEARL_COMMIT:-}" ] && [ "${1:-}" != --check-source ]; then
+  echo "************************************************************************" >&2
+  echo "build.sh: building from Pearl $commit, tree $tree," >&2
+  echo "not the source in wasm/pearl-source.txt ($recorded_commit, tree $recorded_tree)." >&2
+  echo "The digests will change; commit pearl-source.txt with the new files." >&2
+  echo "************************************************************************" >&2
+else
+  echo "build.sh: $pearl gives tree $tree, not $recorded_tree," >&2
+  echo "the Pearl source in wasm/pearl-source.txt (commit $recorded_commit). Use a clean" >&2
+  echo "copy of that commit, or set PEARL_COMMIT to the commit $pearl holds to build from it." >&2
+  [ "${1:-}" != --check-source ] || rm -rf "$stage"
+  exit 1
+fi
+if [ "${1:-}" = --check-source ]; then
+  rm -rf "$stage"
+  exit 0
+fi
+
 patch -s -d "$stage/zk-pow" -p0 <"$here/patches/zk-pow-wasm32.patch"
 cp -R "$here/src" "$here/.cargo" "$here/Cargo.toml" "$here/Cargo.lock" "$here/rust-toolchain.toml" "$here/licenses.py" "$stage/wasm/"
 
@@ -73,10 +119,20 @@ if [ "${1:-}" != "--no-caches" ]; then
 fi
 shasum -a 256 "$out/verifier.wasm" "$out/v1-cache.bin" "$out/v2-cache.bin" "$out/v4-cache.bin"
 
+cat >"$source_file" <<EOF
+# Written by wasm/build.sh: the Pearl source of the files in src/verify-proof.
+# commit: a commit of Pearl's fp8-scheme branch. tree: SHA-256 over the SHA-256
+# and path of each file copied from it (zk-pow, plonky2, pearl-blake3 and
+# LICENSE, without target, bindings and *.bin), in byte order.
+commit $commit
+tree $tree
+EOF
+
 # The loader refuses any file whose digest is not the one written here.
 digest() { shasum -a 256 "$out/$1" | cut -d' ' -f1; }
 cat >"$here/../src/internal/verify-proof-digests.ts" <<EOF
-// Written by wasm/build.sh: the SHA-256 digests of the files pearljs/verify-proof loads.
+// Written by wasm/build.sh: the SHA-256 digests of the files pearljs/verify-proof loads,
+// built from Pearl $commit, tree $tree (wasm/pearl-source.txt).
 
 export const VERIFIER_FILE_DIGESTS = {
   'verifier.wasm': '$(digest verifier.wasm)',
