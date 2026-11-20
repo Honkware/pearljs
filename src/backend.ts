@@ -277,7 +277,7 @@ export interface PearldBackendOptions {
   network: PearlNetwork;
   /** Transactions per searchrawtransactions request. Default 100. */
   pageSize?: number;
-  /** Addresses queried at once. Default 8; a client made with `batch` sends them in one request. */
+  /** Addresses queried at once, and blocks of the P2MR filter walk. Default 8; a client made with `batch` sends them in one request. */
   concurrency?: number;
   /**
    * The height the filter scan for P2MR addresses starts at: the block a
@@ -358,14 +358,14 @@ function collect(address: string, state: FilterScan, tip: BlockRef, mempool: rea
  * A wallet backend over pearld, from a PearldClient, a PearlWsClient or
  * anything else with `call`. pearld must run with --addrindex (which turns
  * --txindex on); without it every address query fails with a
- * MissingIndexError. The address index covers P2TR addresses. For a P2MR
- * address the backend matches the compact filter of every block from
- * `scanFrom` and reads the blocks that match, which needs pearld's filter
- * index (on unless --nocfilters) and takes two requests a block the first
- * time; later queries for the same address go on from where the last ended.
- * An address given a birth with setAddressBirths is scanned from the later
- * of `scanFrom` and its birth, while the birth's parent block, when it names
- * one, is on the best chain.
+ * MissingIndexError. The address index covers P2TR addresses. For P2MR
+ * addresses the backend walks the compact filters of the blocks from
+ * `scanFrom` in one walk for all the P2MR addresses it has been asked about
+ * or given a birth for, and reads the blocks that match, which needs
+ * pearld's filter index (on unless --nocfilters) and takes three requests a
+ * block; later queries go on from where the walk ended. An address given a birth with
+ * setAddressBirths is scanned from the later of `scanFrom` and its birth,
+ * while the birth's parent block, when it names one, is on the best chain.
  */
 export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletChain {
   const { network, pageSize = 100, concurrency = 8, scanFrom = 0 } = options;
