@@ -15,8 +15,10 @@
 #   PEARL_FP8=/path/to/pearl wasm/build.sh
 #
 # Everything is copied to /tmp/pearljs-verify-proof first and built there:
-# cargo derives symbol hashes from where a path dependency lives, so the same
-# place on every machine gives the same binary. zk-pow is patched in that copy
+# cargo derives symbol hashes from where a path dependency lives, so a fixed place
+# gives the same binary on the same host platform. The host triple and the stage's
+# real path (/private/tmp on macOS) still enter those hashes, so other hosts give
+# a different, equivalent module; wasm/build-in-container.sh makes the canonical one. zk-pow is patched in that copy
 # (patches/: the chunk counter shift, the cache key size, the byte positions
 # of the committed matrices and the tile products computed in u64, which reach
 # 2^40, and the circuit layout dropped in place where rayon would drop it on a
