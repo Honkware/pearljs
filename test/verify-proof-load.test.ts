@@ -24,7 +24,7 @@ describe('loadProofVerifier', () => {
   // A directory holding the shipped files with one of them replaced.
   const serving = (asset: ProofVerifierAsset, bytes: Uint8Array) => {
     const dir = mkdtempSync(join(tmpdir(), 'pearljs-verify-proof-'));
-    for (const file of ['verifier.wasm', 'v2-cache.bin', 'v4-cache.bin'] as const) writeFileSync(join(dir, file), file === asset ? bytes : readFileSync(shipped(file)));
+    for (const file of ['verifier.wasm', 'v1-cache.bin', 'v2-cache.bin', 'v4-cache.bin'] as const) writeFileSync(join(dir, file), file === asset ? bytes : readFileSync(shipped(file)));
     return (file: ProofVerifierAsset) => pathToFileURL(join(dir, file));
   };
 
@@ -46,6 +46,13 @@ describe('loadProofVerifier', () => {
     });
   });
 
+  it('refuses a V1 cache that is the V2 cache, the same size', async () => {
+    await expect(loadProofVerifier([1], { locate: serving('v1-cache.bin', readFileSync(shipped('v2-cache.bin'))) })).rejects.toMatchObject({
+      code: 'PROOF_VERIFIER_UNAVAILABLE',
+      message: expect.stringContaining('v1-cache.bin from file:'),
+    });
+  });
+
   it('refuses a V4 cache that is another file, even once a verifier is loaded from elsewhere', async () => {
     await loadProofVerifier([3], { locate: shipped });
     await expect(loadProofVerifier([4], { locate: (asset) => shipped(asset === 'v4-cache.bin' ? 'v2-cache.bin' : asset) })).rejects.toMatchObject({
@@ -61,7 +68,7 @@ describe('loadProofVerifier', () => {
   });
 
   it('loads every version from the shipped files', async () => {
-    await expect(loadProofVerifier([2, 3, 4], { locate: shipped })).resolves.toBeUndefined();
+    await expect(loadProofVerifier([1, 2, 3, 4], { locate: shipped })).resolves.toBeUndefined();
   });
 });
 

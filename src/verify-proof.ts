@@ -1,15 +1,16 @@
 // Full verification of a certificate's ZK proof, with the verifier pearld
 // runs compiled to WebAssembly (wasm/ in the repository builds it). The
-// checks before the proof are VerifyZKProofFFI's (node/zkpow/verify.go), in
-// its order and with its messages; the proof is then judged by zk-pow's own
-// code against the same circuit caches pearld embeds.
+// checks before the proof are VerifyZKProofFFI's (node/zkpow/verify.go), or
+// for V1 verifyCertificateV1's, in its order and with its messages; the
+// proof is then judged by zk-pow's own code against the same circuit caches
+// pearld embeds.
 //
 // Nothing loads at import. The first verification fetches the 3 MB module
-// and the cache for its version (2.5 MB for V2 and V3, 2.6 MB for V4); the
-// other version's cache loads only if it is needed.
+// and the cache for its version (2.5 MB for V1, 2.5 MB for V2 and V3, 2.6 MB
+// for V4); another version's cache loads only if it is needed.
 
 /**
- * Proof verification: a V2, V3 or V4 certificate's ZK proof checked by
+ * Proof verification: a V1 to V4 certificate's ZK proof checked by
  * Pearl's verifier compiled to WebAssembly, in Node and in browsers, against
  * a block's bits or a pool's share bits.
  *
@@ -19,12 +20,14 @@
 import type { PearlBlock, PearlCertificate } from './block.js';
 import {
   certificateProofCommitment,
+  LEGACY_MAX_ZK_PROOF_SIZE,
   MAX_CERTIFICATE_V4_ANCESTOR_HEADERS,
   MAX_ZK_PROOF_SIZE,
   PUBLIC_DATA_MAX_SIZE_V2,
   PUBLIC_DATA_MAX_SIZE_V4,
   PUBLIC_DATA_MIN_SIZE_V4,
   PUBLIC_DATA_SIZE_DENSE_V2,
+  PUBLIC_DATA_SIZE_V1,
 } from './block.js';
 import type { PearlBlockHeader } from './blockheader.js';
 import { blockHash, serializeBlockHeader } from './blockheader.js';
@@ -49,7 +52,7 @@ export interface ProofVerdict {
 }
 
 /** Files the verifier loads, by the name they have next to this module. */
-export type ProofVerifierAsset = 'verifier.wasm' | 'v2-cache.bin' | 'v4-cache.bin';
+export type ProofVerifierAsset = 'verifier.wasm' | 'v2-cache.bin' | 'v4-cache.bin' | 'v1-cache.bin';
 
 /** Where loadProofVerifier reads the verifier's files from. */
 export interface ProofVerifierOptions {
@@ -63,6 +66,7 @@ export interface ProofVerifierOptions {
 }
 
 type Locate = (asset: ProofVerifierAsset) => URL | string;
+type Cache = 'v1' | 'v2' | 'v4';
 
 interface Exports {
   memory: WebAssembly.Memory;
@@ -73,13 +77,15 @@ interface Exports {
   message_len(): number;
   load_v2_cache(ptr: number, len: number): number;
   load_v4_cache(ptr: number, len: number): number;
+  load_v1_cache(ptr: number, len: number): number;
+  verify_v1(header: number, pd: number, pdLen: number, proof: number, proofLen: number): number;
   verify_v2(header: number, pd: number, pdLen: number, proof: number, proofLen: number, hasBits: number, bits: number, salted: number): number;
   verify_v4(headers: number, headersLen: number, pd: number, pdLen: number, proof: number, proofLen: number, bits: number): number;
 }
 
 interface Verifier {
   readonly exports: Exports;
-  readonly loaded: Set<'v2' | 'v4'>;
+  readonly loaded: Set<Cache>;
   // Where the instance's later caches are read from: the locate it was loaded with.
   readonly locate: Locate;
   // Set when a call into the instance threw: its stack pointer and heap may be left mid-call.
@@ -95,6 +101,8 @@ const besideModule: Locate = (asset) => {
       return new URL('./verify-proof/v2-cache.bin', import.meta.url);
     case 'v4-cache.bin':
       return new URL('./verify-proof/v4-cache.bin', import.meta.url);
+    case 'v1-cache.bin':
+      return new URL('./verify-proof/v1-cache.bin', import.meta.url);
   }
 };
 let compiled: Promise<WebAssembly.Module> | null = null;
@@ -160,7 +168,7 @@ function instantiate(locate: Locate): Promise<Verifier> {
     const instance = await WebAssembly.instantiate(module, imports);
     const exports = instance.exports as unknown as Exports;
     exports.init();
-    return { exports, loaded: new Set<'v2' | 'v4'>(), locate, broken: false };
+    return { exports, loaded: new Set<Cache>(), locate, broken: false };
   });
 }
 
@@ -189,7 +197,9 @@ function withBytes(exports: Exports, inputs: readonly Uint8Array[], f: (ptrs: nu
   return result;
 }
 
-async function verifierFor(cache: 'v2' | 'v4', locate?: Locate): Promise<Verifier> {
+const loaders = { v1: 'load_v1_cache', v2: 'load_v2_cache', v4: 'load_v4_cache' } as const;
+
+async function verifierFor(cache: Cache, locate?: Locate): Promise<Verifier> {
   for (;;) {
     const pending = (current ??= instantiate(locate ?? lastLocate).then(
       (verifier) => {
@@ -203,12 +213,12 @@ async function verifierFor(cache: 'v2' | 'v4', locate?: Locate): Promise<Verifie
     ));
     const verifier = await pending;
     if (!verifier.loaded.has(cache)) {
-      const bytes = await read(cache === 'v2' ? 'v2-cache.bin' : 'v4-cache.bin', locate ?? verifier.locate);
+      const bytes = await read(`${cache}-cache.bin`, locate ?? verifier.locate);
       if (!verifier.loaded.has(cache) && !verifier.broken) {
         const { exports } = verifier;
         let code: number;
         try {
-          code = withBytes(exports, [bytes], ([ptr]) => (cache === 'v2' ? exports.load_v2_cache(ptr!, bytes.length) : exports.load_v4_cache(ptr!, bytes.length)));
+          code = withBytes(exports, [bytes], ([ptr]) => exports[loaders[cache]](ptr!, bytes.length));
         } catch (error) {
           discard(verifier);
           throw new PearlError('PROOF_VERIFIER_UNAVAILABLE', `cannot load ${cache}-cache.bin: ${(error as Error).message}`, { cause: error });
@@ -230,11 +240,12 @@ async function verifierFor(cache: 'v2' | 'v4', locate?: Locate): Promise<Verifie
  * same place. Throws PROOF_VERIFIER_UNAVAILABLE when an asset cannot be
  * read or its SHA-256 digest is not the one pinned in this pearljs.
  */
-export async function loadProofVerifier(versions: readonly (2 | 3 | 4)[] = [2, 3, 4], options: ProofVerifierOptions = {}): Promise<void> {
-  const caches = new Set(versions.map((v) => (v === 4 ? 'v4' : 'v2') as 'v2' | 'v4'));
+export async function loadProofVerifier(versions: readonly (1 | 2 | 3 | 4)[] = [1, 2, 3, 4], options: ProofVerifierOptions = {}): Promise<void> {
+  const caches = new Set(versions.map(cacheFor));
   for (const cache of caches) await verifierFor(cache, options.locate);
 }
 
+const cacheFor = (version: number): Cache => (version === 1 ? 'v1' : version === 4 ? 'v4' : 'v2');
 const rejected = (message: string): ProofVerdict => ({ valid: false, outcome: 'rejected', message });
 const displayHash = (hash: Uint8Array): string => toHex(Uint8Array.from(hash).reverse());
 
@@ -244,7 +255,10 @@ const displayHash = (hash: Uint8Array): string => toHex(Uint8Array.from(hash).re
  * match its proof commitment, then the proof is judged against `bits`, the
  * header's own unless a pool's share bits are given. V2 and V3 proofs are
  * judged with V2's and V3's noise seeds, V4 proofs with the certificate's
- * ancestor headers. A V1 certificate is rejected with pearld's message.
+ * ancestor headers. A V1 certificate is judged as pearld's
+ * verifyCertificateV1 judges it, after the 60000-byte proof limit it checks
+ * first; with share bits it gets VerifyZKProofFFI's answer, which has no V1
+ * path.
  *
  * Resolves to the verdict; it rejects only with PROOF_VERIFIER_UNAVAILABLE
  * when the verifier cannot be loaded, and with RangeError for bits that are
@@ -255,15 +269,11 @@ const displayHash = (hash: Uint8Array): string => toHex(Uint8Array.from(hash).re
 export async function verifyProof(header: PearlBlockHeader, certificate: PearlCertificate, options: { readonly bits?: number } = {}): Promise<ProofVerdict> {
   const { bits } = options;
   if (bits !== undefined && (!Number.isInteger(bits) || bits < 0 || bits > 0xffffffff)) throw new RangeError('bits must be a uint32');
+  // pearld judges a V1 block through verifyCertificateV1; VerifyZKProofFFI, which a pool calls with share bits, has no V1 path.
+  if (certificate.version === 1 && bits === undefined) return verifyV1(header, certificate);
   const headerBytes = serializeBlockHeader(header);
-  const hash = blockHash(header);
-  if (!equalBytes(certificate.hash, hash)) {
-    return rejected(`block hash mismatch: certificate has ${displayHash(certificate.hash)}, header has ${displayHash(hash)}`);
-  }
-  const commitment = certificateProofCommitment(certificate);
-  if (!equalBytes(header.proofCommitment, commitment)) {
-    return rejected(`proof commitment mismatch: header has ${displayHash(header.proofCommitment)}, certificate has ${displayHash(commitment)}`);
-  }
+  const unbound = checkBinding(header, certificate);
+  if (unbound) return unbound;
   const { version, publicData, proof } = certificate;
   if (publicData.length === 0) return rejected('empty public data');
   if (version === 4 && publicData.length > PUBLIC_DATA_MAX_SIZE_V2) {
@@ -278,27 +288,58 @@ export async function verifyProof(header: PearlBlockHeader, certificate: PearlCe
     if (ancestors > MAX_CERTIFICATE_V4_ANCESTOR_HEADERS) return rejected(`invalid v4 headers length ${108 * (1 + ancestors)}`);
     if (proof.length > MAX_ZK_PROOF_SIZE) return rejected('FP8 proof too large');
     if (publicData.length < PUBLIC_DATA_MIN_SIZE_V4 || publicData.length > PUBLIC_DATA_MAX_SIZE_V4) return rejected(`invalid public_data_len ${publicData.length}`);
-  } else {
-    if (proof.length > MAX_ZK_PROOF_SIZE) return rejected('ZK Proof too large');
-    // PublicProofParams::is_valid_wire_size: dense, or a MoE tail of 199 bytes up.
-    if (publicData.length !== PUBLIC_DATA_SIZE_DENSE_V2 && (publicData.length < 199 || publicData.length > PUBLIC_DATA_MAX_SIZE_V2)) {
-      return rejected(`invalid public_data_len ${publicData.length}`);
-    }
+    const headers = concat([headerBytes, ...(certificate.ancestorHeaders ?? []).map(serializeBlockHeader)]);
+    return judge('v4', (exports) =>
+      withBytes(exports, [headers, publicData, proof], ([h, pd, p]) => exports.verify_v4(h!, headers.length, pd!, publicData.length, p!, proof.length, bits ?? header.bits)),
+    );
   }
+  if (proof.length > MAX_ZK_PROOF_SIZE) return rejected('ZK Proof too large');
+  // PublicProofParams::is_valid_wire_size: dense, or a MoE tail of 199 bytes up.
+  if (publicData.length !== PUBLIC_DATA_SIZE_DENSE_V2 && (publicData.length < 199 || publicData.length > PUBLIC_DATA_MAX_SIZE_V2)) {
+    return rejected(`invalid public_data_len ${publicData.length}`);
+  }
+  return judge('v2', (exports) =>
+    withBytes(exports, [headerBytes.subarray(0, 76), publicData, proof], ([h, pd, p]) =>
+      exports.verify_v2(h!, pd!, publicData.length, p!, proof.length, bits === undefined ? 0 : 1, bits ?? 0, version === 3 ? 1 : 0),
+    ),
+  );
+}
 
-  let verifier = await verifierFor(version === 4 ? 'v4' : 'v2');
-  while (verifier.broken) verifier = await verifierFor(version === 4 ? 'v4' : 'v2');
+// verifyCertificate's proof limit, then verifyCertificateV1 (node/zkpow/verify.go) and verify_zk_proof_v1's own checks.
+function verifyV1(header: PearlBlockHeader, certificate: PearlCertificate): Promise<ProofVerdict> | ProofVerdict {
+  const { publicData, proof } = certificate;
+  if (proof.length > LEGACY_MAX_ZK_PROOF_SIZE) {
+    return rejected(`v1 proof rejected: legacy proof data too large: ${proof.length} bytes (max ${LEGACY_MAX_ZK_PROOF_SIZE})`);
+  }
+  const unbound = checkBinding(header, certificate);
+  if (unbound) return unbound;
+  if (proof.length === 0) return rejected('empty proof data');
+  // The module's proof limit, 62000 bytes, is past the one above; its public data check is made here.
+  if (publicData.length !== PUBLIC_DATA_SIZE_V1) return rejected(`v1 proof requires ${PUBLIC_DATA_SIZE_V1} byte public_data, got ${publicData.length}`);
+  const headerBytes = serializeBlockHeader(header).subarray(0, 76);
+  return judge('v1', (exports) => withBytes(exports, [headerBytes, publicData, proof], ([h, pd, p]) => exports.verify_v1(h!, pd!, publicData.length, p!, proof.length)));
+}
+
+function checkBinding(header: PearlBlockHeader, certificate: PearlCertificate): ProofVerdict | null {
+  const hash = blockHash(header);
+  if (!equalBytes(certificate.hash, hash)) {
+    return rejected(`block hash mismatch: certificate has ${displayHash(certificate.hash)}, header has ${displayHash(hash)}`);
+  }
+  const commitment = certificateProofCommitment(certificate);
+  if (!equalBytes(header.proofCommitment, commitment)) {
+    return rejected(`proof commitment mismatch: header has ${displayHash(header.proofCommitment)}, certificate has ${displayHash(commitment)}`);
+  }
+  return null;
+}
+
+// Runs one call into a verifier holding the cache, and reads its verdict.
+async function judge(cache: Cache, call: (exports: Exports) => number): Promise<ProofVerdict> {
+  let verifier = await verifierFor(cache);
+  while (verifier.broken) verifier = await verifierFor(cache);
   const { exports } = verifier;
   let code: number;
   try {
-    code =
-      version === 4
-        ? withBytes(exports, [concat([headerBytes, ...(certificate.ancestorHeaders ?? []).map(serializeBlockHeader)]), publicData, proof], ([h, pd, p]) =>
-            exports.verify_v4(h!, headerBytes.length + 108 * ancestors, pd!, publicData.length, p!, proof.length, bits ?? header.bits),
-          )
-        : withBytes(exports, [headerBytes.subarray(0, 76), publicData, proof], ([h, pd, p]) =>
-            exports.verify_v2(h!, pd!, publicData.length, p!, proof.length, bits === undefined ? 0 : 1, bits ?? 0, version === 3 ? 1 : 0),
-          );
+    code = call(exports);
   } catch (error) {
     // A trap, or the engine giving up inside the module (stack overflow, out of memory),
     // leaves the instance mid-call. Drop it before any other call can reach it.

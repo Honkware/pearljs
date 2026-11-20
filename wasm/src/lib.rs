@@ -1,15 +1,15 @@
 // The proof verifier pearld runs, compiled to WebAssembly for pearljs/verify-proof.
 //
 // Each entry point mirrors one of zk-pow's Go FFI functions
-// (zk-pow/bindings/go/src/v2/verify.rs and v4/verify.rs on Pearl's fp8-scheme
-// branch): the same input checks in the same order, the same verifier call,
-// the same return codes (0 accepted, 1 rejected, 2 system error) and the
-// verifier's own error text, untruncated. The checks before the verifier call
-// and split_v4_headers are copied from those files.
+// (zk-pow/bindings/go/src/v1.rs, v2/verify.rs and v4/verify.rs on Pearl's
+// fp8-scheme branch): the same input checks in the same
+// order, the same verifier call, the same return codes (0 accepted, 1
+// rejected, 2 system error) and the same text, untruncated. The checks before
+// the verifier call and split_v4_headers are copied from those files.
 //
 // The circuit caches are not embedded. The loader hands this module the bytes
-// of the same v2_cache.bin and v4_cache.bin pearld embeds, so a proof is
-// judged by exactly the circuits pearld's verifier holds.
+// of the same v1_cache.bin, v2_cache.bin and v4_cache.bin pearld embeds, so a
+// proof is judged by exactly the circuits pearld's verifier holds.
 //
 // The exports are a plain C ABI (alloc, dealloc, message_ptr, message_len and
 // the functions below); wasm-bindgen only post-processes the module, for the
@@ -25,6 +25,7 @@ use zk_pow::v2::api::proof::{IncompleteBlockHeader, PublicProofParams, ZKProof};
 use zk_pow::v2::api::seed::SeedDerivation;
 use zk_pow::v2::api::verify;
 use zk_pow::v2::circuit::circuit_utils::CircuitCache;
+use zk_pow::v1::circuit::circuit_utils::CircuitCache as V1CircuitCache;
 use zk_pow::v4::api::primitives::BlockHeader;
 use zk_pow::v4::api::primitives::IncompleteBlockHeader as Fp8BlockHeader;
 use zk_pow::v4::api::public_params::{PublicParams, STATE_WINDOW_DEPTH};
@@ -36,6 +37,7 @@ const MAX_ZK_PROOF_SIZE: usize = 62000;
 const V4_CACHE_DIGEST: &str = "99c0f7da1c9814e94484f4031a3dfa34";
 
 struct Caches {
+    v1: OnceLock<V1CircuitCache>,
     v2: OnceLock<CircuitCache>,
     v4: OnceLock<Fp8VerifierCache>,
 }
@@ -43,7 +45,7 @@ struct Caches {
 // wasm32-unknown-unknown without the atomics feature has one thread.
 unsafe impl Sync for Caches {}
 
-static CACHES: Caches = Caches { v2: OnceLock::new(), v4: OnceLock::new() };
+static CACHES: Caches = Caches { v1: OnceLock::new(), v2: OnceLock::new(), v4: OnceLock::new() };
 
 thread_local! {
     static MESSAGE: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
@@ -96,6 +98,86 @@ pub extern "C" fn init() {
 
 unsafe fn slice<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
     if len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(ptr, len) } }
+}
+
+/// Loads v1_cache.bin. Returns 0, or 2 with the reason as the message.
+///
+/// # Safety
+/// `ptr` must point to `len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn load_v1_cache(ptr: *const u8, len: usize) -> i32 {
+    let data = unsafe { slice(ptr, len) };
+    if CACHES.v1.get().is_some() {
+        return 0;
+    }
+    // pearld's lazy_static panics on a cache that does not parse; the loader refuses it instead.
+    match V1CircuitCache::from_bytes(data) {
+        Ok(cache) if !cache.verifier_circuits_1.is_empty() && !cache.verifier_circuits_2.is_empty() => {
+            let _ = CACHES.v1.set(cache);
+            0
+        }
+        Ok(_) => {
+            set_message("V1 circuit cache is empty");
+            2
+        }
+        Err(e) => {
+            set_message(&format!("V1 circuit cache is missing or corrupt; cannot verify V1 proofs: {e}"));
+            2
+        }
+    }
+}
+
+/// verify_zk_proof_v1. `header` is the 76-byte incomplete header in wire
+/// order. Returns 0 accepted, 1 rejected, 2 system error.
+///
+/// # Safety
+/// `header` must point to 76 readable bytes, the others to their lengths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn verify_v1(
+    header: *const u8,
+    public_data: *const u8,
+    public_data_len: usize,
+    proof: *const u8,
+    proof_len: usize,
+) -> i32 {
+    let (header, public_data, proof) = unsafe {
+        (slice(header, IncompleteBlockHeader::SERIALIZED_SIZE), slice(public_data, public_data_len), slice(proof, proof_len))
+    };
+    let Some(cache) = CACHES.v1.get() else {
+        set_message("V1 circuit cache is not loaded");
+        return 2;
+    };
+    if proof.is_empty() {
+        set_message("Null or empty proof blob");
+        return 1;
+    }
+    if proof.len() > MAX_ZK_PROOF_SIZE {
+        set_message("ZK Proof too large");
+        return 1;
+    }
+    let expected_len = zk_pow::v1::api::proof::PublicProofParams::PUBLICDATA_SIZE;
+    if public_data.len() != expected_len {
+        set_message(&format!("v1 proof requires {} byte public_data, got {}", expected_len, public_data.len()));
+        return 1;
+    }
+    // The FFI is handed the C header struct and serializes it: the same 76 bytes.
+    let header = match IncompleteBlockHeader::from_bytes(header) {
+        Ok(h) => h.to_bytes(),
+        Err(e) => {
+            set_message(&e.to_string());
+            return 2;
+        }
+    };
+    match zk_pow::v1::verify_v1(&header, public_data, proof, cache, None) {
+        Ok(()) => {
+            set_message("V1 proof verified successfully");
+            0
+        }
+        Err(e) => {
+            set_message(&format!("{}", e));
+            1
+        }
+    }
 }
 
 /// Loads v2_cache.bin. Returns 0, or 2 with the reason as the message.

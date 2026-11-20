@@ -14,7 +14,7 @@ const source = readFileSync(new URL('../src/verify-proof.ts', import.meta.url), 
 
 describe('verify-proof asset URLs', () => {
   it('names each verifier asset in a literal URL that bundlers can emit', () => {
-    for (const asset of ['verifier.wasm', 'v2-cache.bin', 'v4-cache.bin']) {
+    for (const asset of ['verifier.wasm', 'v1-cache.bin', 'v2-cache.bin', 'v4-cache.bin']) {
       expect(source).toContain(`new URL('./verify-proof/${asset}', import.meta.url)`);
     }
     // A template literal makes bundlers guess, and they sweep in LICENSES.txt or pick it.

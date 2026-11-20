@@ -1,13 +1,14 @@
 #!/bin/sh
 # Builds the files pearljs/verify-proof loads, into src/verify-proof/:
 #
-#   verifier.wasm  zk-pow's V2, V3 and V4 verifiers (src/lib.rs here), compiled
+#   verifier.wasm  zk-pow's V1 to V4 verifiers (src/lib.rs here), compiled
 #                  for wasm32-unknown-unknown and optimized with wasm-opt
+#   v1-cache.bin   the V1 circuit cache, from zk-pow's build_cache
 #   v2-cache.bin   the V2 and V3 circuit cache, from zk-pow's build_cache
 #   v4-cache.bin   the V4 verifier setups, from zk-pow's build_cache
 #   LICENSES.txt   the licences of the crates compiled into verifier.wasm
 #
-# and src/internal/verify-proof-digests.ts, the SHA-256 digests of the first three.
+# and src/internal/verify-proof-digests.ts, the SHA-256 digests of the first four.
 #
 # from a checkout of Pearl's fp8-scheme branch:
 #
@@ -16,10 +17,10 @@
 # Everything is copied to /tmp/pearljs-verify-proof first and built there:
 # cargo derives symbol hashes from where a path dependency lives, so the same
 # place on every machine gives the same binary. zk-pow is patched in that copy
-# (patches/: the chunk counter shift, the cache key size, and the byte
-# positions of the committed matrices computed in u64, which reach 2^40, and
-# the circuit layout dropped in place where rayon would drop it on a pool thread
-# wasm32 never runs; none changes anything on 64-bit); the checkout is not touched. Needs rustup's wasm32-unknown-unknown target,
+# (patches/: the chunk counter shift, the cache key size, the byte positions
+# of the committed matrices and the tile products computed in u64, which reach
+# 2^40, and the circuit layout dropped in place where rayon would drop it on a
+# pool thread wasm32 never runs, in V1 and V2; none changes anything on 64-bit); the checkout is not touched. Needs rustup's wasm32-unknown-unknown target,
 # wasm-bindgen-cli 0.2.118 (the version Cargo.lock pins) and wasm-opt 116
 # (cargo install wasm-opt --version 0.116.1). Building the caches takes a few
 # minutes; pass --no-caches to keep the ones in src/verify-proof.
@@ -66,9 +67,9 @@ python3 licenses.py "$out/LICENSES.txt"
 if [ "${1:-}" != "--no-caches" ]; then
   cd "$stage/zk-pow"
   CARGO_TARGET_DIR="$stage/wasm/target/native" cargo build --locked --release --no-default-features --bin build_cache
-  "$stage/wasm/target/native/release/build_cache" "$out/v4-cache.bin" "$out/v2-cache.bin" -
+  "$stage/wasm/target/native/release/build_cache" "$out/v4-cache.bin" "$out/v2-cache.bin" "$out/v1-cache.bin"
 fi
-shasum -a 256 "$out/verifier.wasm" "$out/v2-cache.bin" "$out/v4-cache.bin"
+shasum -a 256 "$out/verifier.wasm" "$out/v1-cache.bin" "$out/v2-cache.bin" "$out/v4-cache.bin"
 
 # The loader refuses any file whose digest is not the one written here.
 digest() { shasum -a 256 "$out/$1" | cut -d' ' -f1; }
@@ -77,6 +78,7 @@ cat >"$here/../src/internal/verify-proof-digests.ts" <<EOF
 
 export const VERIFIER_FILE_DIGESTS = {
   'verifier.wasm': '$(digest verifier.wasm)',
+  'v1-cache.bin': '$(digest v1-cache.bin)',
   'v2-cache.bin': '$(digest v2-cache.bin)',
   'v4-cache.bin': '$(digest v4-cache.bin)',
 } as const;

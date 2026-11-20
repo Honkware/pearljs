@@ -10,8 +10,6 @@ import vectors from '../vectors/mining/proofs.json';
 import type { CertificateVersion, PearlCertificate } from '../src/block.js';
 import { parseBlockHeader } from '../src/blockheader.js';
 import type { PearlBlockHeader } from '../src/blockheader.js';
-import { blockHash } from '../src/blockheader.js';
-import { certificateProofCommitment } from '../src/block.js';
 import { fromHex } from '../src/internal/bytes.js';
 import { verifyBlockProof, verifyProof } from '../src/verify-proof.js';
 import type { ProofVerdict } from '../src/verify-proof.js';
@@ -69,13 +67,6 @@ describe('verifyProof', () => {
 
 describe('verifyProof outside the verifier', () => {
   const v3 = load(cases.find((c) => c.name === 'V3 dense')!);
-
-  it('rejects a V1 certificate with pearld\'s message, as VerifyZKProofFFI has no V1 path', async () => {
-    const certificate: PearlCertificate = { ...v3.certificate, version: 1 };
-    const header = { ...v3.header, proofCommitment: certificateProofCommitment(certificate) };
-    certificate.hash = blockHash(header);
-    expect(await verifyProof(header, certificate)).toEqual({ valid: false, outcome: 'rejected', message: 'unsupported certificate version 1 for FFI verification' });
-  });
 
   it('rejects a block without a certificate', async () => {
     expect(await verifyBlockProof({ header: v3.header, certificate: null, transactions: [] })).toEqual({ valid: false, outcome: 'rejected', message: 'block has no certificate' });
