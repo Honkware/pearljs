@@ -129,6 +129,32 @@ describe('XMSS key births', () => {
     expect(node.lowest()).toBe(synced + 1);
   });
 
+  // Audit 5, finding 5: a store edited to raise a birth hid the key's payment from a sync made before the first unlock.
+  it('passes no birth to the backend until an unlock in this process has checked it', async () => {
+    const { chain, node, store, wallet, key, synced } = await bornAfterSync();
+    await wallet.close();
+    const tip = chain.height;
+    const raised = (await store.get(`xmss:${key.id}`)) as { birth: { height: number; parent?: string } };
+    await store.batch([{ type: 'set', key: `xmss:${key.id}`, value: { ...raised, birth: { height: tip + 1 } } }]);
+
+    const locked = await PearlWallet.open({ store, backend: pearldBackend(node.rpc, { network: chain.network }) });
+    node.take();
+    await locked.sync();
+    expect(node.lowest()).toBe(0);
+    expect(locked.balance().confirmed).toBe(prl('3'));
+    await expect(locked.unlock(PASSPHRASE)).rejects.toMatchObject({ code: 'KEYSTORE_TAMPERED' });
+    await locked.close();
+
+    // Put back, the birth is used again once an unlock has checked it, and stays in use while locked.
+    await store.batch([{ type: 'set', key: `xmss:${key.id}`, value: raised }]);
+    const honest = await PearlWallet.open({ store, backend: pearldBackend(node.rpc, { network: chain.network }) });
+    await honest.unlock(PASSPHRASE);
+    honest.lock();
+    node.take();
+    await honest.sync();
+    expect(node.lowest()).toBe(synced + 1);
+  });
+
   it('refuses a backup whose birth was moved', async () => {
     const { chain, wallet, key } = await bornAfterSync();
     const backup = await wallet.exportState();

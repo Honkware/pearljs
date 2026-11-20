@@ -873,6 +873,8 @@ export class PearlWallet {
   #auth: JsonValue | undefined;
   // The identity that tag was last checked against, or made for, in this process; null until then.
   #verified: string | null = null;
+  // Set on the copy a sync runs on, which has no keystore: whether the wallet it copies may pass births on.
+  #birthsChecked: boolean | null = null;
   readonly #quietInterval: number;
   // Syncs this wallet has run since it was opened; the first asks about every address.
   #rounds = 0;
@@ -1648,10 +1650,21 @@ export class PearlWallet {
     this.#setTip(tip);
   }
 
+  // A birth hides every block below it from the scan, and the store is not trusted until the keystore has checked
+  // it, so a wallet passes none on before an unlock in this process has. A watch-only wallet has nothing to check with.
+  #mayPassBirths(): boolean {
+    return this.#birthsChecked ?? (this.#keystore === null || this.#verified !== null);
+  }
+
   // Each XMSS key's birth for the backend, or null where none can be trusted: until the first sync
   // after a restore has scanned the key in full, and once the wallet holds a payment to it in a
   // block below its birth, which the birth would hide from every later scan.
   #births(): Map<string, AddressBirth | null> {
+    const births = new Map<string, AddressBirth | null>();
+    if (!this.#mayPassBirths()) {
+      for (const record of this.#xmss.values()) births.set(record.address, null);
+      return births;
+    }
     const lowest = new Map<string, number>();
     for (const entry of this.#txs.values()) {
       if (entry.block === null) continue;
@@ -1660,7 +1673,6 @@ export class PearlWallet {
         if (owner?.type === 'xmss') lowest.set(owner.id, Math.min(lowest.get(owner.id) ?? Number.POSITIVE_INFINITY, entry.block.height));
       }
     }
-    const births = new Map<string, AddressBirth | null>();
     for (const record of this.#xmss.values()) {
       const birth = usableBirth(record);
       const trusted = birth !== undefined && record.synced !== false && (lowest.get(record.publicKey) ?? Number.POSITIVE_INFINITY) >= birth.height;
@@ -1808,6 +1820,7 @@ export class PearlWallet {
     copy.#tip = this.#tip;
     copy.#height = this.#height;
     copy.#rounds = this.#rounds;
+    copy.#birthsChecked = this.#mayPassBirths();
     copy.#signal = signal;
     copy.#report = (progress) => this.#emitter.emit('sync', progress);
     return copy;
