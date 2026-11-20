@@ -67,6 +67,12 @@ describe('loadProofVerifier', () => {
     await expect(loadProofVerifier([4])).resolves.toBeUndefined();
   });
 
+  it('leaves the V1 cache alone when no versions are named', async () => {
+    const asked: string[] = [];
+    await loadProofVerifier(undefined, { locate: (asset) => (asked.push(asset), shipped(asset)) });
+    expect(asked).not.toContain('v1-cache.bin');
+  });
+
   it('loads every version from the shipped files', async () => {
     await expect(loadProofVerifier([1, 2, 3, 4], { locate: shipped })).resolves.toBeUndefined();
   });

@@ -237,13 +237,14 @@ async function verifierFor(cache: Cache | null, locate?: Locate): Promise<Verifi
 
 /**
  * Load the verifier and the circuit caches for the given certificate
- * versions now rather than at the first verification. Optional: every
- * verification loads what it needs. `locate` applies to the files this
+ * versions now rather than at the first verification: V2, V3 and V4 when
+ * none are named, since V1 certificates end at mainnet block 71934.
+ * Optional: every verification loads what it needs. `locate` applies to the files this
  * call reads; a verifier it loads reads any cache it needs later from the
  * same place. Throws PROOF_VERIFIER_UNAVAILABLE when an asset cannot be
  * read or its SHA-256 digest is not the one pinned in this pearljs.
  */
-export async function loadProofVerifier(versions: readonly (1 | 2 | 3 | 4)[] = [1, 2, 3, 4], options: ProofVerifierOptions = {}): Promise<void> {
+export async function loadProofVerifier(versions: readonly (1 | 2 | 3 | 4)[] = [2, 3, 4], options: ProofVerifierOptions = {}): Promise<void> {
   const caches = new Set(versions.map(cacheFor));
   for (const cache of caches) await verifierFor(cache, options.locate);
 }
