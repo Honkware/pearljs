@@ -339,12 +339,10 @@ function processBlock(height, hash, raw, verbose) {
     if (hasScriptPath) T.scriptPathTxs += 1;
     if (hasNonDefault) T.nonDefaultSighashTxs += 1;
 
-    // The interpreter hashes every input and output again for each input, so
-    // a 1500-input consolidation takes seconds. All inputs of every 50th
-    // block, every transaction with something unusual in it, and every one
-    // of up to 64 inputs; the rest are counted as skipped.
+    // PEARL_WALK_SAMPLE=1 verifies large plain consolidations only in every
+    // 50th block, for a quicker walk; without it every input is verified.
     const unusual = hasP2mr || hasScriptPath || hasNonDefault || hasOpReturn || info.inputs.some((input) => input.annex !== undefined);
-    if (height % 50 !== 0 && !unusual && tx.ins.length > 64) {
+    if (process.env.PEARL_WALK_SAMPLE === '1' && height % 50 !== 0 && !unusual && tx.ins.length > 64) {
       T.interpreterSkipped = (T.interpreterSkipped ?? 0) + tx.ins.length;
     } else {
     const t0 = performance.now();
