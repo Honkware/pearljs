@@ -101,6 +101,8 @@ describeTestnet('P2MR spends on testnet2', () => {
   it('funds the vault twice and both XMSS keys in one wallet send, confirmed', async (context) => {
     if (skip !== null) context.skip(skip);
     const key = await wallet.addXmssKey({ label: 'testnet2 xmss' });
+    // fundsOrSkip synced the wallet first, so the key is born after that tip and no backend scans its address from genesis.
+    expect(key.birthHeight).not.toBeNull();
     walletKey = key.id;
     const sent = await wallet.send({
       recipients: [
