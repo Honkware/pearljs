@@ -186,6 +186,7 @@ export class FakeNode implements Rpc {
         if (this.swapBlock !== null && block.height === this.swapBlock.asked) block = blocks[this.swapBlock.served]!;
         const substitute = this.servedBlocks.get(block.hash);
         if (params[1] === 0) return hex(serializeBlock(substitute ?? block.block));
+        if (params[1] === 2) return { hash: block.hash, height: block.height, rawtx: (substitute ?? block.block).transactions.map((tx) => verbose(tx, block)) };
         return { hash: block.hash, height: block.height, tx: block.block.transactions.map((tx) => tx.getId()) };
       }
       case 'getrawmempool':

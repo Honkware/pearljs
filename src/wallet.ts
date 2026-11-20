@@ -23,7 +23,7 @@
 
 import * as ecc from '#secp256k1';
 import { encodeAddress, fromOutputScript, toOutputScript } from './address.js';
-import type { AccountAddresses, WalletBackend, Watched } from './backend.js';
+import type { AccountAddresses, AddressBirth, WalletBackend, Watched } from './backend.js';
 import { buildPayment, finalizePayment } from './builder.js';
 import type { Payment, Recipient } from './builder.js';
 import type { FeeRate } from './amount.js';
@@ -442,6 +442,8 @@ export interface WalletXmssKey {
   highestOnChain: number;
   /** Why the key refuses to sign until burnXmssIndices is called, or null. */
   frozen: 'restored' | 'behind' | null;
+  /** The lowest height that can hold a payment to the key, or null when its history is unknown. */
+  birthHeight: number | null;
 }
 
 /** Events and what each carries. */
@@ -518,6 +520,8 @@ interface XmssRecord {
   createdAt: number;
   /** False from a restore until a sync has finished since, so the signatures the chain holds are known before the key is unfrozen. */
   synced?: boolean;
+  /** Where the key's history can begin: the synced tip when the wallet generated the key, or the caller's height. */
+  birth?: AddressBirth;
 }
 
 interface MetaRecord {
@@ -663,6 +667,12 @@ function invalid(what: string): StoreError {
 
 const isIndex = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 
+function isBirth(value: unknown): value is AddressBirth {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const { height, parent, ...rest } = value as { height?: unknown; parent?: unknown };
+  return Object.keys(rest).length === 0 && isIndex(height) && (parent === undefined || (typeof parent === 'string' && /^[0-9a-f]{64}$/.test(parent)));
+}
+
 function originOf(account: PearlAccount): { masterFingerprint: string; path: string } | null {
   return account.masterFingerprint === null || account.path === null ? null : { masterFingerprint: account.masterFingerprint, path: account.path };
 }
@@ -794,6 +804,8 @@ function memoized(backend: WalletBackend, source: TransactionSource): { backend:
     getSpendStatus: (outpoint) => once(`spend:${outpoint.txid}:${outpoint.vout}`, () => backend.getSpendStatus(outpoint)),
   };
   const findUsed = backend.findUsed?.bind(backend);
+  const setBirths = backend.setAddressBirths?.bind(backend);
+  if (setBirths !== undefined) view.setAddressBirths = setBirths;
   const accountsKey = (accounts: readonly AccountAddresses[] = []): string => accounts.map((account) => `${account.xpub}/${account.gap}`).join(',');
   if (findUsed !== undefined) view.findUsed = (addresses, accounts) => once(`used:${accountsKey(accounts)}:${addresses.join(',')}`, () => findUsed(addresses, accounts));
   const since = (backend as Partial<ActivityScanner>).getActivitySince?.bind(backend);
@@ -968,7 +980,8 @@ export class PearlWallet {
    * restore leaves the store empty. Every XMSS key comes back frozen: a
    * backup is older than the key's real index, so signing would repeat
    * indices until burnXmssIndices moves each key past every index it may
-   * have used. Run sync afterwards; the first one scans with the gap limit.
+   * have used. Run sync afterwards; the first one scans with the gap limit,
+   * and every XMSS key from the backend's own start whatever its birth.
    */
   static async restore(options: RestoreWalletOptions): Promise<PearlWallet> {
     if ((await options.store.list('')).length > 0) throw new WalletError('WALLET_EXISTS', 'the store is not empty; restore into an empty store');
@@ -1288,8 +1301,14 @@ export class PearlWallet {
    * Adds an XMSS key, generated unless seeds are given. Seeds of a key that
    * has signed before need nextIndex: the wallet cannot know which indices
    * it used. Needs the wallet unlocked. Key generation takes about a second.
+   *
+   * A key the wallet generates after it has synced is born at the block
+   * after its synced tip: a backend that scans blocks for P2MR addresses
+   * starts there for it, while that tip stays on the best chain. For seeds
+   * given, birthHeight is the lowest height that can hold a payment to the
+   * key; without it the key's history is unknown and scanned in full.
    */
-  async addXmssKey(options: { label?: string; privateSeed?: Uint8Array; publicSeed?: Uint8Array; nextIndex?: number } = {}): Promise<WalletXmssKey> {
+  async addXmssKey(options: { label?: string; privateSeed?: Uint8Array; publicSeed?: Uint8Array; nextIndex?: number; birthHeight?: number } = {}): Promise<WalletXmssKey> {
     return this.#exclusive(async (events) => {
       const keystore = await this.#unlocked();
       const given = options.privateSeed !== undefined || options.publicSeed !== undefined;
@@ -1299,6 +1318,10 @@ export class PearlWallet {
       }
       const next = options.nextIndex ?? 0;
       if (!Number.isSafeInteger(next) || next < 0 || next > XMSS_MAX_SIGNATURES) throw new RangeError(`nextIndex must be between 0 and ${XMSS_MAX_SIGNATURES}`);
+      if (options.birthHeight !== undefined && !isIndex(options.birthHeight)) throw new RangeError('birthHeight must be a block height');
+      // Nothing in the synced tip or below it can pay a key that did not exist when the tip was seen.
+      const birth: AddressBirth | undefined =
+        options.birthHeight !== undefined ? { height: options.birthHeight } : given || this.#tip === null ? undefined : { height: this.#tip.height + 1, parent: this.#tip.hash };
       const seeds = new Uint8Array(XMSS_SEED_BYTES);
       if (given) {
         seeds.set(options.privateSeed!, 0);
@@ -1320,6 +1343,7 @@ export class PearlWallet {
           frozen: null,
           seenOnChain: -1,
           createdAt: this.#now(),
+          ...(birth === undefined ? {} : { birth }),
         };
         this.#putXmss(record);
         this.#markUnscanned(record.address);
@@ -1566,6 +1590,7 @@ export class PearlWallet {
   }
 
   async #syncBody(events: PendingEvent[], full: boolean, scanLimit: number): Promise<void> {
+    this.#backend.setAddressBirths?.(this.#births());
     const previous = this.#tip;
     const tip = await this.#backend.getTip();
     const rolledBack = await this.#reconcile(tip, events);
@@ -1608,6 +1633,27 @@ export class PearlWallet {
       this.#put('meta', this.#meta as unknown as JsonValue);
     }
     this.#setTip(tip);
+  }
+
+  // Each XMSS key's birth for the backend, or null where none can be trusted: until the first sync
+  // after a restore has scanned the key in full, and once the wallet holds a payment to it in a
+  // block below its birth, which the birth would hide from every later scan.
+  #births(): Map<string, AddressBirth | null> {
+    const lowest = new Map<string, number>();
+    for (const entry of this.#txs.values()) {
+      if (entry.block === null) continue;
+      for (const output of entry.tx.outs) {
+        const owner = this.#ownerOf(output.script)?.owner;
+        if (owner?.type === 'xmss') lowest.set(owner.id, Math.min(lowest.get(owner.id) ?? Number.POSITIVE_INFINITY, entry.block.height));
+      }
+    }
+    const births = new Map<string, AddressBirth | null>();
+    for (const record of this.#xmss.values()) {
+      const { birth } = record;
+      const trusted = birth !== undefined && record.synced !== false && (lowest.get(record.publicKey) ?? Number.POSITIVE_INFINITY) >= birth.height;
+      births.set(record.address, trusted ? birth : null);
+    }
+    return births;
   }
 
   // One question for everything since the last synced tip, where the backend can answer it. Taking
@@ -2312,6 +2358,7 @@ export class PearlWallet {
         const record = asRecord<XmssRecord>(value, key);
         // The address is the key's own: one put in its place would send the key's payments elsewhere.
         if (record.publicKey !== name || !/^[0-9a-f]{128}$/.test(name) || !isIndex(record.next) || record.address !== encodeAddress({ version: 2, program: xmssTree(name).root }, this.network)) throw invalid(key);
+        if (record.birth !== undefined && !isBirth(record.birth)) throw invalid(key);
         this.#xmss.set(name, record);
         // A copy: the record above changes in memory before it is stored again.
         this.#xmssStored.set(name, structuredClone(value));
@@ -2334,7 +2381,9 @@ export class PearlWallet {
     const accounts = [...this.#accounts.values()]
       .map((record) => [record.id, record.kind, record.number, record.xpub, record.origin?.masterFingerprint ?? null, record.origin?.path ?? null])
       .sort((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1));
-    return JSON.stringify({ network: this.network.name, accounts, imported: [...this.#imported.keys()].sort(), xmss: [...this.#xmss.keys()].sort() });
+    // A birth hides every block below it from the scan, so it is authenticated with its key. Left out when no key has one, as before births.
+    const births = [...this.#xmss.values()].flatMap((record) => (record.birth === undefined ? [] : [[record.publicKey, record.birth.height, record.birth.parent ?? null]])).sort((a, b) => (String(a[0]) < String(b[0]) ? -1 : 1));
+    return JSON.stringify({ network: this.network.name, accounts, imported: [...this.#imported.keys()].sort(), xmss: [...this.#xmss.keys()].sort(), ...(births.length === 0 ? {} : { births }) });
   }
 
   // Tags the accounts and keys as they now are, after an operation changed them; stored with its batch.
@@ -2812,6 +2861,7 @@ export class PearlWallet {
       remaining: Math.max(0, XMSS_MAX_SIGNATURES - record.next),
       highestOnChain: record.seenOnChain,
       frozen: record.frozen,
+      birthHeight: record.birth?.height ?? null,
     };
   }
 
