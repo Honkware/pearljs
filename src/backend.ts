@@ -508,7 +508,14 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletCh
     // spending its outputs included, so the unspent ones are those no input
     // here refers to. Mempool transactions are in the lists too.
     const transactions = new Map<string, FoundTx>();
-    for (const list of await mapLimit(addresses, concurrency, search)) {
+    // Every scanned address joins the walk at once, so one walk serves them all.
+    const lists = new Map<string, FoundTx[]>();
+    const listed = addresses.filter((address) => decodeAddress(address, network).version === 1);
+    await Promise.all([
+      ...addresses.filter((address) => !listed.includes(address)).map(async (address) => lists.set(address, await scan(address))),
+      mapLimit(listed, concurrency, async (address) => lists.set(address, await search(address))),
+    ]);
+    for (const list of addresses.map((address) => lists.get(address)!)) {
       for (const tx of list) transactions.set(tx.txid, tx);
     }
     const spent = new Set<string>();

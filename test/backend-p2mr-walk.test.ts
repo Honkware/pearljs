@@ -57,6 +57,17 @@ describe('the P2MR filter walk of pearldBackend', () => {
     expect(sorted(node.filters)).toEqual(node.range(2, chain.height));
   });
 
+  it('asks for each block filter once for more addresses than it queries at a time', async () => {
+    const chain = new FakeChain();
+    const addresses = [1, 2, 3, 4, 5].map((fill) => keyAddress(chain, fill));
+    for (const address of addresses) chain.pay(address, prl('1'));
+    chain.mine();
+    const node = recording(chain);
+    const backend = pearldBackend(node.rpc, { network: chain.network, concurrency: 2 });
+    expect(await backend.getUtxos(addresses)).toHaveLength(5);
+    expect(sorted(node.filters)).toEqual(node.range(0, chain.height));
+  });
+
   it('fetches a block that pays two addresses once', async () => {
     const chain = new FakeChain();
     const [a, b] = [1, 2].map((fill) => keyAddress(chain, fill)) as [string, string];
