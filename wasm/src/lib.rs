@@ -1,8 +1,8 @@
 // The proof verifier pearld runs, compiled to WebAssembly for pearljs/verify-proof.
 //
 // Each entry point mirrors one of zk-pow's Go FFI functions
-// (zk-pow/bindings/go/src/v1.rs, v2/verify.rs and v4/verify.rs on Pearl's
-// fp8-scheme branch): the same input checks in the same
+// (zk-pow/bindings/go/src/v1.rs, v2/verify.rs, v2/plain.rs, v4/verify.rs and
+// v4/plain.rs on Pearl's fp8-scheme branch): the same input checks in the same
 // order, the same verifier call, the same return codes (0 accepted, 1
 // rejected, 2 system error) and the same text, untruncated. The checks before
 // the verifier call and split_v4_headers are copied from those files.
@@ -17,7 +17,7 @@
 // wasm32-unknown-unknown: a panic traps, after the hook set by init has saved
 // its message, and the loader drops the instance.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 
 use anyhow::{Result, ensure};
@@ -25,9 +25,11 @@ use zk_pow::v2::api::proof::{IncompleteBlockHeader, PublicProofParams, ZKProof};
 use zk_pow::v2::api::seed::SeedDerivation;
 use zk_pow::v2::api::verify;
 use zk_pow::v2::circuit::circuit_utils::CircuitCache;
+use zk_pow::v2::ffi::plain_proof::PlainProof;
 use zk_pow::v1::circuit::circuit_utils::CircuitCache as V1CircuitCache;
 use zk_pow::v4::api::primitives::BlockHeader;
 use zk_pow::v4::api::primitives::IncompleteBlockHeader as Fp8BlockHeader;
+use zk_pow::v4::api::plain_proof::PlainProofV4;
 use zk_pow::v4::api::public_params::{PublicParams, STATE_WINDOW_DEPTH};
 use zk_pow::v4::api::zk::Fp8VerifierCache;
 
@@ -49,6 +51,12 @@ static CACHES: Caches = Caches { v1: OnceLock::new(), v2: OnceLock::new(), v4: O
 
 thread_local! {
     static MESSAGE: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    // The proof FFIs report a panic as "Internal panic: ", the plain-proof FFIs as "panic: ".
+    static PANIC_PREFIX: Cell<&'static str> = const { Cell::new("Internal panic: ") };
+}
+
+fn panics_as(prefix: &'static str) {
+    PANIC_PREFIX.with(|p| p.set(prefix));
 }
 
 fn set_message(message: &str) {
@@ -92,7 +100,7 @@ pub extern "C" fn init() {
             .map(String::as_str)
             .or_else(|| info.payload().downcast_ref::<&str>().copied())
             .unwrap_or("Unknown panic");
-        set_message(&format!("Internal panic: {}", payload.lines().next().unwrap_or(payload)));
+        set_message(&format!("{}{}", PANIC_PREFIX.with(Cell::get), payload.lines().next().unwrap_or(payload)));
     }));
 }
 
@@ -140,6 +148,7 @@ pub unsafe extern "C" fn verify_v1(
     proof: *const u8,
     proof_len: usize,
 ) -> i32 {
+    panics_as("Internal panic: ");
     let (header, public_data, proof) = unsafe {
         (slice(header, IncompleteBlockHeader::SERIALIZED_SIZE), slice(public_data, public_data_len), slice(proof, proof_len))
     };
@@ -253,6 +262,7 @@ pub unsafe extern "C" fn verify_v2(
     nbits: u32,
     salted: u32,
 ) -> i32 {
+    panics_as("Internal panic: ");
     let (header, public_data, proof) = unsafe {
         (slice(header, IncompleteBlockHeader::SERIALIZED_SIZE), slice(public_data, public_data_len), slice(proof, proof_len))
     };
@@ -329,6 +339,7 @@ pub unsafe extern "C" fn verify_v4(
     proof_len: usize,
     nbits: u32,
 ) -> i32 {
+    panics_as("Internal panic: ");
     let (headers, public_data, proof) =
         unsafe { (slice(headers, headers_len), slice(public_data, public_data_len), slice(proof, proof_len)) };
     let Some(cache) = CACHES.v4.get() else {
@@ -368,6 +379,80 @@ pub unsafe extern "C" fn verify_v4(
             1
         }
     }
+}
+
+/// verify_plain_proof_ffi: a bincode PlainProof (certificate versions 1 to
+/// 3) against the 76-byte incomplete header in wire order, at `nbits`, or at
+/// the header's own bits when it is 0. Returns 0 accepted, 1 rejected, 2 bad
+/// input or panic.
+///
+/// # Safety
+/// `header` must point to 76 readable bytes, `plain_proof` to `len`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn verify_plain_v2(header: *const u8, plain_proof: *const u8, len: usize, cert_version: u32, nbits: u32) -> i32 {
+    panics_as("panic: ");
+    if len == 0 {
+        set_message("Null/empty input");
+        return 2;
+    }
+    let (header, bytes) = unsafe { (slice(header, IncompleteBlockHeader::SERIALIZED_SIZE), slice(plain_proof, len)) };
+    // The FFI is handed the C header struct, which from_bytes rebuilds from the wire bytes.
+    let header = match IncompleteBlockHeader::from_bytes(header) {
+        Ok(h) => h,
+        Err(e) => {
+            set_message(&e.to_string());
+            return 2;
+        }
+    };
+    let (code, message) = (|| {
+        let pp = match PlainProof::deserialize_compat(bytes) {
+            Ok(p) => p,
+            Err(e) => return (1, format!("deserialize: {e}")),
+        };
+        let version = match pp.check_cert_version_eligible(cert_version) {
+            Ok(v) => v,
+            Err(e) => return (1, format!("rejected: {e}")),
+        };
+        let nover = if nbits == 0 { None } else { Some(nbits) };
+        match verify::verify_plain_proof(&header, &pp, nover, version.seed_derivation()) {
+            Ok(()) => (0, "accepted".to_string()),
+            Err(e) => (1, format!("rejected: {e}")),
+        }
+    })();
+    set_message(&message);
+    code
+}
+
+/// verify_plain_proof_v4_ffi: a PlainProofV4 against the 76-byte incomplete
+/// header, at `nbits`, or at the header's own bits when it is 0.
+///
+/// # Safety
+/// `header` must point to 76 readable bytes, `plain_proof` to `len`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn verify_plain_v4(header: *const u8, plain_proof: *const u8, len: usize, nbits: u32) -> i32 {
+    panics_as("panic: ");
+    if len == 0 {
+        set_message("Null/empty input");
+        return 2;
+    }
+    let (header, bytes) = unsafe { (slice(header, Fp8BlockHeader::SERIALIZED_SIZE), slice(plain_proof, len)) };
+    let (code, message) = (|| {
+        let header = match Fp8BlockHeader::from_bytes(header) {
+            Ok(h) => h,
+            Err(e) => return (2, format!("header: {e}")),
+        };
+        let pp = match PlainProofV4::from_bytes(bytes) {
+            Ok(p) => p,
+            Err(e) => return (1, format!("deserialize: {e:#}")),
+        };
+        let nover = if nbits == 0 { None } else { Some(nbits) };
+        match zk_pow::v4::api::verify::verify_plain_proof(&header, &pp, nover) {
+            Ok(()) => (0, "accepted".to_string()),
+            Err(e) => (1, format!("rejected: {e:#}")),
+        }
+    })();
+    set_message(&message);
+    code
 }
 
 /// For measurement only (feature measure-setup, never shipped): compiles the

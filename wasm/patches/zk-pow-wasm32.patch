@@ -220,12 +220,25 @@
      Ok((res, noise_prep_slice))
 --- src/v2/api/plain_proof.rs
 +++ src/v2/api/plain_proof.rs
-@@ -93,12 +93,13 @@
+@@ -66,7 +66,8 @@
+     k: usize,
+     key: [u8; BLAKE3_DIGEST_SIZE],
+ ) -> Result<Vec<[u8; BLAKE3_DIGEST_SIZE]>> {
+-    let total_b_cols = total_b_cols(p);
++    // A position past usize panics rather than rejecting a share the 64-bit verifier would judge.
++    let total_b_cols = usize::try_from(total_b_cols(p)).expect("matrix position fits usize");
+     let a_ranges = p.a.proof.compute_sibling_ranges(pearl_blake3::padded_chunk_len(p.m * k));
+     let b_ranges =
+         p.bt.proof
+@@ -93,12 +94,16 @@
                      (*proof, ranges)
                  }
              };
 -            if let Some(&(_, _, h)) = ranges.iter().find(|(s, e, _)| *s == loc.global_start && *e == loc.global_end) {
-+            let (start, end) = (usize::try_from(loc.global_start)?, usize::try_from(loc.global_end)?);
++            let (start, end) = (
++                usize::try_from(loc.global_start).expect("matrix position fits usize"),
++                usize::try_from(loc.global_end).expect("matrix position fits usize"),
++            );
 +            if let Some(&(_, _, h)) = ranges.iter().find(|(s, e, _)| *s == start && *e == end) {
                  return Ok(h);
              }
@@ -236,15 +249,75 @@
                  .context("Failed to compute CV")
          })
          .collect()
-@@ -143,7 +144,7 @@
+@@ -143,23 +148,26 @@
      locs.iter()
          .map(|loc| {
              let proof = proof_for(p, loc.source)?;
 -            proof.extract_bytes(loc.global_start, 64).map(|b| b.try_into().unwrap())
-+            proof.extract_bytes(usize::try_from(loc.global_start)?, 64).map(|b| b.try_into().unwrap())
++            proof.extract_bytes(usize::try_from(loc.global_start).expect("matrix position fits usize"), 64).map(|b| b.try_into().unwrap())
          })
          .collect()
  }
+ 
+-fn total_b_cols(p: &PlainProof) -> usize {
+-    if let Some(moe) = &p.moe { p.n * moe.e } else { p.n }
++// In u64 whatever usize is, wrapping as the 64-bit release build does.
++fn total_b_cols(p: &PlainProof) -> u64 {
++    if let Some(moe) = &p.moe { (p.n as u64).wrapping_mul(moe.e as u64) } else { p.n as u64 }
+ }
+ 
+ /// Leaf count the Merkle tree of a row-major byte buffer whose length is the
+ /// product of `dims` must declare. Errors if the product overflows `usize`.
+-fn expected_merkle_leaves(dims: &[usize]) -> Result<usize> {
++// In u64 whatever usize is: tree sizes reach 2^40 bytes.
++fn expected_merkle_leaves(dims: &[u64]) -> Result<u64> {
+     let bytes = dims
+         .iter()
+-        .try_fold(1usize, |acc, &d| acc.checked_mul(d))
++        .try_fold(1u64, |acc, &d| acc.checked_mul(d))
+         .ok_or_else(|| anyhow::anyhow!("declared dimensions {dims:?} overflow usize"))?;
+-    Ok(pearl_blake3::padded_chunk_len(bytes) / BLAKE3_CHUNK_LEN)
++    let chunk = BLAKE3_CHUNK_LEN as u64;
++    Ok(bytes.div_ceil(chunk).wrapping_mul(chunk) / chunk)
+ }
+ 
+ /// Rejects a proof whose committed Merkle trees don't have the leaf count
+@@ -171,9 +179,9 @@
+ /// interpretations. The A/B trees are row-major `m*k` / `total_b_cols*k`
+ /// int8 bytes; the MoE routing tree is `m*top_k` little-endian `u32`s.
+ fn check_declared_tree_sizes(p: &PlainProof) -> Result<()> {
+-    let a_expected = expected_merkle_leaves(&[p.m, p.k])?;
++    let a_expected = expected_merkle_leaves(&[p.m as u64, p.k as u64])?;
+     ensure_eq!(
+-        p.a.proof.total_leaves,
++        p.a.proof.total_leaves as u64,
+         a_expected,
+         "A Merkle tree declares {} leaves but m={} k={} imply {}",
+         p.a.proof.total_leaves,
+@@ -182,9 +190,9 @@
+         a_expected
+     );
+ 
+-    let b_expected = expected_merkle_leaves(&[total_b_cols(p), p.k])?;
++    let b_expected = expected_merkle_leaves(&[total_b_cols(p), p.k as u64])?;
+     ensure_eq!(
+-        p.bt.proof.total_leaves,
++        p.bt.proof.total_leaves as u64,
+         b_expected,
+         "B^T Merkle tree declares {} leaves but n={} k={} (total columns {}) imply {}",
+         p.bt.proof.total_leaves,
+@@ -195,9 +203,9 @@
+     );
+ 
+     if let Some(moe) = &p.moe {
+-        let routing_expected = expected_merkle_leaves(&[p.m, moe.top_k, std::mem::size_of::<u32>()])?;
++        let routing_expected = expected_merkle_leaves(&[p.m as u64, moe.top_k as u64, std::mem::size_of::<u32>() as u64])?;
+         ensure_eq!(
+-            moe.routing_proof.total_leaves,
++            moe.routing_proof.total_leaves as u64,
+             routing_expected,
+             "routing Merkle tree declares {} leaves but m={} top_k={} imply {}",
+             moe.routing_proof.total_leaves,
 --- src/v2/api/sanity_checks.rs
 +++ src/v2/api/sanity_checks.rs
 @@ -41,8 +41,9 @@
@@ -472,16 +545,43 @@
              .collect();
          sibling_ranges.sort_unstable();
          debug_assert!(
-@@ -419,7 +420,7 @@
+@@ -264,9 +265,11 @@
+ impl TreeSchedules {
+     fn new(params: &PublicParams, cv_locs: &[AuxiliaryCvLocation]) -> Result<Self> {
+         let schedule = |source, rows: usize, row_bytes: usize, hash_id, label: &str| -> Result<TreeSchedule> {
+-            let tree_bytes = rows
+-                .checked_mul(row_bytes)
++            // Past usize this panics rather than rejecting a share the 64-bit verifier would judge.
++            let tree_bytes = (rows as u64)
++                .checked_mul(row_bytes as u64)
+                 .ok_or_else(|| anyhow::anyhow!("{label}: matrix byte length overflow"))?;
++            let tree_bytes = usize::try_from(tree_bytes).expect("matrix byte length fits usize");
+             Ok(TreeSchedule::new(cv_locs, source, tree_bytes, hash_id))
+         };
+         let m = params.m() as usize;
+@@ -369,9 +372,10 @@
+     let rows = row_indices
+         .iter()
+         .map(|&idx| {
+-            let start = idx
+-                .checked_mul(row_bytes)
++            let start = (idx as u64)
++                .checked_mul(row_bytes as u64)
+                 .ok_or_else(|| anyhow::anyhow!("committed-row start overflow"))?;
++            let start = usize::try_from(start).expect("committed-row start fits usize");
+             proof.extract_bytes(start, row_bytes).context("Failed to extract strip")
+         })
+         .collect::<Result<Vec<_>>>()?;
+@@ -419,7 +423,7 @@
                  // Fully opened: the compiler never emits auxiliary offsets messages.
                  ProofSource::Offsets => anyhow::bail!("offsets tree cannot source auxiliary messages"),
              };
 -            proof.extract_bytes(loc.global_start, 64).map(|b| b.try_into().unwrap())
-+            proof.extract_bytes(usize::try_from(loc.global_start)?, 64).map(|b| b.try_into().unwrap())
++            proof.extract_bytes(usize::try_from(loc.global_start).expect("tree position fits usize"), 64).map(|b| b.try_into().unwrap())
          })
          .collect()
  }
-@@ -461,7 +462,7 @@
+@@ -461,7 +465,7 @@
              };
              ranges
                  .iter()
@@ -490,6 +590,30 @@
                  .map(|&(_, _, h)| h)
                  .ok_or_else(|| {
                      anyhow::anyhow!(
+--- src/v4/api/plain_proof.rs
++++ src/v4/api/plain_proof.rs
+@@ -383,17 +383,18 @@
+ }
+ 
+ fn check_tree_leaves(proof: &MerkleProof, dims: &[usize], hash_id: HashId, label: &str) -> Result<()> {
++    // In u64 whatever usize is: tree sizes reach 2^40 bytes.
+     let bytes = dims
+         .iter()
+-        .try_fold(1usize, |acc, &d| acc.checked_mul(d))
++        .try_fold(1u64, |acc, &d| acc.checked_mul(d as u64))
+         .ok_or_else(|| anyhow::anyhow!("{label}: declared dimensions {dims:?} overflow usize"))?;
+     let chunk = hash_id.chunk_len();
+     if let Some(leaf) = proof.leaf_data.first() {
+         ensure_eq!(leaf.len(), chunk, "{label}: leaf length must match hash_id chunk_len");
+     }
+-    let expected = hash_id.padded_len(bytes) / chunk;
++    let expected = bytes.div_ceil(chunk as u64).wrapping_mul(chunk as u64) / chunk as u64;
+     ensure_eq!(
+-        proof.total_leaves,
++        proof.total_leaves as u64,
+         expected,
+         "{label}: Merkle tree declares {} leaves but {dims:?} imply {expected}",
+         proof.total_leaves
 --- src/v4/circuit/chip/blake3/program.rs
 +++ src/v4/circuit/chip/blake3/program.rs
 @@ -267,14 +267,14 @@

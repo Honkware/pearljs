@@ -5,14 +5,15 @@
 // proof is then judged by zk-pow's own code against the same circuit caches
 // pearld embeds.
 //
-// Nothing loads at import. The first verification fetches the 3 MB module
+// Nothing loads at import. The first verification fetches the 3.4 MB module
 // and the cache for its version (2.5 MB for V1, 2.5 MB for V2 and V3, 2.6 MB
 // for V4); another version's cache loads only if it is needed.
 
 /**
  * Proof verification: a V1 to V4 certificate's ZK proof checked by
  * Pearl's verifier compiled to WebAssembly, in Node and in browsers, against
- * a block's bits or a pool's share bits.
+ * a block's bits or a pool's share bits, and a miner's plain proof checked
+ * as a pool checks a share.
  *
  * @module
  */
@@ -79,6 +80,8 @@ interface Exports {
   load_v4_cache(ptr: number, len: number): number;
   load_v1_cache(ptr: number, len: number): number;
   verify_v1(header: number, pd: number, pdLen: number, proof: number, proofLen: number): number;
+  verify_plain_v2(header: number, proof: number, proofLen: number, certVersion: number, bits: number): number;
+  verify_plain_v4(header: number, proof: number, proofLen: number, bits: number): number;
   verify_v2(header: number, pd: number, pdLen: number, proof: number, proofLen: number, hasBits: number, bits: number, salted: number): number;
   verify_v4(headers: number, headersLen: number, pd: number, pdLen: number, proof: number, proofLen: number, bits: number): number;
 }
@@ -199,7 +202,7 @@ function withBytes(exports: Exports, inputs: readonly Uint8Array[], f: (ptrs: nu
 
 const loaders = { v1: 'load_v1_cache', v2: 'load_v2_cache', v4: 'load_v4_cache' } as const;
 
-async function verifierFor(cache: Cache, locate?: Locate): Promise<Verifier> {
+async function verifierFor(cache: Cache | null, locate?: Locate): Promise<Verifier> {
   for (;;) {
     const pending = (current ??= instantiate(locate ?? lastLocate).then(
       (verifier) => {
@@ -212,7 +215,7 @@ async function verifierFor(cache: Cache, locate?: Locate): Promise<Verifier> {
       },
     ));
     const verifier = await pending;
-    if (!verifier.loaded.has(cache)) {
+    if (cache !== null && !verifier.loaded.has(cache)) {
       const bytes = await read(`${cache}-cache.bin`, locate ?? verifier.locate);
       if (!verifier.loaded.has(cache) && !verifier.broken) {
         const { exports } = verifier;
@@ -332,8 +335,9 @@ function checkBinding(header: PearlBlockHeader, certificate: PearlCertificate): 
   return null;
 }
 
-// Runs one call into a verifier holding the cache, and reads its verdict.
-async function judge(cache: Cache, call: (exports: Exports) => number): Promise<ProofVerdict> {
+// Runs one call into a verifier holding the cache, and reads its verdict. A
+// panic's message starts with the prefix its FFI function gives it.
+async function judge(cache: Cache | null, call: (exports: Exports) => number, panic = 'Internal panic: '): Promise<ProofVerdict> {
   let verifier = await verifierFor(cache);
   while (verifier.broken) verifier = await verifierFor(cache);
   const { exports } = verifier;
@@ -347,7 +351,7 @@ async function judge(cache: Cache, call: (exports: Exports) => number): Promise<
     if (error instanceof WebAssembly.RuntimeError) {
       // A panic's hook saved its message before the trap.
       const text = message(exports);
-      return { valid: false, outcome: 'error', message: text.startsWith('Internal panic: ') ? text : `Internal panic: ${error.message}` };
+      return { valid: false, outcome: 'error', message: text.startsWith(panic) ? text : `${panic}${error.message}` };
     }
     const { name, message: text } = error instanceof Error ? error : new Error(String(error));
     return { valid: false, outcome: 'error', message: `Internal error: ${name}: ${text}` };
@@ -364,4 +368,58 @@ async function judge(cache: Cache, call: (exports: Exports) => number): Promise<
 export function verifyBlockProof(block: PearlBlock, options: { readonly bits?: number } = {}): Promise<ProofVerdict> {
   if (block.certificate === null) return Promise.resolve(rejected('block has no certificate'));
   return verifyProof(block.header, block.certificate, options);
+}
+
+/**
+ * The job a plain proof solves, as pearl-gateway's MiningJob carries it; a
+ * `MiningJob` from `pearljs/gateway` is one.
+ */
+export interface PlainProofJob {
+  /** The block header without its proof commitment, 76 bytes. */
+  readonly incompleteHeader: Uint8Array;
+  /**
+   * The certificate version the block needs, which picks the proof's format:
+   * 1 to 3 for pearl_mining's `PlainProof`, 4 for `PlainProofV4`.
+   */
+  readonly certVersion: number;
+}
+
+/**
+ * Verify a miner's plain proof, the solution it sends pearl-gateway with
+ * submitPlainProof, as a pool checks a share with zk-pow's
+ * `verify_plain_proof_ffi` (certificate versions other than 4) and
+ * `verify_plain_proof_v4_ffi` (version 4): the proof is decoded, its Merkle
+ * openings checked against its committed roots, its jackpot recomputed and
+ * held to `bits`, the header's own when omitted or 0. No circuit cache is
+ * needed.
+ *
+ * `plainProof` is the proof's bytes as submitPlainProof carries them after
+ * base64: `PlainProof` serialized by bincode with fixed-width integers, in its
+ * current or its first (no MoE field) layout, for versions 1 to 3, and
+ * `PlainProofV4.to_bytes()` for version 4. The bytes are copied into the
+ * verifier's memory, which keeps its largest size, and Pearl's FFI bounds
+ * neither their length nor the work they cause, so bound what you accept.
+ *
+ * The verdict carries the FFI's text in full: `accepted`, `rejected: ...`,
+ * `deserialize: ...`, or for an `error`, `Null/empty input`, `header: ...` or
+ * `panic: ...`. Rejects only with PROOF_VERIFIER_UNAVAILABLE when the module
+ * cannot be loaded, and with RangeError for a header that is not 76 bytes or
+ * a version or bits that are not a uint32.
+ */
+export async function verifyPlainProof(job: PlainProofJob, plainProof: Uint8Array, options: { readonly bits?: number } = {}): Promise<ProofVerdict> {
+  const { incompleteHeader: header, certVersion } = job;
+  const { bits = 0 } = options;
+  if (header.length !== 76) throw new RangeError('incompleteHeader must be 76 bytes');
+  if (!Number.isInteger(certVersion) || certVersion < 0 || certVersion > 0xffffffff) throw new RangeError('certVersion must be a uint32');
+  if (!Number.isInteger(bits) || bits < 0 || bits > 0xffffffff) throw new RangeError('bits must be a uint32');
+  // Both FFI functions refuse an empty proof first, as bad input.
+  if (plainProof.length === 0) return { valid: false, outcome: 'error', message: 'Null/empty input' };
+  return judge(
+    null,
+    (exports) =>
+      withBytes(exports, [header, plainProof], ([h, p]) =>
+        certVersion === 4 ? exports.verify_plain_v4(h!, p!, plainProof.length, bits) : exports.verify_plain_v2(h!, p!, plainProof.length, certVersion, bits),
+      ),
+    'panic: ',
+  );
 }
