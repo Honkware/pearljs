@@ -1,0 +1,86 @@
+{
+ "comment": "A wallet store written before XMSS keys had birth heights: synced to height 6, then one generated XMSS key. Mnemonic and passphrase of test/wallet-chain.ts.",
+ "entries": {
+  "account:0": {
+   "id": "0",
+   "kind": "seed",
+   "number": 0,
+   "xpub": "vpub5Zdms8TyURsNuQknxffm1XM1CcFxiqChxhkyCzZJSYXJsUZP5EBT7j45J3ngkje2bze8H6kxFQST7ZhjJq9ScUXz64F2SzCCJRGYFbFptfo",
+   "origin": {
+    "masterFingerprint": "73c5da0a",
+    "path": "m/86'/1'/0'"
+   },
+   "label": null,
+   "receive": 0,
+   "change": 0
+  },
+  "auth": {
+   "nonce": "9b2cb9550df7c9636a5db2ff",
+   "tag": "86687029e10ffd7fb850135c7a4a89e1"
+  },
+  "keystore": {
+   "format": "pearljs-keystore",
+   "version": 1,
+   "kdf": {
+    "name": "scrypt",
+    "N": 1024,
+    "r": 8,
+    "p": 1,
+    "salt": "6933831a3ba608e9515a46339881fa8e936943d806c5e3a3d171baaf01e7edb5"
+   },
+   "cipher": "aes-256-gcm",
+   "key": {
+    "nonce": "878cc040968e646d71a2b999",
+    "ciphertext": "d997241034462096721426af5868c2ef442e82c3ed7cd01639d4d65d38a9211b4f515bb53b436a2d6bf0dc90134e07aa"
+   },
+   "secrets": {
+    "mnemonic": {
+     "kind": "mnemonic",
+     "nonce": "6ed71426534407a43503e7fd",
+     "ciphertext": "3f7e54090cc68485f9646beaa513c782143b547e9e9cb5b214a02f369d81bf1dcad8b2b3214d8386a4400b3d6420c3aff006036f222b78ad6cf42ca9b3f33f8af7ff8ae95cc8b3e1c34590329c0c23bcc8e68432a99f460af2631974f044feb31830f420f3ae603c5d497f4d6e"
+    },
+    "seed": {
+     "kind": "seed",
+     "nonce": "e26bfc86dc14e7444aa9f512",
+     "ciphertext": "5ff13c2644e65f2737aa015edc12474f45a01d8edfa37863f27d26bcb7c2863b5ba2fca7b6c304a00025da66cea29090be1ac44418afd9d039601ec4fa18a8f53c96d626c6ab6f7089d7c271a66c9c32"
+    },
+    "xmss:6662c7d1b2fac3b765eea8c2491f1ae859ee5c21e02cbee5a2b80677ac0547063c646555b8246cd2284ebff2807dc8a1a4a9492bb482b50524ef721c3f1aa509": {
+     "kind": "xmss",
+     "nonce": "61dd01d830b4d58115c9cf3c",
+     "ciphertext": "00c822edbd3c478e0aa01419c0211996d06c2cd73b5c531f4ecc5e04d75b294e4793c170d94d1029e1e046c6b19a10f9c51f5fc3ca159d44e0ed373f4bff63331ab79f059ed7cb24f8695e26de10f3d4029f56dc79885d4aad16807879b6dc697161978e9516cad5afbd86e4a66714c0"
+    }
+   },
+   "manifest": {
+    "nonce": "f3e3a555a19b5f03199f2089",
+    "ciphertext": "60c6a72921b1d40e6d36c7ecd6f9205a"
+   }
+  },
+  "meta": {
+   "format": "pearljs-wallet",
+   "version": 1,
+   "network": "regtest",
+   "gapLimit": 10,
+   "lookahead": 20,
+   "reorgDepth": 100,
+   "createdAt": 1795165003249,
+   "scanned": true,
+   "unscanned": [
+    "rprl1zmgcqg4t5uz0gkuda7w5jw9nk7gz7egxx4yv7r7vr0a4pumc0eumq04f7cy"
+   ]
+  },
+  "sync": {
+   "height": 6,
+   "hash": "f78f9c2f09aeb75d235f2841c61579df1a6406df0fa561021f6ae7845de3035b",
+   "at": 1795165003304
+  },
+  "xmss:6662c7d1b2fac3b765eea8c2491f1ae859ee5c21e02cbee5a2b80677ac0547063c646555b8246cd2284ebff2807dc8a1a4a9492bb482b50524ef721c3f1aa509": {
+   "publicKey": "6662c7d1b2fac3b765eea8c2491f1ae859ee5c21e02cbee5a2b80677ac0547063c646555b8246cd2284ebff2807dc8a1a4a9492bb482b50524ef721c3f1aa509",
+   "address": "rprl1zmgcqg4t5uz0gkuda7w5jw9nk7gz7egxx4yv7r7vr0a4pumc0eumq04f7cy",
+   "next": 0,
+   "label": "before births",
+   "frozen": null,
+   "seenOnChain": -1,
+   "createdAt": 1795165003973
+  }
+ }
+}
