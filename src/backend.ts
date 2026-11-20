@@ -120,6 +120,25 @@ export interface WalletBackend extends ChainClient {
    * `accounts` says which of them are BIP86 account addresses and where they sit, for a backend that can ask about an account as a whole.
    */
   findUsed?(addresses: readonly string[], accounts?: readonly AccountAddresses[]): Promise<string[]>;
+  /**
+   * Where the history of these addresses can begin, for a backend that scans
+   * blocks for some addresses and can start later than its own first block.
+   * null forgets a birth given earlier. A backend without this method scans
+   * as it always does.
+   */
+  setAddressBirths?(births: ReadonlyMap<string, AddressBirth | null>): void;
+}
+
+/** The first block that can pay an address, as the wallet that made the address knows it. */
+export interface AddressBirth {
+  /** The lowest height that can hold a transaction paying the address. */
+  readonly height: number;
+  /**
+   * The hash of the block at height - 1 when the wallet saw it. The birth
+   * holds only while that block is on the best chain. Left out when the
+   * height is the caller's word, which nothing checks.
+   */
+  readonly parent?: string;
 }
 
 /** Addresses of one BIP86 account and where each sits, given to a backend that can ask about the account by its key. */
@@ -278,6 +297,8 @@ type FoundTx = Pick<SearchRawTransactionsResult, 'txid' | 'vin' | 'vout' | 'bloc
 
 // What a filter scan for one address has found up to a block.
 interface FilterScan {
+  /** The first height the scan looked at. */
+  from: number;
   height: number;
   hash: string;
   found: Map<string, FoundTx & { height: number }>;
@@ -293,6 +314,9 @@ interface FilterScan {
  * `scanFrom` and reads the blocks that match, which needs pearld's filter
  * index (on unless --nocfilters) and takes two requests a block the first
  * time; later queries for the same address go on from where the last ended.
+ * An address given a birth with setAddressBirths is scanned from the later
+ * of `scanFrom` and its birth, while the birth's parent block, when it names
+ * one, is on the best chain.
  */
 export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletChain {
   const { network, pageSize = 100, concurrency = 8, scanFrom = 0 } = options;
@@ -302,6 +326,19 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletCh
   const mempoolSpender = mempoolSpends(node);
   const chain = pearldChainClient(node, { pageSize });
   const scans = new Map<string, FilterScan>();
+  const births = new Map<string, AddressBirth>();
+
+  // The block a new scan for the address goes on from: the birth's parent
+  // while that block is on the best chain, else the block before scanFrom.
+  const startOf = async (address: string, tip: BlockRef): Promise<{ height: number; hash: string }> => {
+    const birth = births.get(address);
+    const fallback = { height: scanFrom - 1, hash: '' };
+    if (birth === undefined || birth.height <= scanFrom) return fallback;
+    if (birth.parent === undefined) return { height: birth.height - 1, hash: '' };
+    // A chain without the parent may hold a payment anywhere after where it forked.
+    if (birth.height - 1 > tip.height || (await node.getBlockHash(birth.height - 1)) !== birth.parent) return fallback;
+    return { height: birth.height - 1, hash: birth.parent };
+  };
 
   // Every transaction paying or spending from an address pearld's index does not hold, mempool included.
   const scan = async (address: string): Promise<FoundTx[]> => {
@@ -310,7 +347,12 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletCh
     let state = scans.get(address);
     // A reorganization under the block the last scan ended at: start over.
     if (state !== undefined && (state.height > tip.height || (await node.getBlockHash(state.height)) !== state.hash)) state = undefined;
-    state ??= { height: scanFrom - 1, hash: '', found: new Map(), outpoints: new Set() };
+    // A birth moved below where the scan began: the blocks between were never looked at.
+    if (state !== undefined && state.from > Math.max(scanFrom, births.get(address)?.height ?? 0)) state = undefined;
+    if (state === undefined) {
+      const start = await startOf(address, tip);
+      state = { from: start.height + 1, ...start, found: new Map(), outpoints: new Set() };
+    }
     const { found, outpoints } = state;
     const touches = (tx: FoundTx): boolean => {
       let pays = false;
@@ -330,7 +372,7 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletCh
       state.height = height;
       state.hash = hash;
     }
-    if (state.height >= scanFrom) scans.set(address, state);
+    if (state.hash !== '') scans.set(address, state);
 
     const result: FoundTx[] = [...found.values()].map(({ height, ...tx }) => ({ ...tx, confirmations: tip.height - height + 1 }));
     // Unconfirmed transactions are looked at every time and never kept. Twice over, so a spend listed before the payment it spends is seen.
@@ -489,6 +531,17 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletCh
 
     // Confirmed transactions need --txindex, which --addrindex turns on.
     getRawTransaction: (txid) => rawOrNull(node, txid),
+
+    setAddressBirths(entries) {
+      for (const [address, birth] of entries) {
+        if (birth === null) {
+          births.delete(address);
+          continue;
+        }
+        if (!Number.isSafeInteger(birth.height) || birth.height < 0) throw new RangeError('a birth height must be a block height');
+        births.set(address, { height: birth.height, ...(birth.parent === undefined ? {} : { parent: birth.parent }) });
+      }
+    },
   };
 }
 

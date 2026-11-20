@@ -318,6 +318,22 @@ describe('pearld backend and P2MR addresses', () => {
     expect(calls.filter((method) => method === 'getcfilter')).toHaveLength(2);
     expect(() => pearldBackend(rpc, { network, scanFrom: -1 })).toThrow(RangeError);
   });
+
+  it("starts an address's scan at its birth while the parent block stands, and from scanFrom once the birth is forgotten", async () => {
+    const { rpc, calls } = chain();
+    const backend = pearldBackend(rpc, { network });
+    const txids = async (on: typeof backend): Promise<string[]> => (await on.getHistory(address)).map((entry) => entry.txid);
+    backend.setAddressBirths!(new Map([[address, { height: 2, parent: hashOf(1) }]]));
+    expect(await txids(backend)).toEqual([pending]);
+    expect(calls.filter((method) => method === 'getcfilter')).toHaveLength(2);
+    backend.setAddressBirths!(new Map([[address, null]]));
+    expect(await txids(backend)).toEqual([funding, spend, pending]);
+    // A parent the chain does not hold: the birth says nothing.
+    const other = pearldBackend(rpc, { network });
+    other.setAddressBirths!(new Map([[address, { height: 2, parent: hashOf(1, new Map([[1, 0xee]])) }]]));
+    expect(await txids(other)).toEqual([funding, spend, pending]);
+    expect(() => other.setAddressBirths!(new Map([[address, { height: -1 }]]))).toThrow(RangeError);
+  });
 });
 
 describe('Oyster backend', () => {

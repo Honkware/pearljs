@@ -419,6 +419,7 @@
       "AccountUtxo",
       "ActivityScanner",
       "AddedNodeInfo",
+      "AddressBirth",
       "AddressHistoryEntry",
       "AddressInfo",
       "AddressPayment",
@@ -795,6 +796,7 @@
     ],
     "types": [
       "AccountAddresses",
+      "AddressBirth",
       "AddressHistoryEntry",
       "OysterBackendOptions",
       "PearldBackendOptions",
