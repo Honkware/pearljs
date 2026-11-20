@@ -3,7 +3,7 @@
 // every input's prevout is known: fees, coinbase value, the script
 // interpreter on every input and checkStandard on every transaction come
 // from it. Resumable: state and the UTXO set are saved every CHECKPOINT
-// blocks under ~/pearl-work/mainnet-walk/, and a restart continues there.
+// blocks under $PEARL_WORK_DIR/mainnet-walk/, and a restart continues there.
 //
 //   scripts/mainnet/run.sh walk.mjs [--to HEIGHT]
 //

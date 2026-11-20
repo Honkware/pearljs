@@ -1,13 +1,13 @@
 #!/bin/bash
 # Rehearses the funded testnet tests on a local regtest pearld with a block
-# every minute: starts the node in $PEARL_DRYRUN_DIR (~/pearl-work/testnet2/dryrun),
+# every minute: starts the node $PEARLD in $PEARL_DRYRUN_DIR on the chain in $PEARL_DRYRUN_CHAIN,
 # makes and funds a rehearsal wallet, mines in the background, runs
 # run.sh with the given arguments, and stops what it started, by PID.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-dir="${PEARL_DRYRUN_DIR:-$HOME/pearl-work/testnet2/dryrun}"
-bin="${PEARLD:-$HOME/pearl-work/regtest-fp8/bin/pearld}"
-chain="${PEARL_DRYRUN_CHAIN:-$HOME/pearl-work/regtest-fp8/chain/setup-blocks.json}"
+dir="${PEARL_DRYRUN_DIR:?set PEARL_DRYRUN_DIR to an empty folder for the rehearsal}"
+bin="${PEARLD:?set PEARLD to a pearld binary}"
+chain="${PEARL_DRYRUN_CHAIN:?set PEARL_DRYRUN_CHAIN to setup-blocks.json of the live suite}"
 port=44190
 rm -rf "$dir"; mkdir -p "$dir/wallet"; chmod 700 "$dir" "$dir/wallet"
 openssl rand -hex 24 > "$dir/rpc.pass"; chmod 600 "$dir/rpc.pass"

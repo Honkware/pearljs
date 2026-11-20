@@ -7,12 +7,13 @@
 import { Agent, request } from 'node:https';
 import { Buffer } from 'node:buffer';
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, renameSync, rmSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 import { setTimeout as sleep } from 'node:timers/promises';
 
-export const WORK = join(homedir(), 'pearl-work');
+// PEARL_WORK_DIR holds mainnet/rpc.cert, mainnet/secrets.env and the scripts' output.
+if (!process.env.PEARL_WORK_DIR) throw new Error('PEARL_WORK_DIR is not set');
+export const WORK = process.env.PEARL_WORK_DIR;
 export const OUT = process.env.PEARL_WALK_DIR ?? join(WORK, 'mainnet-walk');
 export const RPC_URL = process.env.PEARLD_URL ?? 'https://127.0.0.1:44107';
 export const RPC_CERT = process.env.PEARLD_CERT ?? join(WORK, 'mainnet', 'rpc.cert');
@@ -30,7 +31,7 @@ export const READ_ONLY = new Set([
 
 export function password() {
   const value = process.env.PEARLD_PASS;
-  if (!value) throw new Error('PEARLD_PASS is not set; source ~/pearl-work/mainnet/secrets.env first');
+  if (!value) throw new Error('PEARLD_PASS is not set; start the script through scripts/mainnet/run.sh');
   return value;
 }
 

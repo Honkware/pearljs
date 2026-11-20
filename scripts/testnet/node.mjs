@@ -1,13 +1,12 @@
-// Connection to the testnet2 pearld that ~/pearl-work/testnet2/start-node.sh
-// runs, from the same PEARL_TESTNET_* variables the tests read, or from that
-// folder's own files when they are unset. Imports `pearljs` from dist/: build first.
+// Connection to a testnet2 pearld, from the same PEARL_TESTNET_* variables the
+// tests read, or from rpc.pass and rpc.cert in PEARL_TESTNET_DIR when they are unset. Imports `pearljs` from dist/: build first.
 import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { PearldClient } from 'pearljs';
 import { pearldFetch } from 'pearljs/tls-fetch';
 
-export const nodeDir = process.env.PEARL_TESTNET_DIR ?? join(homedir(), 'pearl-work', 'testnet2');
+if (!process.env.PEARL_TESTNET_DIR) throw new Error('PEARL_TESTNET_DIR is not set');
+export const nodeDir = process.env.PEARL_TESTNET_DIR;
 
 export function endpoint() {
   return {
