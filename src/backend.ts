@@ -22,7 +22,7 @@
 import { decodeAddress, fromOutputScript, toOutputScript } from './address.js';
 import type { AddressPayment, BlockRef, ChainClient, ChainTransaction } from './client.js';
 import type { Utxo } from './coinselect.js';
-import { matchFilter } from './gcs.js';
+import { matchAnyFilter } from './gcs.js';
 import type { PearlNetwork } from './networks.js';
 import {
   OysterRpc,
@@ -37,6 +37,7 @@ import {
 } from './rpc.js';
 import { toHex } from './internal/bytes.js';
 import { fetchBlockFilters, mapLimit } from './internal/filter-scan.js';
+import type { ChainPoint } from './internal/filter-scan.js';
 import { safeHeight } from './internal/rpc-wire.js';
 import type { OutPointParam, Rpc, SearchRawTransactionsResult, TxOutResult, WalletTransactionEntry } from './rpc.js';
 import { PearlError } from './errors.js';
@@ -305,6 +306,54 @@ interface FilterScan {
   outpoints: Set<string>;
 }
 
+// An address in a round of the shared filter walk.
+interface Member {
+  address: string;
+  script: Uint8Array;
+  state: FilterScan;
+}
+
+// What a scan returns: confirmed transactions with their heights, then the mempool's.
+type Scanned = (FoundTx & { height?: number })[];
+
+interface Caller {
+  resolve(found: Scanned): void;
+  reject(err: unknown): void;
+}
+
+// Blocks walked between looks at who else wants the walk, and the most
+// filters held at once.
+const SCAN_CHUNK = 1000;
+
+// Whether the transaction pays the address or spends an output it was paid
+// in an earlier block, recording the outputs it pays.
+function touches(address: string, state: FilterScan, tx: FoundTx): boolean {
+  let pays = false;
+  for (const out of tx.vout) {
+    if (out.scriptPubKey.address !== address) continue;
+    state.outpoints.add(`${tx.txid}:${out.n}`);
+    pays = true;
+  }
+  return pays || tx.vin.some((input) => 'txid' in input && state.outpoints.has(`${input.txid}:${input.vout}`));
+}
+
+// The address's transactions as of the tip: those the walk found, then the
+// mempool's, which are looked at every time and never kept.
+function collect(address: string, state: FilterScan, tip: BlockRef, mempool: readonly (FoundTx | null)[]): Scanned {
+  const result: Scanned = [...state.found.values()].map((tx) => ({ ...tx, confirmations: tip.height - tx.height + 1 }));
+  // Twice over, so a spend listed before the payment it spends is seen.
+  const pending = new Map<string, FoundTx>();
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (const tx of mempool) {
+      if (tx === null || state.found.has(tx.txid) || (tx.blockhash !== undefined && tx.blockhash !== '')) continue;
+      if (touches(address, state, tx)) pending.set(tx.txid, { txid: tx.txid, vin: tx.vin, vout: tx.vout });
+    }
+  }
+  // Mempool outputs are not the next scan's to remember.
+  for (const tx of pending.values()) for (const out of tx.vout) state.outpoints.delete(`${tx.txid}:${out.n}`);
+  return [...result, ...pending.values()];
+}
+
 /**
  * A wallet backend over pearld, from a PearldClient, a PearlWsClient or
  * anything else with `call`. pearld must run with --addrindex (which turns
@@ -327,66 +376,127 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletCh
   const chain = pearldChainClient(node, { pageSize });
   const scans = new Map<string, FilterScan>();
   const births = new Map<string, AddressBirth>();
+  // Every address the walk covers: those asked about and those given a birth.
+  const walked = new Set<string>();
+  let waiting = new Map<string, Caller[]>();
+  let walking = false;
 
   // The block a new scan for the address goes on from: the birth's parent
   // while that block is on the best chain, else the block before scanFrom.
-  const startOf = async (address: string, tip: BlockRef): Promise<{ height: number; hash: string }> => {
+  const startOf = async (address: string, tip: BlockRef, hashAt: (height: number) => Promise<string>): Promise<{ height: number; hash: string }> => {
     const birth = births.get(address);
     const fallback = { height: scanFrom - 1, hash: '' };
     if (birth === undefined || birth.height <= scanFrom) return fallback;
     if (birth.parent === undefined) return { height: birth.height - 1, hash: '' };
     // A chain without the parent may hold a payment anywhere after where it forked.
-    if (birth.height - 1 > tip.height || (await node.getBlockHash(birth.height - 1)) !== birth.parent) return fallback;
+    if (birth.height - 1 > tip.height || (await hashAt(birth.height - 1)) !== birth.parent) return fallback;
     return { height: birth.height - 1, hash: birth.parent };
   };
 
-  // Every transaction paying or spending from an address pearld's index does not hold, mempool included.
-  const scan = async (address: string): Promise<FoundTx[]> => {
-    const script = toOutputScript(address, network);
-    const tip = await chain.getTip();
+  // Where the address's scan goes on from this round: its last block, or its start again.
+  const prepare = async (address: string, tip: BlockRef, hashAt: (height: number) => Promise<string>): Promise<Member> => {
     let state = scans.get(address);
     // A reorganization under the block the last scan ended at: start over.
-    if (state !== undefined && (state.height > tip.height || (await node.getBlockHash(state.height)) !== state.hash)) state = undefined;
+    if (state !== undefined && (state.height > tip.height || (await hashAt(state.height)) !== state.hash)) state = undefined;
     // A birth moved below where the scan began: the blocks between were never looked at.
     if (state !== undefined && state.from > Math.max(scanFrom, births.get(address)?.height ?? 0)) state = undefined;
     if (state === undefined) {
-      const start = await startOf(address, tip);
+      const start = await startOf(address, tip, hashAt);
       state = { from: start.height + 1, ...start, found: new Map(), outpoints: new Set() };
     }
-    const { found, outpoints } = state;
-    const touches = (tx: FoundTx): boolean => {
-      let pays = false;
-      for (const out of tx.vout) {
-        if (out.scriptPubKey.address !== address) continue;
-        outpoints.add(`${tx.txid}:${out.n}`);
-        pays = true;
-      }
-      return pays || tx.vin.some((input) => 'txid' in input && outpoints.has(`${input.txid}:${input.vout}`));
+    return { address, script: toOutputScript(address, network), state };
+  };
+
+  // Matches each block's filter once against every member at or past its
+  // start, lowest first, and fetches a block once however many it touches.
+  // Addresses asked about meanwhile join at the next chunk. Each caller gets
+  // its address's transactions as of the round's tip and mempool.
+  const walk = async (): Promise<void> => {
+    const members = new Map<string, Member>();
+    const callers = new Map<string, Caller[]>();
+    const join = (): string[] => {
+      const joining = waiting;
+      waiting = new Map();
+      for (const [address, list] of joining) callers.set(address, [...(callers.get(address) ?? []), ...list]);
+      return [...walked].filter((address) => !members.has(address));
     };
-    for (const { height, hash, filter, key } of await fetchBlockFilters(node, network, state, tip.height, concurrency)) {
-      if (filter.n > 0 && matchFilter(filter, key, script)) {
-        for (const tx of (await node.getBlockWithTransactions(hash)).rawtx) {
-          if (touches(tx)) found.set(tx.txid, { txid: tx.txid, vin: tx.vin, vout: tx.vout, blockhash: hash, height, ...(tx.blocktime === undefined ? {} : { blocktime: tx.blocktime }) });
+    let fresh = join();
+    try {
+      const tip = await chain.getTip();
+      const hashes = new Map<number, Promise<string>>();
+      const hashAt = (height: number): Promise<string> => {
+        let hash = hashes.get(height);
+        if (hash === undefined) hashes.set(height, (hash = node.getBlockHash(height)));
+        return hash;
+      };
+      let carried: ChainPoint | null = null;
+      for (;;) {
+        if (fresh.length > 0) {
+          for (const member of await mapLimit(fresh, concurrency, (address) => prepare(address, tip, hashAt))) members.set(member.address, member);
+          fresh = [];
+        }
+        if (waiting.size > 0) {
+          fresh = join();
+          continue;
+        }
+        const behind = [...members.values()].filter((member) => member.state.height < tip.height);
+        if (behind.length === 0) break;
+        const low = Math.min(...behind.map((member) => member.state.height));
+        const group = behind.filter((member) => member.state.height === low);
+        const to = Math.min(tip.height, low + SCAN_CHUNK, ...behind.filter((member) => member.state.height > low).map((member) => member.state.height));
+        const hash = group.find((member) => member.state.hash !== '')?.state.hash ?? '';
+        const from: ChainPoint = carried !== null && carried.height === low && (hash === '' || hash === carried.hash) ? carried : { height: low, hash };
+        const filters = await fetchBlockFilters(node, network, from, to, concurrency);
+        const scripts = group.map((member) => member.script);
+        const matched = filters.filter(({ filter, key }) => filter.n > 0 && matchAnyFilter(filter, key, scripts));
+        for (let i = 0; i < matched.length; i += concurrency) {
+          const slice = matched.slice(i, i + concurrency);
+          const blocks = await Promise.all(slice.map(({ hash: block }) => node.getBlockWithTransactions(block)));
+          blocks.forEach((block, j) => {
+            const { height, hash: blockhash } = slice[j]!;
+            for (const tx of block.rawtx) {
+              for (const { address, state } of group) {
+                if (touches(address, state, tx)) state.found.set(tx.txid, { txid: tx.txid, vin: tx.vin, vout: tx.vout, blockhash, height, ...(tx.blocktime === undefined ? {} : { blocktime: tx.blocktime }) });
+              }
+            }
+          });
+        }
+        const last = filters.at(-1)!;
+        carried = { height: last.height, hash: last.hash, blockHeader: last.header };
+        for (const member of group) {
+          member.state.height = last.height;
+          member.state.hash = last.hash;
+          scans.set(member.address, member.state);
         }
       }
-      state.height = height;
-      state.hash = hash;
-    }
-    if (state.hash !== '') scans.set(address, state);
-
-    const result: FoundTx[] = [...found.values()].map(({ height, ...tx }) => ({ ...tx, confirmations: tip.height - height + 1 }));
-    // Unconfirmed transactions are looked at every time and never kept. Twice over, so a spend listed before the payment it spends is seen.
-    const pending = new Map<string, FoundTx>();
-    const mempool = await mapLimit(await node.getRawMempool(), concurrency, (txid) => node.getRawTransaction(txid).catch(() => null));
-    for (let pass = 0; pass < 2; pass += 1) {
-      for (const tx of mempool) {
-        if (tx === null || found.has(tx.txid) || (tx.blockhash !== undefined && tx.blockhash !== '')) continue;
-        if (touches(tx)) pending.set(tx.txid, { txid: tx.txid, vin: tx.vin, vout: tx.vout });
+      const mempool = await mapLimit(await node.getRawMempool(), concurrency, (txid) => node.getRawTransaction(txid).catch(() => null));
+      for (const [address, list] of callers) {
+        const { state } = members.get(address)!;
+        if (state.hash !== '') scans.set(address, state);
+        for (const caller of list) caller.resolve(collect(address, state, tip, mempool));
+      }
+    } catch (err) {
+      for (const list of callers.values()) for (const caller of list) caller.reject(err);
+    } finally {
+      walking = false;
+      if (waiting.size > 0) {
+        walking = true;
+        void walk();
       }
     }
-    // Mempool outputs are not the next scan's to remember.
-    for (const tx of pending.values()) for (const out of tx.vout) outpoints.delete(`${tx.txid}:${out.n}`);
-    return [...result, ...pending.values()];
+  };
+
+  // Every transaction paying or spending from an address pearld's index does not hold, mempool included.
+  const scan = (address: string): Promise<Scanned> => {
+    toOutputScript(address, network);
+    walked.add(address);
+    return new Promise((resolve, reject) => {
+      waiting.set(address, [...(waiting.get(address) ?? []), { resolve, reject }]);
+      if (!walking) {
+        walking = true;
+        void walk();
+      }
+    });
   };
 
   const search = (address: string): Promise<FoundTx[]> =>
@@ -476,7 +586,7 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletCh
           payments.push({ txid: tx.txid, amount, block: null });
           continue;
         }
-        const height = scans.get(address)!.found.get(tx.txid)!.height;
+        const height = tx.height!;
         // The header time lets an invoice judge expiry by the block, as the indexed path does.
         const time = tx.blocktime === undefined || tx.blocktime === 0 ? {} : { time: tx.blocktime };
         payments.push({ txid: tx.txid, amount, block: { height, hash: tx.blockhash, ...time } });
@@ -540,6 +650,14 @@ export function pearldBackend(rpc: Rpc, options: PearldBackendOptions): WalletCh
         }
         if (!Number.isSafeInteger(birth.height) || birth.height < 0) throw new RangeError('a birth height must be a block height');
         births.set(address, { height: birth.height, ...(birth.parent === undefined ? {} : { parent: birth.parent }) });
+      }
+      // The caller will ask about these, so the walk takes them along from the next query on.
+      for (const address of entries.keys()) {
+        try {
+          if (decodeAddress(address, network).version !== 1) walked.add(address);
+        } catch {
+          // Not an address of this network: a query for it fails as before.
+        }
       }
     },
   };

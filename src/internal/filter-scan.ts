@@ -25,6 +25,8 @@ export interface HeightFilter {
 export interface ChainPoint {
   readonly height: number;
   readonly hash: string;
+  /** The block's header, already checked to hash to `hash`, so the walk need not fetch it. */
+  readonly blockHeader?: PearlBlockHeader;
 }
 
 // blockchain.MinTimestampDeltaSeconds: a block's time is at least this much after its parent's.
@@ -32,7 +34,9 @@ const MIN_TIMESTAMP_DELTA = 1;
 
 /**
  * getblockhash, getblockheader and getcfilter for each height after `from`
- * up to `to`, `concurrency` heights at a time, in height order. Throws
+ * up to `to`, `concurrency` heights at a time, in height order. The hashes
+ * of the next heights are asked for with the headers and filters of the
+ * current ones, so a client made with `batch` sends both in one request. Throws
  * BLOCK_HEADER_INVALID unless each header hashes to the hash given for its
  * height and names the block before it as its parent, back to `from`, with
  * bits within the network's proof-of-work limit and a time after its
@@ -45,7 +49,9 @@ export async function fetchBlockFilters(
   to: number,
   concurrency: number,
 ): Promise<HeightFilter[]> {
-  const heights = Array.from({ length: Math.max(0, to - from.height) }, (_, i) => from.height + 1 + i);
+  const width = Math.max(1, concurrency);
+  const windows: number[][] = [];
+  for (let height = from.height + 1; height <= to; height += width) windows.push(Array.from({ length: Math.min(width, to - height + 1) }, (_, i) => height + i));
   const fetchHeader = async (hash: string): Promise<PearlBlockHeader> => {
     const header = parseBlockHeader(await node.getRawBlockHeader(hash));
     if (blockHashHex(header) !== hash) throw invalidHeader(`getblockheader ${hash} returned the header of block ${blockHashHex(header)}`);
@@ -54,14 +60,31 @@ export async function fetchBlockFilters(
   const [parent, blocks] = await Promise.all([
     (async () => {
       if (from.height < 0) return null;
+      if (from.blockHeader !== undefined && from.hash !== '') return { hash: from.hash, header: from.blockHeader };
       const hash = from.hash === '' ? await node.getBlockHash(from.height) : from.hash;
       return { hash, header: await fetchHeader(hash) };
     })(),
-    mapLimit(heights, concurrency, async (height) => {
-      const hash = await node.getBlockHash(height);
-      const [header, { filter, key }] = await Promise.all([fetchHeader(hash), node.getCFilter(hash)]);
-      return { height, hash, header, filter, key };
-    }),
+    (async () => {
+      const hashesOf = (heights: readonly number[]): Promise<string[]> => Promise.all(heights.map((height) => node.getBlockHash(height)));
+      const fetched: HeightFilter[] = [];
+      let next = windows.length > 0 ? hashesOf(windows[0]!) : null;
+      for (let i = 0; i < windows.length; i++) {
+        const hashes = await next!;
+        next = i + 1 < windows.length ? hashesOf(windows[i + 1]!) : null;
+        // Seen when awaited in the next turn; a failure of this window throws first.
+        next?.catch(() => undefined);
+        const heights = windows[i]!;
+        fetched.push(
+          ...(await Promise.all(
+            hashes.map(async (hash, j) => {
+              const [header, { filter, key }] = await Promise.all([fetchHeader(hash), node.getCFilter(hash)]);
+              return { height: heights[j]!, hash, header, filter, key };
+            }),
+          )),
+        );
+      }
+      return fetched;
+    })(),
   ]);
   const limit = network.powLimit;
   let prev = parent;
