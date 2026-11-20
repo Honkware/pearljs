@@ -8,6 +8,7 @@
 //   PEARL_TESTNET_WALLET_DIR    holds secrets.json and store/ (scripts/testnet/wallet.mjs makes them)
 //   PEARL_TESTNET_NETWORK       testnet2 unless given; regtest for a dry run on a local node
 //   PEARL_TESTNET_BLOCKBOOK     a Blockbook URL, for the backend comparison
+//   PEARL_TESTNET_SCAN_FROM     the height the test wallet was made at or before, where P2MR filter scans start; 0 unless given
 //   PEARL_TESTNET_OYSTER_URL, PEARL_TESTNET_OYSTER_CA, with the same user and password, for verifymessage
 
 import { appendFileSync, readFileSync } from 'node:fs';
@@ -82,7 +83,7 @@ export function account(n: number): PearlSigningAccount {
 /** Account 0's first receive address: where every test returns what it has left. */
 export const home = (): string => account(0).deriveAddress(0);
 
-export const backend = (): WalletBackend => pearldBackend(node, { network });
+export const backend = (): WalletBackend => pearldBackend(node, { network, scanFrom: Number(variable('PEARL_TESTNET_SCAN_FROM') ?? 0) });
 
 export async function openWallet(chain: WalletBackend = backend()): Promise<PearlWallet> {
   const wallet = await PearlWallet.open({ store: createFileStore(join(walletDir, 'store'), { breakStaleLock: true }), backend: chain, quietSyncInterval: 1 });

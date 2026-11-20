@@ -12,6 +12,8 @@ export PEARL_TESTNET_RPC_PASS_FILE="${PEARL_TESTNET_RPC_PASS_FILE:-$dir/rpc.pass
 export PEARL_TESTNET_RPC_CA="${PEARL_TESTNET_RPC_CA:-$dir/rpc.cert}"
 export PEARL_TESTNET_WALLET_DIR="${PEARL_TESTNET_WALLET_DIR:-$dir/wallet}"
 export PEARL_TESTNET_DIR="$dir"
+# The wallet's birthday, written beside it by hand: P2MR scans for keys older than their recorded births start here.
+if [ -z "${PEARL_TESTNET_SCAN_FROM:-}" ] && [ -f "$dir/wallet/birthday" ]; then export PEARL_TESTNET_SCAN_FROM="$(cat "$dir/wallet/birthday")"; fi
 case "${PEARL_TESTNET_BLOCKBOOK:-}" in
   off) unset PEARL_TESTNET_BLOCKBOOK ;;
   '') export PEARL_TESTNET_BLOCKBOOK=https://blockbook.testnet2.pearlnetwork.net ;;
