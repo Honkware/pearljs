@@ -213,6 +213,56 @@ func main() {
 		add("", b, b.CertVersion, bits, nil, nil, edits)
 	}
 
+	// MoE statements declaring sizes whose products pass 2^32, each tree's leaf
+	// count set to match so the proof gets past the size check to the positions.
+	for _, b := range bases {
+		if b.CertVersion == 4 {
+			continue
+		}
+		p := b.proof
+		u := func(at int) uint64 { return binary.LittleEndian.Uint64(p[at:]) }
+		// A MerkleProof in bincode: leaf_data, leaf_indices, total_leaves, root, siblings.
+		merkle := func(at int) (leaves, end int) {
+			n := int(u(at))
+			at += 8
+			for i := 0; i < n; i++ {
+				at += 8 + int(u(at))
+			}
+			at += 8 + 8*int(u(at))
+			leaves = at
+			at += 8 + 32
+			return leaves, at + 8 + 32*int(u(at))
+		}
+		aLeaves, at := merkle(32)
+		at += 8 + 8*int(u(at))
+		bLeaves, at := merkle(at)
+		at += 8 + 8*int(u(at))
+		if p[at] != 1 {
+			continue
+		}
+		e, topK := u(at+1), u(at+9)
+		expertAt := at + 17
+		at = expertAt + 2
+		at += 8 + 4*int(u(at))
+		at += 8 + 8*int(u(at))
+		routingLeaves, _ := merkle(at)
+		m, n, k := u(0), u(8), u(16)
+		leaves := func(bytes uint64) uint64 { return (bytes + 1023) / 1024 }
+		sized := func(m, n uint64) [][2]any {
+			return [][2]any{{0, u64(m)}, {8, u64(n)}, {aLeaves, u64(leaves(m * k))}, {bLeaves, u64(leaves(n * e * k))}, {routingLeaves, u64(leaves(m * topK * 4))}}
+		}
+		expert := func(w uint16) [2]any { return [2]any{expertAt, hex.EncodeToString([]byte{byte(w), byte(w >> 8)})} }
+		for _, nn := range []uint64{1 << 30, 1 << 31, 1<<32 - 1} {
+			add(fmt.Sprintf("%s declaring n %d", b.Name, nn), b, b.CertVersion, 0, nil, nil, sized(m, nn))
+			for _, w := range []uint16{0, 1, uint16(e - 1)} {
+				add(fmt.Sprintf("%s declaring n %d for expert %d", b.Name, nn, w), b, b.CertVersion, 0, nil, nil, append(sized(m, nn), expert(w)))
+			}
+		}
+		for _, mm := range []uint64{1 << 30, 1 << 31, 1<<32 - 1} {
+			add(fmt.Sprintf("%s declaring m %d", b.Name, mm), b, b.CertVersion, 0, nil, nil, sized(mm, n))
+		}
+	}
+
 	counts := map[int32]int{}
 	for _, c := range cases {
 		counts[c.Code]++

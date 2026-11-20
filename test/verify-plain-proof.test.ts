@@ -2,11 +2,14 @@
 // miners and its two committed fixtures, as mined and after one change each
 // and 1500 random edits, judged by verify_plain_proof_ffi and
 // verify_plain_proof_v4_ffi from the fp8-scheme branch's Go bindings
-// (vectors/mining/plain.json, from vectors/mining/plain/main.go). The FFI's
-// buffer holds 127 bytes of the message; pearljs gives it in full.
+// (vectors/mining/plain.json, from vectors/mining/plain/main.go), and the same
+// for proofs whose matrices pass 2^32 bytes (vectors/mining/plain-large.json,
+// from vectors/mining/plain/large.rs). The FFI's buffer holds 127 bytes of the
+// message; pearljs gives it in full.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import vectors from '../vectors/mining/plain.json';
+import large from '../vectors/mining/plain-large.json';
 import { fromHex } from '../src/internal/bytes.js';
 import { verifyPlainProof } from '../src/verify-proof.js';
 import type { ProofVerdict } from '../src/verify-proof.js';
@@ -23,7 +26,7 @@ interface Case {
   message: string;
 }
 
-const bases = new Map(vectors.bases.map((b) => [b.name, { header: fromHex(b.header), proof: fromHex(b.proof) }]));
+const bases = new Map([...vectors.bases, ...large.bases].map((b) => [b.name, { header: fromHex(b.header), proof: fromHex(b.proof) }]));
 
 function load(c: Case): { header: Uint8Array; proof: Uint8Array } {
   const b = bases.get(c.base)!;
@@ -47,8 +50,9 @@ const code = (verdict: ProofVerdict): number => ({ accepted: 0, rejected: 1, err
 
 // WebAssembly's usize is 32 bits. bincode refuses a usize field or a length
 // past 2^32 there while the 64-bit FFI decodes it and rejects the proof later,
-// or fails on the bytes that follow: the same verdict, other words. No valid
-// proof has such a field.
+// or fails on the bytes that follow: the same verdict, other words. Such a
+// field is a dimension or row index, which no valid proof has past 2^24, or a
+// length; leaf counts and leaf indices are decoded in 64 bits.
 function decodedOnlyAt64Bits(ours: string, pearl: string): boolean {
   return ours.startsWith('deserialize: ') && (!pearl.startsWith('deserialize: ') || /expected usize|must fit in a usize/.test(ours));
 }
@@ -61,7 +65,11 @@ function boundedBeforeModule(ours: string, pearl: string): boolean {
   return /^rejected: (Rank must be 2\^5\.\.2\^10|k must be <= 2\^16|m must be <= 2\^24|n must be <= 2\^24) \|\| /.test(ours) && /^(rejected|deserialize): /.test(pearl);
 }
 
-const cases = vectors.cases as Case[];
+const suites = [
+  { file: 'plain.json', cases: vectors.cases as Case[], words: -1, bounded: -1 },
+  { file: 'plain-large.json', cases: large.cases as Case[], words: -1, bounded: -1 },
+];
+const cases = suites.flatMap((s) => s.cases);
 
 async function judge(c: Case): Promise<ProofVerdict> {
   const { header, proof } = load(c);
@@ -76,11 +84,11 @@ describe('verifyPlainProof', () => {
     if (!decodedOnlyAt64Bits(verdict.message, c.message) && !boundedBeforeModule(verdict.message, c.message)) expect(cut(verdict.message)).toBe(c.message);
   });
 
-  it('gives Pearl\'s verdict for every proof with random edits, and its message unless bincode refuses a 64-bit size or a dimension is past its bound', async () => {
+  it.each(suites.map((s) => [s.file, s] as const))('gives Pearl\'s verdict for every proof in %s with random edits, and its message unless bincode refuses a 64-bit size or a dimension is past its bound', async (_, suite) => {
     const differ: string[] = [];
     let words = 0;
     let bounded = 0;
-    for (const [i, c] of cases.entries()) {
+    for (const [i, c] of suite.cases.entries()) {
       if (c.name !== undefined) continue;
       const verdict = await judge(c);
       if (code(verdict) === c.code && cut(verdict.message) === c.message) continue;
@@ -89,7 +97,7 @@ describe('verifyPlainProof', () => {
       else differ.push(`${i} ${c.base}: ${code(verdict)} ${verdict.message} | Pearl: ${c.code} ${c.message}`);
     }
     expect(differ).toEqual([]);
-    expect([words, bounded]).toEqual([24, 37]);
+    expect([words, bounded]).toEqual([suite.words, suite.bounded]);
   }, 600_000);
 
   it('accepts a MiningJob from pearljs/gateway as the job', async () => {
@@ -123,7 +131,7 @@ describe('verifyPlainProof over many proofs', () => {
     vi.restoreAllMocks();
   });
 
-  it('keeps the module\'s memory flat over 100 plain proofs of each format', async () => {
+  it('keeps the module\'s memory flat over 100 plain proofs of each format, matrices past 2^32 bytes among them', async () => {
     const instantiate = WebAssembly.instantiate.bind(WebAssembly) as (module: WebAssembly.Module, imports: WebAssembly.Imports) => Promise<WebAssembly.Instance>;
     let memory: WebAssembly.Memory | undefined;
     vi.spyOn(WebAssembly, 'instantiate').mockImplementation((async (module: WebAssembly.Module, imports: WebAssembly.Imports) => {
@@ -133,8 +141,9 @@ describe('verifyPlainProof over many proofs', () => {
     }) as typeof WebAssembly.instantiate);
     vi.resetModules();
     const { verifyPlainProof: verify } = await import('../src/verify-proof.js');
-    const proofs = ['V2 dense', 'V3 dense', 'V4 H100', 'V4 B200'].map((name) => {
-      const b = vectors.bases.find((x) => x.name === name)!;
+    const names = ['V2 dense', 'V3 dense', 'V4 H100', 'V4 B200', 'V3 dense, B of 2^33 + 2^18 bytes', 'V4 B200, B of 2^32 + 2^14 bytes in 256-byte leaves'];
+    const proofs = names.map((name) => {
+      const b = [...vectors.bases, ...large.bases].find((x) => x.name === name)!;
       return { job: { incompleteHeader: fromHex(b.header), certVersion: b.certVersion }, proof: fromHex(b.proof) };
     });
     for (const p of proofs) expect((await verify(p.job, p.proof)).outcome).toBe('accepted');

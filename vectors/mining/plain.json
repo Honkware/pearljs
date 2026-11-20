@@ -27845,6 +27845,978 @@
    ],
    "code": 1,
    "message": "rejected: noise_rank exceeds u16"
+  },
+  {
+   "name": "V2 MoE declaring n 1073741824",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000004000000000"
+    ],
+    [
+     8368,
+     "0008000000000000"
+    ],
+    [
+     25848,
+     "0000000002000000"
+    ],
+    [
+     27523,
+     "0800000000000000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "V2 MoE declaring n 1073741824 for expert 0",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000004000000000"
+    ],
+    [
+     8368,
+     "0008000000000000"
+    ],
+    [
+     25848,
+     "0000000002000000"
+    ],
+    [
+     27523,
+     "0800000000000000"
+    ],
+    [
+     26401,
+     "0000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "V2 MoE declaring n 1073741824 for expert 1",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000004000000000"
+    ],
+    [
+     8368,
+     "0008000000000000"
+    ],
+    [
+     25848,
+     "0000000002000000"
+    ],
+    [
+     27523,
+     "0800000000000000"
+    ],
+    [
+     26401,
+     "0100"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 0 out of range for expert 1 (expected [1073741824, 2147483648))"
+  },
+  {
+   "name": "V2 MoE declaring n 1073741824 for expert 3",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000004000000000"
+    ],
+    [
+     8368,
+     "0008000000000000"
+    ],
+    [
+     25848,
+     "0000000002000000"
+    ],
+    [
+     27523,
+     "0800000000000000"
+    ],
+    [
+     26401,
+     "0300"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 0 out of range for expert 3 (expected [3221225472, 4294967296))"
+  },
+  {
+   "name": "V2 MoE declaring n 2147483648",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000008000000000"
+    ],
+    [
+     8368,
+     "0008000000000000"
+    ],
+    [
+     25848,
+     "0000000004000000"
+    ],
+    [
+     27523,
+     "0800000000000000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "V2 MoE declaring n 2147483648 for expert 0",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000008000000000"
+    ],
+    [
+     8368,
+     "0008000000000000"
+    ],
+    [
+     25848,
+     "0000000004000000"
+    ],
+    [
+     27523,
+     "0800000000000000"
+    ],
+    [
+     26401,
+     "0000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "V2 MoE declaring n 2147483648 for expert 1",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000008000000000"
+    ],
+    [
+     8368,
+     "0008000000000000"
+    ],
+    [
+     25848,
+     "0000000004000000"
+    ],
+    [
+     27523,
+     "0800000000000000"
+    ],
+    [
+     26401,
+     "0100"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 0 out of range for expert 1 (expected [2147483648, 4294967296))"
+  },
+  {
+   "name": "V2 MoE declaring n 2147483648 for expert 3",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000008000000000"
+    ],
+    [
+     8368,
+     "0008000000000000"
+    ],
+    [
+     25848,
+     "0000000004000000"
+    ],
+    [
+     27523,
+     "0800000000000000"
+    ],
+    [
+     26401,
+     "0300"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 0 out of range for expert 3 (expected [6442450944, 8589934592))"
+  },
+  {
+   "name": "V2 MoE declaring n 4294967295",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "ffffffff00000000"
+    ],
+    [
+     8368,
+     "0008000000000000"
+    ],
+    [
+     25848,
+     "f8ffffff07000000"
+    ],
+    [
+     27523,
+     "0800000000000000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "V2 MoE declaring n 4294967295 for expert 0",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "ffffffff00000000"
+    ],
+    [
+     8368,
+     "0008000000000000"
+    ],
+    [
+     25848,
+     "f8ffffff07000000"
+    ],
+    [
+     27523,
+     "0800000000000000"
+    ],
+    [
+     26401,
+     "0000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "V2 MoE declaring n 4294967295 for expert 1",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "ffffffff00000000"
+    ],
+    [
+     8368,
+     "0008000000000000"
+    ],
+    [
+     25848,
+     "f8ffffff07000000"
+    ],
+    [
+     27523,
+     "0800000000000000"
+    ],
+    [
+     26401,
+     "0100"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 0 out of range for expert 1 (expected [4294967295, 8589934590))"
+  },
+  {
+   "name": "V2 MoE declaring n 4294967295 for expert 3",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "ffffffff00000000"
+    ],
+    [
+     8368,
+     "0008000000000000"
+    ],
+    [
+     25848,
+     "f8ffffff07000000"
+    ],
+    [
+     27523,
+     "0800000000000000"
+    ],
+    [
+     26401,
+     "0300"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 0 out of range for expert 3 (expected [12884901885, 17179869180))"
+  },
+  {
+   "name": "V2 MoE declaring m 1073741824",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0000004000000000"
+    ],
+    [
+     8,
+     "8000000000000000"
+    ],
+    [
+     8368,
+     "0000008000000000"
+    ],
+    [
+     25848,
+     "0004000000000000"
+    ],
+    [
+     27523,
+     "0000800000000000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "V2 MoE declaring m 2147483648",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0000008000000000"
+    ],
+    [
+     8,
+     "8000000000000000"
+    ],
+    [
+     8368,
+     "0000000001000000"
+    ],
+    [
+     25848,
+     "0004000000000000"
+    ],
+    [
+     27523,
+     "0000000100000000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "V2 MoE declaring m 4294967295",
+   "base": "V2 MoE",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "ffffffff00000000"
+    ],
+    [
+     8,
+     "8000000000000000"
+    ],
+    [
+     8368,
+     "feffffff01000000"
+    ],
+    [
+     25848,
+     "0004000000000000"
+    ],
+    [
+     27523,
+     "0000000200000000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring n 1073741824",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000004000000000"
+    ],
+    [
+     4208,
+     "0004000000000000"
+    ],
+    [
+     13272,
+     "0000000001000000"
+    ],
+    [
+     14947,
+     "0400000000000000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 128 out of range for expert 1 (expected [1073741824, 2147483648))"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring n 1073741824 for expert 0",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000004000000000"
+    ],
+    [
+     4208,
+     "0004000000000000"
+    ],
+    [
+     13272,
+     "0000000001000000"
+    ],
+    [
+     14947,
+     "0400000000000000"
+    ],
+    [
+     13825,
+     "0000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring n 1073741824 for expert 1",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000004000000000"
+    ],
+    [
+     4208,
+     "0004000000000000"
+    ],
+    [
+     13272,
+     "0000000001000000"
+    ],
+    [
+     14947,
+     "0400000000000000"
+    ],
+    [
+     13825,
+     "0100"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 128 out of range for expert 1 (expected [1073741824, 2147483648))"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring n 1073741824 for expert 3",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000004000000000"
+    ],
+    [
+     4208,
+     "0004000000000000"
+    ],
+    [
+     13272,
+     "0000000001000000"
+    ],
+    [
+     14947,
+     "0400000000000000"
+    ],
+    [
+     13825,
+     "0300"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 128 out of range for expert 3 (expected [3221225472, 4294967296))"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring n 2147483648",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000008000000000"
+    ],
+    [
+     4208,
+     "0004000000000000"
+    ],
+    [
+     13272,
+     "0000000002000000"
+    ],
+    [
+     14947,
+     "0400000000000000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 128 out of range for expert 1 (expected [2147483648, 4294967296))"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring n 2147483648 for expert 0",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000008000000000"
+    ],
+    [
+     4208,
+     "0004000000000000"
+    ],
+    [
+     13272,
+     "0000000002000000"
+    ],
+    [
+     14947,
+     "0400000000000000"
+    ],
+    [
+     13825,
+     "0000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring n 2147483648 for expert 1",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000008000000000"
+    ],
+    [
+     4208,
+     "0004000000000000"
+    ],
+    [
+     13272,
+     "0000000002000000"
+    ],
+    [
+     14947,
+     "0400000000000000"
+    ],
+    [
+     13825,
+     "0100"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 128 out of range for expert 1 (expected [2147483648, 4294967296))"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring n 2147483648 for expert 3",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "0000008000000000"
+    ],
+    [
+     4208,
+     "0004000000000000"
+    ],
+    [
+     13272,
+     "0000000002000000"
+    ],
+    [
+     14947,
+     "0400000000000000"
+    ],
+    [
+     13825,
+     "0300"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 128 out of range for expert 3 (expected [6442450944, 8589934592))"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring n 4294967295",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "ffffffff00000000"
+    ],
+    [
+     4208,
+     "0004000000000000"
+    ],
+    [
+     13272,
+     "fcffffff03000000"
+    ],
+    [
+     14947,
+     "0400000000000000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 128 out of range for expert 1 (expected [4294967295, 8589934590))"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring n 4294967295 for expert 0",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "ffffffff00000000"
+    ],
+    [
+     4208,
+     "0004000000000000"
+    ],
+    [
+     13272,
+     "fcffffff03000000"
+    ],
+    [
+     14947,
+     "0400000000000000"
+    ],
+    [
+     13825,
+     "0000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring n 4294967295 for expert 1",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "ffffffff00000000"
+    ],
+    [
+     4208,
+     "0004000000000000"
+    ],
+    [
+     13272,
+     "fcffffff03000000"
+    ],
+    [
+     14947,
+     "0400000000000000"
+    ],
+    [
+     13825,
+     "0100"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 128 out of range for expert 1 (expected [4294967295, 8589934590))"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring n 4294967295 for expert 3",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0004000000000000"
+    ],
+    [
+     8,
+     "ffffffff00000000"
+    ],
+    [
+     4208,
+     "0004000000000000"
+    ],
+    [
+     13272,
+     "fcffffff03000000"
+    ],
+    [
+     14947,
+     "0400000000000000"
+    ],
+    [
+     13825,
+     "0300"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: B column index 128 out of range for expert 3 (expected [12884901885, 17179869180))"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring m 1073741824",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0000004000000000"
+    ],
+    [
+     8,
+     "8000000000000000"
+    ],
+    [
+     4208,
+     "0000004000000000"
+    ],
+    [
+     13272,
+     "0002000000000000"
+    ],
+    [
+     14947,
+     "0000400000000000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring m 2147483648",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "0000008000000000"
+    ],
+    [
+     8,
+     "8000000000000000"
+    ],
+    [
+     4208,
+     "0000008000000000"
+    ],
+    [
+     13272,
+     "0002000000000000"
+    ],
+    [
+     14947,
+     "0000800000000000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
+  },
+  {
+   "name": "zk-pow MoE fixture declaring m 4294967295",
+   "base": "zk-pow MoE fixture",
+   "certVersion": 2,
+   "bits": 0,
+   "edits": [
+    [
+     0,
+     "ffffffff00000000"
+    ],
+    [
+     8,
+     "8000000000000000"
+    ],
+    [
+     4208,
+     "ffffffff00000000"
+    ],
+    [
+     13272,
+     "0002000000000000"
+    ],
+    [
+     14947,
+     "0000000100000000"
+    ]
+   ],
+   "code": 1,
+   "message": "rejected: Failed to compute CV"
   }
  ]
 }
