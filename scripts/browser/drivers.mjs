@@ -176,7 +176,7 @@ export async function launchSafari() {
     for (let i = 0; i < 40 && !session; i++) {
       await sleep(250);
       session = await call('POST', '/session', { capabilities: { alwaysMatch: { browserName: 'safari' } } }).catch((error) => {
-        if (/Remote Automation/.test(error.message)) throw new Error('Safari refuses WebDriver: run `safaridriver --enable` once, then run this again');
+        if (/Remote Automation/.test(error.message)) throw new Error('Safari refuses WebDriver: run `safaridriver --enable` once, or tick Allow Remote Automation in Safari\'s Develop menu, then run this again');
         return undefined;
       });
     }

@@ -6,7 +6,10 @@
 // pearljs then verifies.
 //
 // PEARL_GATEWAY names the pearl-gateway executable of a Python environment
-// that holds Pearl's pearl-gateway and py-pearl-mining packages.
+// that holds Pearl's pearl-gateway and py-pearl-mining packages, from the
+// branch the suite's pearld was built from. V4 jobs, which the fp8-scheme
+// branch hands out, are mined by the binary PEARL_GATEWAY_MINER_V4 names,
+// built from gateway-mine-v4.rs.
 
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { openSync, writeFileSync } from 'node:fs';
@@ -23,6 +26,7 @@ import { verifyBlockProof, verifyPlainProof } from '../src/verify-proof.js';
 import { live, miner, network, pearld } from './chain.js';
 
 const exe = process.env.PEARL_GATEWAY;
+const minerV4 = process.env.PEARL_GATEWAY_MINER_V4;
 const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
 const run = promisify(execFile);
 const payTo = miner.deriveAddress(9);
@@ -50,8 +54,7 @@ async function job(): Promise<MiningJob> {
   }
 }
 
-// Pearl master's gateway, so a pearld built from master.
-describe.skipIf(exe === undefined || live?.fp8 !== false)('gateway', () => {
+describe.skipIf(live === null || exe === undefined || (live.fp8 && minerV4 === undefined))('gateway', () => {
   beforeAll(async () => {
     const dir = live!.dir;
     const path = join(dir, 'gateway.sock');
@@ -98,6 +101,11 @@ describe.skipIf(exe === undefined || live?.fp8 !== false)('gateway', () => {
     // Version, previous block and merkle root; the two templates may differ in time.
     expect(hex(handed.incompleteHeader.subarray(0, 68))).toBe(hex(built.incompleteHeader.subarray(0, 68)));
     expect(hex(handed.incompleteHeader.subarray(72))).toBe(hex(built.incompleteHeader.subarray(72)));
+    // A gateway from master sends no ancestor list.
+    if (live!.fp8) {
+      expect(handed.ancestorHeaders!.map(hex)).toEqual(built.ancestorHeaders!.map(hex));
+      expect(handed.ancestorHeaders!.length).toBeGreaterThan(0);
+    } else expect(handed.ancestorHeaders).toBeUndefined();
   });
 
   it('answers an unknown method and a malformed job as pearljs reads them', async () => {
@@ -117,8 +125,10 @@ describe.skipIf(exe === undefined || live?.fp8 !== false)('gateway', () => {
     for (let round = 0; (await pearld.getBlockCount()) === before; round++) {
       expect(round).toBeLessThan(30);
       const handed = await job();
-      const { stdout } = await run(python, [script, hex(handed.incompleteHeader), String(handed.certVersion)], { maxBuffer: 64 * 1024 * 1024 });
-      const plainProof = Uint8Array.from(Buffer.from(stdout.trim(), 'base64'));
+      const mined = handed.certVersion === 4
+        ? await run(minerV4!, [hex(handed.incompleteHeader), hex(handed.ancestorHeaders![0]!)], { maxBuffer: 64 * 1024 * 1024 })
+        : await run(python, [script, hex(handed.incompleteHeader), String(handed.certVersion)], { maxBuffer: 64 * 1024 * 1024 });
+      const plainProof = Uint8Array.from(Buffer.from(mined.stdout.trim(), handed.certVersion === 4 ? 'hex' : 'base64'));
       expect(await verifyPlainProof(handed, plainProof)).toEqual({ valid: true, outcome: 'accepted', message: 'accepted' });
       expect((await verifyPlainProof(handed, plainProof, { bits: 0x03000001 })).valid).toBe(false);
 
