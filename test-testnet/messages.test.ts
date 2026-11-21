@@ -18,10 +18,11 @@ describeTestnet('message signing on testnet2', () => {
     expect(verifyMessage(account(0).deriveAddress(1), signature, MESSAGE, network)).toBe(false);
   });
 
-  it('gives the same legacy signature as pearld signmessagewithprivkey for a testnet2 WIF', async () => {
+  it('gives the same legacy signature as pearld signmessagewithprivkey for a WIF of the network', async () => {
     const key = Uint8Array.from(randomBytes(32));
     const wif = encodeWif(key, network);
-    expect(wif.startsWith('c')).toBe(true);
+    // Compressed keys: K or L on mainnet, c on the test networks.
+    expect(wif).toMatch(network.name === 'mainnet' ? /^[KL]/ : /^c/);
     const signature = await node.signMessageWithPrivKey(wif, MESSAGE);
     expect(signature).toBe(signMessage(key, MESSAGE, { format: 'legacy' }));
     expect(verifyMessage(keyPathAddress(key, network), signature, MESSAGE, network, { format: 'legacy' })).toBe(true);
