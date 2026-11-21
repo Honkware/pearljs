@@ -1,0 +1,14 @@
+# The site GitBook builds from this repository: one space holding the pages under docs/,
+# in the order docs/SUMMARY.md gives them.
+$schema: https://api.gitbook.com/gitbook-docs.yaml
+version: 1
+site:
+  title: pearljs
+  structure:
+    - type: space
+      key: docs
+      title: pearljs
+      path: docs
+      default: true
+      content:
+        directory: ./docs
