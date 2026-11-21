@@ -48,19 +48,19 @@ Three tests keep the API honest:
 
 ## Tests against real servers
 
-`npm run test:live` runs `test-live/` against a real pearld on regtest, and against Oyster when one is given. Build both from a Pearl checkout as [Verification](verification-live.md) describes, then:
+`npm run test:live` runs `test/live/` against a real pearld on regtest, and against Oyster when one is given. Build both from a Pearl checkout as [Verification](verification-live.md) describes, then:
 
 ```sh
 PEARLD=/path/to/pearl/bin/pearld OYSTER=/path/to/pearl/bin/oyster npm run test:live
 ```
 
-Without `PEARLD` the tests skip. Every regtest block carries a real ZK certificate, so a full run is slow ([how long](verification-live.md)). Run one file with `npx vitest run --config vitest.live.config.ts test-live/<file>`. `PEARLD=/path/to/pearld node scripts/browser-wallet-live.mjs` runs a wallet on the IndexedDB store in headless Chrome against the same kind of node.
+Without `PEARLD` the tests skip. Every regtest block carries a real ZK certificate, so a full run is slow ([how long](verification-live.md)). Run one file with `npx vitest run --config test/live/vitest.config.ts test/live/<file>`. `PEARLD=/path/to/pearld node scripts/browser-wallet-live.mjs` runs a wallet on the IndexedDB store in headless Chrome against the same kind of node.
 
 `test/blockbook-live.test.ts` is part of `npm test` and skips unless `PEARL_BLOCKBOOK_URL` names a Blockbook. `PEARL_BLOCKBOOK_NETWORK` and `PEARL_BLOCKBOOK_ADDRESSES` are described in [Verification](verification-networks.md#blockbook).
 
-`test-testnet/` runs against Pearl's public testnet2 through a pearld of your own, and spends real testnet coins. `scripts/testnet/run.sh` runs it. `scripts/testnet/dryrun.sh` runs the same files on a local regtest node ([Verification](verification-networks.md#testnet2)).
+`test/network/` runs against Pearl's public testnet2 through a pearld of your own, and spends real testnet coins. `scripts/network/run.sh` runs it. `scripts/network/dryrun.sh` runs the same files on a local regtest node ([Verification](verification-networks.md#testnet2)).
 
-`scripts/mainnet/` reads a mainnet pearld of your own and Pearl's public Blockbook and changes nothing ([Verification](verification-networks.md#mainnet)). `test-mainnet/` holds the mainnet blocks and coinbase scripts an earlier pearljs got wrong and runs without a node: `npx vitest run --config test-mainnet/vitest.config.ts`.
+`scripts/mainnet/` reads a mainnet pearld of your own and Pearl's public Blockbook and changes nothing ([Verification](verification-networks.md#mainnet)). `test/mainnet-blocks/` holds the mainnet blocks and coinbase scripts an earlier pearljs got wrong and runs without a node: `npx vitest run --config test/mainnet-blocks/vitest.config.ts`.
 
 ## Regenerating vectors
 

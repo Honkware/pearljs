@@ -32,18 +32,18 @@ PEARL_BLOCKBOOK_URL=https://blockbook.testnet2.pearlnetwork.net PEARL_BLOCKBOOK_
 
 ## Testnet2
 
-`test-testnet/` runs pearljs against Pearl's public test network, testnet2. It goes through a pearld that syncs from the network's own peers, with blocks mined by other people.
+`test/network/` runs pearljs against Pearl's public test network, testnet2. It goes through a pearld that syncs from the network's own peers, with blocks mined by other people.
 
-`scripts/testnet/run.sh` runs it. Every suite is skipped unless `PEARL_TESTNET_RPC_URL` is set, and the run script sets it and the rest from a node folder:
+`scripts/network/run.sh` runs it. Every suite is skipped unless `PEARL_TESTNET_RPC_URL` is set, and the run script sets it and the rest from a node folder:
 
 ```sh
 # a testnet2 pearld with --txindex --addrindex --rejectnonstd, RPC on 127.0.0.1:44114,
 # its rpc.cert and rpc.pass in $PEARL_TESTNET_DIR
-node scripts/testnet/wallet.mjs create       # once; the wallet's first address is what the faucet pays
-npm run build && scripts/testnet/run.sh      # every file; `run.sh relay` runs one
+node scripts/network/wallet.mjs create       # once; the wallet's first address is what the faucet pays
+npm run build && scripts/network/run.sh      # every file; `run.sh relay` runs one
 ```
 
-`scripts/testnet/dryrun.sh` runs the same files on a local regtest pearld that mines a block a minute.
+`scripts/network/dryrun.sh` runs the same files on a local regtest pearld that mines a block a minute.
 
 ### Unfunded files
 
@@ -66,11 +66,11 @@ The funded files spend well under 1 PRL:
 
 ### Chain checks
 
-- `scripts/testnet/check-chain.mjs` follows the node with `followChain` from block 1.
+- `scripts/network/check-chain.mjs` follows the node with `followChain` from block 1.
 - It checks every block's merkle root, witness commitment, certificate binding and `checkCertificateRules`.
 - It runs `verifyBlockProof` on every 500th block and the 20 around the FP8 fork.
 - It keeps following, and records any block a reorganization takes back.
-- `test-testnet/proofs.test.ts` holds testnet2 blocks 73396, 94500 and 101914, three of the 254 blocks described under [Recorded runs](verification-runs.md#earlier-versions). `verifyBlockProof` accepts all 254, as pearld does.
+- `test/network/proofs.test.ts` holds testnet2 blocks 73396, 94500 and 101914, three of the 254 blocks described under [Recorded runs](verification-runs.md#earlier-versions). `verifyBlockProof` accepts all 254, as pearld does.
 
 ## Mainnet
 
@@ -84,10 +84,10 @@ node scripts/mainnet/summary.mjs             # counts and script usage from the 
 PEARL_RPC_INFLIGHT=1 scripts/mainnet/run.sh proofs.mjs
 PEARL_RPC_SLOTS=1 scripts/mainnet/run.sh backends.mjs
 PEARL_RPC_SLOT_FIRST=1 scripts/mainnet/run.sh follow.mjs --minutes 130
-npx vitest run --config test-mainnet/vitest.config.ts
+npx vitest run --config test/mainnet-blocks/vitest.config.ts
 ```
 
-The last command runs `test-mainnet/`, the mainnet cases described under [Recorded runs](verification-runs.md#earlier-versions).
+The last command runs `test/mainnet-blocks/`, the mainnet cases described under [Recorded runs](verification-runs.md#earlier-versions).
 
 ### Blocks
 
@@ -119,14 +119,14 @@ The last command runs `test-mainnet/`, the mainnet cases described under [Record
 
 ### Funded run
 
-The funded files of `test-testnet/` also run on mainnet, with real PRL. They need a mainnet pearld with `--txindex --addrindex --rejectnonstd` and a wallet made by `scripts/testnet/wallet.mjs`:
+The funded files of `test/network/` also run on mainnet, with real PRL. They need a mainnet pearld with `--txindex --addrindex --rejectnonstd` and a wallet made by `scripts/network/wallet.mjs`:
 
 ```sh
 export PEARL_TESTNET_DIR=/path/to/the/node/folder PEARL_TESTNET_NETWORK=mainnet
 export PEARL_TESTNET_RPC_URL=https://127.0.0.1:44117 PEARL_TESTNET_BLOCKBOOK=off
-node scripts/testnet/wallet.mjs create       # once; fund the address it prints
-scripts/testnet/run.sh
-node scripts/testnet/return.mjs <address>    # sends what is left to an address of yours
+node scripts/network/wallet.mjs create       # once; fund the address it prints
+scripts/network/run.sh
+node scripts/network/return.mjs <address>    # sends what is left to an address of yours
 ```
 
 The wallet's phrase is kept in a file beside it so the run needs nobody at the keyboard. Fund it with no more than the run needs. `scripts/mainnet/send.mjs` is a wallet for the funding payment whose passphrase is typed and never stored.

@@ -1,6 +1,6 @@
 # Live regtest suite
 
-`npm run test:live` runs the tests in `test-live/` against a real pearld on regtest, and against Oyster when one is given. Every test talks to the servers through `PearldClient` and `OysterClient`. The suite runs against either branch of Pearl.
+`npm run test:live` runs the tests in `test/live/` against a real pearld on regtest, and against Oyster when one is given. Every test talks to the servers through `PearldClient` and `OysterClient`. The suite runs against either branch of Pearl.
 
 ## Build and run
 
@@ -112,7 +112,7 @@ The vectors and the live tests together show what follows.
 
 ### Relay policy and replacement
 
-`checkStandard` gives the reason `testmempoolaccept` gives for each of these (`test-live/policy.test.ts`):
+`checkStandard` gives the reason `testmempoolaccept` gives for each of these (`test/live/policy.test.ts`):
 
 | Kind | Cases |
 | --- | --- |
@@ -329,16 +329,16 @@ On an fp8-scheme pearld:
 
 ### Mining and pearl-gateway
 
-On a regtest pearld, `test-live/mining.test.ts` builds a skeleton from a template holding a witness spend, lets pearld mine the same template, and gets pearld's block byte for byte once pearld's certificate is sealed in; it then has pearld accept a block pearljs assembled, with its own payout and text, around a proof of its header from `zkpow.Mine`, the prover pearld itself uses (`vectors/mining/prove/main.go`, run when `PEARL_PROVER` names it).
+On a regtest pearld, `test/live/mining.test.ts` builds a skeleton from a template holding a witness spend, lets pearld mine the same template, and gets pearld's block byte for byte once pearld's certificate is sealed in; it then has pearld accept a block pearljs assembled, with its own payout and text, around a proof of its header from `zkpow.Mine`, the prover pearld itself uses (`vectors/mining/prove/main.go`, run when `PEARL_PROVER` names it).
 
-`test-live/gateway.test.ts` runs Pearl's own pearl-gateway on that pearld, when `PEARL_GATEWAY` names its executable, with pearljs as the miner on its socket:
+`test/live/gateway.test.ts` runs Pearl's own pearl-gateway on that pearld, when `PEARL_GATEWAY` names its executable, with pearljs as the miner on its socket:
 
 - The job the gateway hands out is the one `miningJob` builds from pearld's template.
 - The gateway's answers to an unknown method and to bad parameters decode to its error codes.
 - A plain proof mined for the job by `pearl_mining.mine` passes `verifyPlainProof`, and fails it at a harder target.
 - The gateway turns the proof `submitPlainProof` sent into a block pearld accepts, whose proof `verifyBlockProof` accepts.
 
-The same test runs against the fp8-scheme branch's gateway and pearld with V4 jobs: the ancestor headers the gateway sends are the ones `miningJob` gives, and the `PlainProofV4` is mined by zk-pow's CPU miner (`test-live/gateway-mine-v4.rs`, run when `PEARL_GATEWAY_MINER_V4` names it).
+The same test runs against the fp8-scheme branch's gateway and pearld with V4 jobs: the ancestor headers the gateway sends are the ones `miningJob` gives, and the `PlainProofV4` is mined by zk-pow's CPU miner (`test/live/gateway-mine-v4.rs`, run when `PEARL_GATEWAY_MINER_V4` names it).
 
 ### Script interpreter
 

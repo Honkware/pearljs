@@ -7,7 +7,7 @@
 //
 //	go -C /path/to/pearl/node build -tags zkpow -o /path/to/pearljs-prove /path/to/pearljs/vectors/mining/prove/main.go
 //
-// and point PEARL_PROVER at the binary when running test-live/mining.test.ts.
+// and point PEARL_PROVER at the binary when running test/live/mining.test.ts.
 package main
 
 import (

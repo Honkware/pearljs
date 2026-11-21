@@ -42,7 +42,7 @@ Any other arithmetic in zk-pow that would overflow 32 bits panics instead of wra
 
 ## Large matrices in shares
 
-Plain proofs raise the same problem. Five of the six V2 and V3 mainnet blocks in `test-mainnet/fixtures` commit a matrix of 4 GiB or more, and block 98976's A is 512 GiB. Pearl's bounds allow 2^40 bytes (2^24 rows of 2^16 bytes), so the byte positions in a share go past WebAssembly's 32-bit `usize`.
+Plain proofs raise the same problem. Five of the six V2 and V3 mainnet blocks in `test/mainnet-blocks/fixtures` commit a matrix of 4 GiB or more, and block 98976's A is 512 GiB. Pearl's bounds allow 2^40 bytes (2^24 rows of 2^16 bytes), so the byte positions in a share go past WebAssembly's 32-bit `usize`.
 
 The build patches zk-pow and its Merkle library to carry every position, tree size and leaf index of a plain proof's openings in 64 bits. A share of any size within Pearl's bounds then gets the verdict pearld gives it. Verification memory follows the opened rows rather than the matrices, so a V4 share of 2^39-byte matrices takes 29 MiB.
 

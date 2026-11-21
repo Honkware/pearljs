@@ -13,5 +13,6 @@
     "types": ["node", "vitest/globals"],
     "paths": { "pearljs": ["./src/index.ts"], "pearljs/*": ["./src/*.ts"] }
   },
-  "include": ["src", "test", "test-live", "examples"]
+  "include": ["src", "test", "examples"],
+  "exclude": ["test/network", "test/mainnet-blocks"]
 }

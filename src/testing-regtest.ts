@@ -1,5 +1,5 @@
 // Starts prebuilt pearld and oyster binaries on regtest and stops them, with
-// the flags pearljs's own live tests run them with (test-live/processes.ts,
+// the flags pearljs's own live tests run them with (test/live/processes.ts,
 // which this repeats until the live suite is moved onto it). Every listener
 // is on 127.0.0.1, RPC runs over each server's default TLS with the
 // certificate it generates, and nothing here builds or downloads a binary.

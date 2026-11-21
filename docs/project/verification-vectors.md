@@ -175,7 +175,7 @@ The live mining and gateway tests are in [Live regtest suite](verification-live.
 
 `test/verify-proof-differential.test.ts` checks the verdict and message against `VerifyZKProofFFI` on 2337 certificates with changed public data, the sizes where a 32-bit product wraps among them.
 
-On a regtest pearld, `test-live/verify-proof.test.ts` verifies blocks pearld mined, and refuses them with a flipped proof byte or harder bits.
+On a regtest pearld, `test/live/verify-proof.test.ts` verifies blocks pearld mined, and refuses them with a flipped proof byte or harder bits.
 
 ### Plain proofs
 

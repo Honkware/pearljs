@@ -29,7 +29,7 @@ const plainCases = ['V3 dense', 'V3 dense with byte 8731 flipped', 'V4 H100', 'V
 writeFileSync(
   join(dir, 'proofs-extra.json'),
   JSON.stringify({
-    block200: readFileSync(join(root, 'test-mainnet/fixtures/block-200.hex'), 'utf8').trim(),
+    block200: readFileSync(join(root, 'test/mainnet-blocks/fixtures/block-200.hex'), 'utf8').trim(),
     v1: ['block 200', 'block 200 with proof byte 22 flipped'].map((name) => v1.cases.find((c) => c.name === name)),
     plainBases: plain.bases.filter((b) => plainCases.some((c) => c.base === b.name)),
     plainCases,

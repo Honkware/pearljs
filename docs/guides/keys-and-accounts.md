@@ -148,4 +148,4 @@ XMSS keys don't come from a recovery phrase, in Pearl or in pearljs. They come f
 
 ## Tests
 
-The agreement with Oyster is checked against vectors from Pearl's Go code (`vectors/pearl-go.json`, read by `test/go-vectors.test.ts`) and against a live Oyster in the live suite (`test-live/oyster.test.ts`, `test-live/mnemonic.test.ts`). [Compatibility verification](../project/verification.md) lists every check.
+The agreement with Oyster is checked against vectors from Pearl's Go code (`vectors/pearl-go.json`, read by `test/go-vectors.test.ts`) and against a live Oyster in the live suite (`test/live/oyster.test.ts`, `test/live/mnemonic.test.ts`). [Compatibility verification](../project/verification.md) lists every check.

@@ -1,4 +1,4 @@
-// V1 proof vectors: mainnet V1 blocks (test-mainnet/fixtures) judged by
+// V1 proof vectors: mainnet V1 blocks (test/mainnet-blocks/fixtures) judged by
 // zkpow.VerifyCertificate, the function pearld verifies a block's
 // certificate with, as mined and after one tampering at a time, and with
 // their public data changed at random and at the sizes where a 32-bit usize
@@ -8,7 +8,7 @@
 // and V3.
 //
 //	go -C /path/to/pearl/node run -tags zkpow /path/to/pearljs/vectors/mining/proofs/v1/main.go \
-//	  /path/to/pearljs/test-mainnet/fixtures /path/to/pearljs/vectors/mining/proofs.json \
+//	  /path/to/pearljs/test/mainnet-blocks/fixtures /path/to/pearljs/vectors/mining/proofs.json \
 //	  > /path/to/pearljs/vectors/mining/proofs-v1.json
 package main
 

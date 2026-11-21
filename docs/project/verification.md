@@ -27,7 +27,7 @@ npm test
 
 ## A live pearld and Oyster
 
-`npm run test:live` runs the tests in `test-live/` against a real pearld on regtest, and against Oyster when one is given. The suite builds nothing. It needs pearld and Oyster binaries built from a Pearl checkout:
+`npm run test:live` runs the tests in `test/live/` against a real pearld on regtest, and against Oyster when one is given. The suite builds nothing. It needs pearld and Oyster binaries built from a Pearl checkout:
 
 ```sh
 PEARLD=/path/to/pearl/bin/pearld OYSTER=/path/to/pearl/bin/oyster npm run test:live
@@ -45,10 +45,10 @@ PEARL_BLOCKBOOK_URL=https://blockbook.pearlresearch.ai npx vitest run test/block
 
 ## Testnet2
 
-`test-testnet/` runs pearljs against Pearl's public test network through a pearld that syncs from the network's own peers. `scripts/testnet/run.sh` runs it from a node folder, and `scripts/testnet/check-chain.mjs` follows and checks the chain from block 1.
+`test/network/` runs pearljs against Pearl's public test network through a pearld that syncs from the network's own peers. `scripts/network/run.sh` runs it from a node folder, and `scripts/network/check-chain.mjs` follows and checks the chain from block 1.
 
 ```sh
-npm run build && scripts/testnet/run.sh
+npm run build && scripts/network/run.sh
 ```
 
 ## Mainnet
@@ -57,12 +57,12 @@ npm run build && scripts/testnet/run.sh
 
 ```sh
 scripts/mainnet/run.sh walk.mjs
-npx vitest run --config test-mainnet/vitest.config.ts
+npx vitest run --config test/mainnet-blocks/vitest.config.ts
 ```
 
 [Public networks](verification-networks.md) has the other scripts, the environment they need and what each run checks.
 
-The funded files of `test-testnet/` have also been run on mainnet with real PRL, on a node with the transaction and address indexes ([Funded run](verification-networks.md#funded-run)).
+The funded files of `test/network/` have also been run on mainnet with real PRL, on a node with the transaction and address indexes ([Funded run](verification-networks.md#funded-run)).
 
 ## Browsers and bundlers
 

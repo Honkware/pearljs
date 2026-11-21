@@ -1,5 +1,5 @@
 // V1 proofs against pearld's own verdicts: four mainnet V1 blocks
-// (test-mainnet/fixtures) as mined, after one tampering each and with their
+// (test/mainnet-blocks/fixtures) as mined, after one tampering each and with their
 // public data changed at random and at the sizes where a 32-bit usize would
 // wrap, judged by zkpow.VerifyCertificate, which sends a V1 certificate to
 // verify_zk_proof_v1 (vectors/mining/proofs-v1.json, from
@@ -37,7 +37,7 @@ interface Base {
 
 const bases = new Map<string, Base>();
 for (const height of ['200', '24000', '71740', '71934']) {
-  const block = parseBlock(fromHex(readFileSync(new URL(`../test-mainnet/fixtures/block-${height}.hex`, import.meta.url), 'utf8').trim()));
+  const block = parseBlock(fromHex(readFileSync(new URL(`../test/mainnet-blocks/fixtures/block-${height}.hex`, import.meta.url), 'utf8').trim()));
   bases.set(height, { header: block.header, publicData: block.certificate!.publicData, proof: block.certificate!.proof });
 }
 for (const name of ['V2 dense', 'V3 dense']) {

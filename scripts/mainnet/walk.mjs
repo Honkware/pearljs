@@ -11,7 +11,7 @@
 // millions of small outputs.
 //
 // Findings go to failures.jsonl; each refused or mis-hashed block is saved
-// raw under test-mainnet/fixtures/.
+// raw under test/mainnet-blocks/fixtures/.
 
 import { writeFileSync, appendFileSync, existsSync, renameSync, openSync, writeSync, closeSync, createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -47,7 +47,7 @@ const FAILURES = join(OUT, 'failures.jsonl');
 const FEES = join(OUT, 'block-fees.jsonl');
 const NONSTD = join(OUT, 'nonstandard.jsonl');
 const LOG = join(OUT, 'walk.log');
-const FIXTURES = process.env.PEARL_WALK_FIXTURES ?? join(root, 'test-mainnet', 'fixtures');
+const FIXTURES = process.env.PEARL_WALK_FIXTURES ?? join(root, 'test/mainnet-blocks', 'fixtures');
 
 const log = (line) => {
   const text = `${new Date().toISOString()} ${line}`;

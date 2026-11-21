@@ -86,4 +86,4 @@ In Chrome 157, a worker subscribed to blocks on a pearld-shaped websocket that s
 
 ## Earlier versions
 
-A 32-bit build of the verifier once mishandled the matrix sizes of 254 real testnet2 blocks; `test-testnet/proofs.test.ts` keeps three of them. `test-mainnet/` holds mainnet blocks and coinbase scripts an earlier pearljs got wrong, each the smallest case that shows it.
+A 32-bit build of the verifier once mishandled the matrix sizes of 254 real testnet2 blocks; `test/network/proofs.test.ts` keeps three of them. `test/mainnet-blocks/` holds mainnet blocks and coinbase scripts an earlier pearljs got wrong, each the smallest case that shows it.

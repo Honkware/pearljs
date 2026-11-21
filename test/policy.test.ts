@@ -136,7 +136,7 @@ describe('checkStandard', () => {
   });
 });
 
-// Messages confirmed against a regtest pearld by test-live/policy.test.ts.
+// Messages confirmed against a regtest pearld by test/live/policy.test.ts.
 describe('checkSanity', () => {
   const fresh = (): Transaction => parseTransaction(standard('standard').txHex);
 
