@@ -60,7 +60,9 @@ Against pearld 1.5.7, in blocks 146362 to 146404:
 | Returned at the end | 0.4999445 PRL, so the run cost 5,550 grain in fees |
 | Time | 2 hours 41 minutes |
 
-The run itself passed 32 tests. The other one checked that an exported key starts with `c`, which holds on the test networks and not on mainnet, where it starts with `K` or `L`. It failed before it reached the node. With that check corrected, the file passed when run again.
+A second run the same day pointed the unfunded backend comparison at Pearl's mainnet Blockbook. `blockbookBackend` with `verifyBlocks` agreed with `pearldBackend` on the history, coins and balance of addresses others had used, in 39 requests to the server.
+
+The funded run itself passed 32 tests. The other one checked that an exported key starts with `c`, which holds on the test networks and not on mainnet, where it starts with `K` or `L`. It failed before it reached the node. With that check corrected, the file passed when run again.
 
 ## Browser extensions
 

@@ -1,4 +1,4 @@
-// A fetch for the public testnet Blockbook that counts every request it sends
+// A fetch for Pearl's public Blockbook that counts every request it sends
 // in a file shared by every process of the session, refuses once the budget
 // is spent, and keeps at most two requests in flight in this process.
 //
@@ -8,7 +8,8 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { nodeDir } from './node.mjs';
 
-export const BLOCKBOOK_URL = 'https://blockbook.testnet2.pearlnetwork.net';
+// The server the run is pointed at, so the budget covers a mainnet run as well.
+export const BLOCKBOOK_URL = (process.env.PEARL_TESTNET_BLOCKBOOK || 'https://blockbook.testnet2.pearlnetwork.net').replace(/\/$/, '');
 export const COUNTER = process.env.PEARL_TESTNET_BLOCKBOOK_COUNTER ?? join(nodeDir, 'blockbook-requests');
 const LIMIT = Number(process.env.PEARL_TESTNET_BLOCKBOOK_BUDGET ?? 300);
 const IN_FLIGHT = 2;

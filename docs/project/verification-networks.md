@@ -143,4 +143,4 @@ On mainnet the files did what they do on testnet2, in blocks mined by the networ
 | Invoices | An invoice followed over the websocket from awaiting to confirmed, and one that expires |
 | Messages | A legacy signature equal to the one pearld's `signmessagewithprivkey` makes for a mainnet key |
 
-The Blockbook comparisons and Oyster's `verifymessage` were not part of this run. [Recorded runs](verification-runs.md#mainnet-funded-run-2026-11-21) has the counts.
+The funded run left out the Blockbook comparisons and Oyster's `verifymessage`. The Blockbook comparison on addresses others have used ran afterwards with `PEARL_TESTNET_BLOCKBOOK` set to the mainnet server. [Recorded runs](verification-runs.md#mainnet-funded-run-2026-11-21) has the counts.
