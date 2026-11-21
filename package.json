@@ -261,6 +261,14 @@
     "bip86"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Honkware/pearljs.git"
+  },
+  "homepage": "https://github.com/Honkware/pearljs#readme",
+  "bugs": {
+    "url": "https://github.com/Honkware/pearljs/issues"
+  },
   "dependencies": {
     "@noble/hashes": "1.8.0",
     "@scure/bip39": "1.6.0",

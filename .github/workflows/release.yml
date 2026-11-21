@@ -1,0 +1,32 @@
+name: release
+
+# Publishes the package to npm when a version tag is pushed: v0.1.0 publishes
+# the version 0.1.0 that package.json names, and nothing else.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  # Lets npm record which commit and workflow built the package.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - name: Check the tag against package.json
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - run: npm ci
+      - run: npm run check
+      - run: npm run verify:pack
+      - run: npm publish --provenance --access public
+        env:
+          # Unset when npm trusts this workflow as a publisher.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
