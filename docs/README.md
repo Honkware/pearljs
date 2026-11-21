@@ -2,7 +2,7 @@
 
 New to pearljs? Begin with the first page under Start.
 
-Each guide begins from a task, and its examples run as written. `npm run check:docs` executes the ones that need no node. Runnable programs are in [examples](../examples).
+Each guide begins from a task, and its examples run as written. `npm run check:docs` executes the ones that need no node. Runnable programs are in [examples](https://github.com/Honkware/pearljs/tree/main/examples).
 
 ## Start
 

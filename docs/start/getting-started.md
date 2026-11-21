@@ -134,7 +134,7 @@ The recovery phrase and the RPC password come from environment variables so that
 
 ## Next steps
 
-The [examples](../../examples) directory has a runnable program for each of these steps, and `npm run examples` in a checkout runs the ones that need no node.
+The [examples](https://github.com/Honkware/pearljs/tree/main/examples) directory has a runnable program for each of these steps, and `npm run examples` in a checkout runs the ones that need no node.
 
 | To do this | Read |
 | --- | --- |
