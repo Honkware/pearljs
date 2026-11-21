@@ -6,8 +6,7 @@ A wallet running in a web page has to read the chain and broadcast its payments,
 
 The page logs in with credentials anyone can read from its source, so give it pearld's limited user rather than the full one. Start pearld with `--rpclimituser` and `--rpclimitpass` beside the usual `--rpcuser` and `--rpcpass`, for example `--rpclimituser=page --rpclimitpass=...`. The limited user can call only the methods in pearld's `rpcLimited` list, which pearljs exports as `PEARLD_LIMITED_METHODS` ([Limited user's methods](../reference/browsers-and-bundlers-modules.md#limited-users-methods)).
 
-> [!WARNING]
-> Credentials a page holds are public: anyone can read them from the page. Give the page only the limited user, which cannot spend, stop the node or change its peers, and remember that it can still read everything the node knows.
+> **Warning:** Credentials a page holds are public: anyone can read them from the page. Give the page only the limited user, which cannot spend, stop the node or change its peers, and remember that it can still read everything the node knows.
 
 The node also needs an index for the wallet to look up addresses: `--addrindex` for `pearldBackend`, or the compact filter index, which is on by default, for `filterBackend`.
 

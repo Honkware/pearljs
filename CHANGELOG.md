@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-11-21)
 
-The first version. Nothing has been published, so this lists what the library does rather than how it got there.
+The first version. This lists what the library does.
 
 ### Behavior to know about
 

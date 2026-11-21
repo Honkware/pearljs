@@ -2,8 +2,7 @@
 
 Tests of a wallet flow, an invoice monitor or an indexer need a chain that does what the test says, when it says. `pearljs/testing` provides one inside the test process: a simulated Pearl chain and node, with a faucet and fixed test keys. Code written against pearljs runs on it unchanged, so a flow is tested in milliseconds without a pearld. For the tests that should see a real node, `pearljs/testing-regtest` starts a pearld on regtest ([Test against regtest](testing-regtest.md)).
 
-> [!WARNING]
-> Import both modules from test code only. Every key in the kit is public.
+> **Warning:** Import both modules from test code only. Every key in the kit is public.
 
 ## Run a wallet on the simulated chain
 

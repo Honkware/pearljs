@@ -22,12 +22,11 @@ pearljs is at version 0.1 and has not had an independent security audit. [Known 
 
 ## Installation
 
-pearljs needs Node.js 20.19+ or 22.12+ and is ESM only. Until it is on npm, install it from a checkout:
-
 ```sh
-git clone https://github.com/Honkware/pearljs.git pearljs && cd pearljs
-npm ci && npm pack    # writes pearljs-0.1.0.tgz to install in your project
+npm install pearljs
 ```
+
+pearljs needs Node.js 20.19+ or 22.12+ and is ESM only.
 
 Browsers need a bundler that loads WebAssembly. See [Browsers and bundlers](docs/guides/browsers-and-bundlers.md).
 

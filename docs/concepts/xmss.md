@@ -31,8 +31,7 @@ XMSS spends are large because of the 2340-byte signature. A spend with one input
 
 Every XMSS signature is made at a one-time index, which is written big-endian into the first four bytes of the signature. The signer has to keep track of the indices it has used for the whole life of the key, across restarts, crashes and machines.
 
-> [!WARNING]
-> Never let an XMSS key sign at the same index twice. Two signatures over different messages at one index let anyone forge signatures under that key and take the funds it guards, and nothing on the chain prevents it. The usual way this happens is restoring a backup of the index state, or a virtual machine or container snapshot that contains it, because the restored state is older than the key's real use and hands out the same indices again.
+> **Warning:** Never let an XMSS key sign at the same index twice. Two signatures over different messages at one index let anyone forge signatures under that key and take the funds it guards, and nothing on the chain prevents it. The usual way this happens is restoring a backup of the index state, or a virtual machine or container snapshot that contains it, because the restored state is older than the key's real use and hands out the same indices again.
 
 `createXmssSigner` takes an `XmssIndexStore` to keep this state. A store has two methods. `reserve(publicKey)` returns an index it has never returned for that key, and records the index durably before it returns. `peek(publicKey)` returns the next unused index without changing anything. The signer reserves an index, then signs, then verifies the result, so a failure at any step wastes an index and never repeats one.
 

@@ -54,8 +54,7 @@ TLS certificate of 127.0.0.1:18334 is not trusted (DEPTH_ZERO_SELF_SIGNED_CERT);
 
 Two other ways of trusting the certificate need no pearljs code. Start Node with `NODE_EXTRA_CA_CERTS=/path/to/rpc.cert`, or pass `init: { dispatcher }` with an `Agent` from the `undici` package that trusts the certificate.
 
-> [!WARNING]
-> Keep certificate checking on. Turning it off with `rejectUnauthorized: false` or `NODE_TLS_REJECT_UNAUTHORIZED=0` exposes the RPC password, which travels on that connection.
+> **Warning:** Keep certificate checking on. Turning it off with `rejectUnauthorized: false` or `NODE_TLS_REJECT_UNAUTHORIZED=0` exposes the RPC password, which travels on that connection.
 
 pearld accepts TLS 1.2 and 1.3, and Oyster accepts only TLS 1.3. A server started without TLS (`--notls` for pearld, `--noservertls` for Oyster) takes an `http://` URL. Over plain HTTP, Basic auth puts the password on the wire in the clear, so the client refuses to send it to any host other than loopback unless you set `allowInsecureAuth`:
 

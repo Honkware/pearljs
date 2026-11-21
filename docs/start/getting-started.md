@@ -4,15 +4,8 @@ This page installs pearljs and takes it as far as a first payment. It shows the 
 
 ## Install
 
-pearljs isn't published on npm, so build a tarball from a checkout and install that in your project:
-
 ```sh
-git clone https://github.com/Honkware/pearljs.git pearljs
-cd pearljs
-npm ci
-npm pack                       # builds dist/ and writes pearljs-0.1.0.tgz
-cd /path/to/your/project
-npm install /path/to/pearljs/pearljs-0.1.0.tgz
+npm install pearljs
 ```
 
 pearljs runs on Node.js 20.19 or newer, or 22.12 or newer. It is an ES module package, so load it with `import`, or with `require()` on those Node versions, which load ES modules without a flag. TypeScript finds its types when `moduleResolution` is `node16`, `nodenext` or `bundler`, and the legacy `node10` setting doesn't see them. To use it in a browser, see [Browsers and bundlers](../guides/browsers-and-bundlers.md).

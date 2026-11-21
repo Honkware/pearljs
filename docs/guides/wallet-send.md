@@ -56,8 +56,7 @@ try {
 
 If a transaction will never confirm, `abandon(txid)` gives it up and frees its coins. It throws `WALLET_TRANSACTION_KNOWN` while the backend holds the transaction in its mempool or in a block, since the transaction can still confirm. Each sync and `refresh` asks the backend again about abandoned transactions whose coins nothing else has spent, and one that the backend shows again, in its mempool or a block, counts as active once more.
 
-> [!WARNING]
-> A transaction that reached some other node can still confirm after `abandon`. A new payment to the same recipient made with other coins may then pay twice. Spending the abandoned transaction's own coins in the new payment rules that out.
+> **Warning:** A transaction that reached some other node can still confirm after `abandon`. A new payment to the same recipient made with other coins may then pay twice. Spending the abandoned transaction's own coins in the new payment rules that out.
 
 ## Raise the fee
 

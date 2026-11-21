@@ -13,8 +13,7 @@ An XMSS key can sign each of its indices only once, so a wallet has to remember 
 
 No store can tell when it has been copied, and browser storage is copied more readily than a server's disk. A profile synced or restored from a device backup, or site data copied to another profile, holds an older index state. A wallet resumed from that copy signs again with indices already used, which can lose the key's funds. The wallet freezes a key once the chain shows a signature past its state ([Hold XMSS keys in a wallet](../guides/wallet-xmss-keys.md)), but any signature made from the copy before then has already gone out.
 
-> [!WARNING]
-> Keep XMSS keys in a page only where the browser profile is not synced or restored, and keep the funds such a key holds to what you could lose.
+> **Warning:** Keep XMSS keys in a page only where the browser profile is not synced or restored, and keep the funds such a key holds to what you could lose.
 
 The memory store keeps nothing across a reload, so it is never a place for XMSS keys.
 

@@ -38,8 +38,7 @@ The leaf scripts come from builders for the common conditions, or from your own 
 | Timelocked | `cltvScript(n, leaf)`, `csvScript(n, leaf)` | As the inner leaf, with the locktime or sequence set |
 | Anything else | `compileScript([...])` ([Scripts](scripts.md)) | `signTapscriptUnchecked` and `scriptPathWitness` |
 
-> [!WARNING]
-> The address holds only the root, so a spend needs the script of the leaf it uses and the hashes that prove it. In practice that means keeping every leaf script, in order, next to the keys. Without the scripts the output cannot be spent, even by someone who holds every key.
+> **Warning:** The address holds only the root, so a spend needs the script of the leaf it uses and the hashes that prove it. In practice that means keeping every leaf script, in order, next to the keys. Without the scripts the output cannot be spent, even by someone who holds every key.
 
 ## Spend through an account
 
