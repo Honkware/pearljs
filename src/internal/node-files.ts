@@ -151,6 +151,18 @@ export function renameSteady(from: string, to: string): void {
   }
 }
 
+/**
+ * What the file store's link of revision `linked` means once the revision it was built on
+ * is gone. Pruning at revision R deletes everything under R - 1, so the base
+ * went because some writer reached `linked + 1`. If that is still the newest,
+ * nothing can have pruned `linked` before this link was made, so the writer
+ * read this link as its base and the write stands. Further on, a writer far
+ * behind that linked a long-deleted name looks the same.
+ */
+export function linkOutcome(linked: number, newest: number): 'written' | 'unknown' {
+  return newest === linked + 1 ? 'written' : 'unknown';
+}
+
 export function removeQuietly(path: string): void {
   try {
     unlinkSync(path);

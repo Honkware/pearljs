@@ -58,17 +58,36 @@ async function walletChild(directory: string): Promise<void> {
   }
 }
 
+/** Who the store says won the write from `n`, read once another open gets through. */
+async function winner(directory: string, n: number): Promise<number | undefined> {
+  for (;;) {
+    try {
+      const store = createFileStore(directory, { breakLock: true });
+      const value = (await store.get(`won:${n}`)) as number | undefined;
+      await store.close();
+      return value;
+    } catch (error) {
+      if (!(error instanceof PearlError)) throw error;
+    }
+  }
+}
+
 async function counterChild(directory: string, rounds: number): Promise<void> {
   const won: number[] = [];
   for (let round = 0; round < rounds; round += 1) {
+    let tried: number | null = null;
     try {
       const store = createFileStore(directory, { breakLock: true });
       const n = (await store.get('n')) as number;
       const expected = [{ key: 'n', value: n as JsonValue }];
+      tried = n;
       if (await store.compareAndSet(expected, [{ type: 'set', key: 'n', value: n + 1 }, { type: 'set', key: `won:${n}`, value: process.pid }])) won.push(n);
+      tried = null;
       await store.close();
     } catch (error) {
       if (!(error instanceof PearlError)) throw error;
+      // A store that could not tell whether its write stands says so; the stored state does.
+      if (tried !== null && /may or may not have been applied/.test(error.message) && (await winner(directory, tried)) === process.pid) won.push(tried);
     }
   }
   say({ won });

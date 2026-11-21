@@ -19,8 +19,12 @@
 // far behind could therefore link a name that was deleted long ago, so after
 // linking it reads the revision it built on and checks the random id in it:
 // that file is deleted before any later one, and its id never comes back, so
-// a writer that still finds it has built on the newest state. One that does
-// not removes its link and fails.
+// a writer that still finds it has built on the newest state.
+//
+// One that does not find it may be that late writer, or may have committed
+// and then been overtaken: another writer built on its revision and pruned
+// the one below. linkOutcome tells them apart where the directory can, and
+// the store otherwise says that it does not know whether the write stands.
 //
 // The lock (internal/node-files.ts) keeps a second store from opening at
 // all. The store checks it still holds the lock before every write, and a
@@ -40,7 +44,7 @@
 import { closeSync, linkSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { StoreError } from './errors.js';
-import { LockHeldError, acquireLock, errnoOf, randomId, removeQuietly, syncDirectory, writeDurably } from './internal/node-files.js';
+import { LockHeldError, acquireLock, errnoOf, linkOutcome, randomId, removeQuietly, syncDirectory, writeDurably } from './internal/node-files.js';
 import type { FileLockOptions, HeldLock } from './internal/node-files.js';
 
 export type { FileLockOptions } from './internal/node-files.js';
@@ -202,12 +206,16 @@ export function createFileStore(path: string, options: FileStoreOptions = {}): F
     const text = `${JSON.stringify({ format: FORMAT, version: VERSION, revision: revision + 1, id: nextId, entries: sorted })}\n`;
     const temporary = join(path, `${nextId}.tmp`);
     const target = join(path, revisionName(revision + 1));
+    const moved = (): StoreError =>
+      new StoreError('STORE_CONFLICT', `wallet store ${path} has moved past revision ${revision}, which this store held: another writer is using it. Nothing was written; reopen the store`);
     try {
       try {
         writeDurably(temporary, text, 'wx');
       } catch (error) {
         throw new StoreError('STORE_WRITE_FAILED', `wallet store ${path} could not write its next revision whole; the stored state is unchanged: ${(error as Error).message}`, { cause: error });
       }
+      // A store whose base is already gone is behind, and has written nothing yet.
+      if (revision >= 0 && idOf(join(path, revisionName(revision))) !== id) throw fail(moved());
       try {
         // The commit: whole, and only if no writer has made this revision.
         linkSync(temporary, target);
@@ -225,10 +233,21 @@ export function createFileStore(path: string, options: FileStoreOptions = {}): F
     } finally {
       removeQuietly(temporary);
     }
-    // The name was free. It is the next revision only if the one this store built on is still there: see the top of the file.
+    // The name was free. It is the next revision if the one this store built on is still there: see the top of the file.
     if (revision >= 0 && idOf(join(path, revisionName(revision))) !== id) {
-      removeQuietly(target);
-      throw fail(new StoreError('STORE_CONFLICT', `wallet store ${path} has moved past revision ${revision}, which this store held: another writer is using it. Nothing was written; reopen the store`));
+      const newest = revisionsIn(path).at(-1) ?? -1;
+      if (linkOutcome(revision + 1, newest) === 'unknown') {
+        removeQuietly(target);
+        throw fail(
+          new StoreError(
+            'STORE_CONFLICT',
+            `wallet store ${path} has moved past revision ${revision}, which this store held: another writer is using it. This write may or may not have been applied; reopen the store to see`,
+          ),
+        );
+      }
+      // Committed, then built on by the other writer: the write stands, and this store's memory is no longer the state.
+      fail(new StoreError('STORE_CONFLICT', `wallet store ${path} has moved past revision ${revision + 1}, which this store wrote: another writer is using it. Reopen the store`));
+      return true;
     }
     syncDirectory(path);
     entries = next;

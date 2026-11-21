@@ -16,6 +16,7 @@ import { buildSync } from 'esbuild';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PearlWallet, createMemoryStore, parsePearl } from '../src/index.js';
 import type { JsonValue, WalletStore } from '../src/index.js';
+import { linkOutcome } from '../src/internal/node-files.js';
 import { createFileStore } from '../src/store-file.js';
 import { FakeChain, newWallet } from './wallet-chain.js';
 
@@ -318,6 +319,19 @@ describe('file store', () => {
     expect(revisions(path)).toEqual(['0000000000000005.json', '0000000000000006.json']);
     expect(JSON.parse(newest(path)).entries).toEqual({ n: 6 });
     await first.close();
+  });
+});
+
+describe('a file store commit whose base revision is gone', () => {
+  it('stands when the only later revision is the one built on it', () => {
+    // Pruning at revision 8 deletes 6, and nothing can have pruned 7 before it was linked.
+    expect(linkOutcome(7, 8)).toBe('written');
+  });
+
+  it('is not known to stand once two or more revisions have followed', () => {
+    // Either 8 was built on this 7, or the real 7 was pruned long ago and this link took its name.
+    expect(linkOutcome(7, 9)).toBe('unknown');
+    expect(linkOutcome(7, 40)).toBe('unknown');
   });
 });
 
