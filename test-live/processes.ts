@@ -131,6 +131,8 @@ export async function startPearld(options: PearldOptions): Promise<RunningPearld
     options.exe,
     [
       '--regtest',
+      // Started from a service or over SSH, pearld on Windows takes itself for a service and waits for the service controller.
+      ...(process.platform === 'win32' ? ['--nowinservice'] : []),
       `--datadir=${join(options.dir, 'data')}`,
       `--logdir=${join(options.dir, 'logs')}`,
       `--rpcuser=${ADMIN.username}`,

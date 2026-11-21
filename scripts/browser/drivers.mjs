@@ -12,8 +12,8 @@ import { WebSocket } from 'undici';
 const first = (paths) => paths.filter(Boolean).find((p) => existsSync(p));
 
 export const binaries = {
-  chrome: () => first([process.env.CHROME, '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']),
-  firefox: () => first([process.env.FIREFOX, '/Applications/Firefox.app/Contents/MacOS/firefox', '/usr/bin/firefox']),
+  chrome: () => first([process.env.CHROME, '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium', 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe']),
+  firefox: () => first([process.env.FIREFOX, '/Applications/Firefox.app/Contents/MacOS/firefox', '/usr/bin/firefox', 'C:\\Program Files\\Mozilla Firefox\\firefox.exe']),
   'firefox-private': () => binaries.firefox(),
   safari: () => first(['/usr/bin/safaridriver']),
 };

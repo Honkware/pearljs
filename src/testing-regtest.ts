@@ -228,6 +228,8 @@ export async function startRegtest(options: RegtestOptions): Promise<Regtest> {
       options.pearld,
       [
         '--regtest',
+        // Started from a service or over SSH, pearld on Windows takes itself for a service and waits for the service controller.
+        ...(process.platform === 'win32' ? ['--nowinservice'] : []),
         `--datadir=${join(nodeDir, 'data')}`,
         `--logdir=${join(nodeDir, 'logs')}`,
         `--rpcuser=${ADMIN.username}`,
