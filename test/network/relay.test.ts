@@ -32,7 +32,9 @@ const recipient = (): Uint8Array => toOutputScript(account(5).deriveAddress(0), 
 /** An unspent, mature P2TR output somewhere in the last 300 blocks that no mempool transaction spends. */
 async function strangersCoin(): Promise<typeof coin> {
   const tip = await node.getBlockCount();
-  for (let height = tip - 120; height > Math.max(0, tip - 300); height--) {
+  // A rehearsal chain is shorter than 120 blocks: there the search starts at the newest mature coinbase.
+  const newest = tip - 120 >= 1 ? tip - 120 : tip - network.coinbaseMaturity;
+  for (let height = newest; height > Math.max(0, tip - 300); height--) {
     const block = parseBlock(await node.getRawBlock(await node.getBlockHash(height)));
     for (const tx of block.transactions) {
       const txid = transactionId(tx);
