@@ -1,5 +1,5 @@
 // The API reference covers every subpath export: typedoc.json has an entry
-// point for each, and docs/api.md a row naming each, so a module added to
+// point for each, and docs/reference/api.md a row naming each, so a module added to
 // package.json cannot go undocumented.
 
 import { readFileSync } from 'node:fs';
@@ -23,8 +23,8 @@ describe('the API reference', () => {
     expect((JSON.parse(read('../typedoc.json')) as { disableSources?: boolean }).disableSources).toBe(true);
   });
 
-  it('names every subpath in the module table of docs/api.md once', () => {
-    const rows = read('../docs/api.md')
+  it('names every subpath in the module table of docs/reference/api.md once', () => {
+    const rows = read('../docs/reference/api.md')
       .split('\n')
       .filter((line) => line.startsWith('| `'))
       .flatMap((line) => [...line.split('|')[1]!.matchAll(/`([\w-]+)`/g)].map((m) => m[1]!));

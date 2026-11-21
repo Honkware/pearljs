@@ -1,4 +1,6 @@
-// Typechecks every ```ts block in README.md and docs/ against src/.
+// Typechecks every ```ts block in README.md and docs/, folders included, against src/.
+// Given paths, checks only those files; CHECK_DOCS_OUT names another scratch folder in the
+// package, so two runs can go at once.
 //
 // Each block becomes a module whose lines sit where they sit in the Markdown,
 // so tsc's line numbers are the document's. `pearljs` and `pearljs/<module>`
@@ -18,18 +20,25 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { transform } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const out = join(root, '.check-docs');
+const out = join(root, process.env.CHECK_DOCS_OUT ?? '.check-docs');
 // `--show` prints what the executed blocks print, to compare with the comments in them.
 const show = process.argv.includes('--show');
 const tsc = createRequire(import.meta.url).resolve('typescript/bin/tsc');
 
-const guides = existsSync(join(root, 'docs')) ? readdirSync(join(root, 'docs')).filter((name) => name.endsWith('.md')).sort() : [];
-const sources = ['README.md', ...guides.map((name) => `docs/${name}`)];
+const guides = existsSync(join(root, 'docs'))
+  ? readdirSync(join(root, 'docs'), { recursive: true })
+      .map((name) => String(name).replaceAll('\\', '/'))
+      // docs/api/ is TypeDoc's output.
+      .filter((name) => name.endsWith('.md') && !name.startsWith('api/'))
+      .sort()
+  : [];
+const only = process.argv.slice(2).filter((arg) => !arg.startsWith('--'));
+const sources = only.length > 0 ? only : ['README.md', ...guides.map((name) => `docs/${name}`)];
 
 /** The modules of one Markdown file: arrays of lines as long as the file, blank outside their blocks. */
 function modulesOf(lines, file) {
@@ -102,6 +111,7 @@ for (const file of sources) {
   const lines = readFileSync(join(root, file), 'utf8').split('\n');
   modulesOf(lines, file).forEach((moduleLines, n) => {
     const name = `${file}.${n}.ts`;
+    mkdirSync(dirname(join(out, name)), { recursive: true });
     // `export {}` makes every block a module, so top-level await works and names do not collide.
     writeFileSync(join(out, name), `${moduleLines.join('\n')}\nexport {};\n`);
     if (moduleLines.run) runnable.push({ name, file, line: moduleLines.findIndex((text) => text !== '') + 1 });
@@ -131,7 +141,7 @@ const report = (result.stdout + result.stderr)
   .filter((line) => line.trim() !== '')
   // .check-docs/docs/payments.md.2.ts(41,7): error ... -> docs/payments.md:41:7: error ...
   .map((line) => {
-    const match = /^(.*?\.check-docs[\\/])?(.+?\.md)\.\d+\.ts\((\d+),(\d+)\): (.*)$/.exec(line);
+    const match = /^(.*?\.check-docs[\w-]*[\\/])?(.+?\.md)\.\d+\.ts\((\d+),(\d+)\): (.*)$/.exec(line);
     return match ? `${match[2]}:${match[3]}:${match[4]}: ${match[5]}` : line;
   });
 if (result.status !== 0) {

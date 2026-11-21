@@ -1,6 +1,6 @@
 // The encrypted keystore: known answers for scrypt (RFC 7914) and
 // AES-256-GCM (the GCM specification's test cases 13 and 14), a pinned
-// keystore rebuilt from those primitives as docs/wallet.md describes it,
+// keystore rebuilt from those primitives as docs/reference/wallet-storage.md describes it,
 // wrong passphrases, tampering of every part including the set of secrets,
 // passphrase change with a new data key, tags over data kept beside the
 // keystore, the unlock timeout and its bounds, lock during unlock, and

@@ -146,11 +146,11 @@ describe('secrets', () => {
 });
 
 describe('documentation', () => {
-  it('lists every code in docs/errors.md, and no code that does not exist', () => {
+  it('lists every code in docs/reference/errors.md, and no code that does not exist', () => {
     const source = readFileSync(new URL('../src/errors.ts', import.meta.url), 'utf8');
     const union = source.slice(source.indexOf('export type PearlErrorCode'), source.indexOf('/** What toJSON returns'));
     const codes = [...union.matchAll(/'([A-Z0-9_]+)'/g)].map((m) => m[1]!).sort();
-    const page = readFileSync(new URL('../docs/errors.md', import.meta.url), 'utf8');
+    const page = readFileSync(new URL('../docs/reference/errors.md', import.meta.url), 'utf8');
     const documented = [...new Set([...page.matchAll(/^\| `([A-Z0-9_]+)` \|/gm)].map((m) => m[1]!))].sort();
     expect(documented).toEqual(codes);
   });

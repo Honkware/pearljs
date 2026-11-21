@@ -7,3 +7,4 @@ coverage/
 .check-docs/
 docs/api/
 wasm/target/
+.check-docs*/

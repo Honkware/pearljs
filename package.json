@@ -223,7 +223,7 @@
   },
   "files": [
     "dist",
-    "docs/*.md",
+    "docs/**/*.md",
     "examples",
     "README.md",
     "CHANGELOG.md",
