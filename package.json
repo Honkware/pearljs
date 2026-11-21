@@ -264,7 +264,7 @@
     "type": "git",
     "url": "git+https://github.com/Honkware/pearljs.git"
   },
-  "homepage": "https://github.com/Honkware/pearljs#readme",
+  "homepage": "https://nacre.gitbook.io/pearljs",
   "bugs": {
     "url": "https://github.com/Honkware/pearljs/issues"
   },
