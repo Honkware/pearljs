@@ -4,6 +4,7 @@
 //
 //   node scripts/mainnet/send.mjs create                 a new wallet; prints the recovery phrase once
 //   node scripts/mainnet/send.mjs address                the address to fund
+//   node scripts/mainnet/send.mjs restore                the same wallet from its phrase, under a new passphrase
 //   node scripts/mainnet/send.mjs balance
 //   node scripts/mainnet/send.mjs send <address> <PRL>   asks before it signs
 //   node scripts/mainnet/send.mjs status <txid>          confirmations, read from the node
@@ -20,7 +21,7 @@
 //                        reading user when left out
 //
 // The passphrase is asked for and never stored. Build first: npm run build.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 import { createInterface } from 'node:readline';
@@ -84,9 +85,9 @@ function backend(birthday) {
   });
 }
 
-async function open() {
+async function open(chain) {
   if (!existsSync(birthdayFile)) throw new Error(`no wallet in ${dir}; run create first`);
-  return PearlWallet.open({ store: createFileStore(join(dir, 'store')), backend: backend(Number(readFileSync(birthdayFile, 'utf8'))) });
+  return PearlWallet.open({ store: createFileStore(join(dir, 'store')), backend: chain ?? backend(Number(readFileSync(birthdayFile, 'utf8'))) });
 }
 
 const command = process.argv[2];
@@ -104,6 +105,33 @@ if (command === 'create') {
   console.log(`Fund this ${networkName} address: ${await wallet.receiveAddress({ label: 'first' })}`);
   wallet.lock();
   await wallet.close();
+} else if (command === 'restore') {
+  // For a forgotten passphrase: the same wallet again from its recovery phrase, under a new passphrase.
+  if (!existsSync(birthdayFile)) throw new Error(`no wallet in ${dir}; run create first`);
+  // One backend for both wallets: it holds the lock on the filter store.
+  const chain = backend(Number(readFileSync(birthdayFile, 'utf8')));
+  const old = await open(chain);
+  const first = (w) => w.addresses({ account: '0' }).find((entry) => !entry.change && entry.index === 0).address;
+  const expected = first(old);
+  await old.close();
+  const mnemonic = (await ask('Recovery phrase: ', { hidden: true })).trim().split(/\s+/).join(' ');
+  const passphrase = await ask('New passphrase: ', { hidden: true });
+  if (passphrase.length < 8) throw new Error('use a passphrase of at least 8 characters');
+  if ((await ask('Again: ', { hidden: true })) !== passphrase) throw new Error('the passphrases differ');
+  const kept = join(dir, `store.replaced-${Date.now()}`);
+  renameSync(join(dir, 'store'), kept);
+  try {
+    const wallet = await PearlWallet.create({ store: createFileStore(join(dir, 'store'), { create: true }), backend: chain, passphrase, mnemonic });
+    const address = await wallet.receiveAddress({ label: 'first' });
+    wallet.lock();
+    await wallet.close();
+    if (address !== expected) throw new Error(`that phrase gives ${address}, not this wallet's ${expected}`);
+    console.log(`\nRestored ${address} under the new passphrase. The old store is kept in ${kept}.`);
+  } catch (error) {
+    rmSync(join(dir, 'store'), { recursive: true, force: true });
+    renameSync(kept, join(dir, 'store'));
+    throw error;
+  }
 } else if (command === 'address') {
   const wallet = await open();
   console.log(wallet.addresses({ account: '0' }).find((entry) => !entry.change && entry.index === 0).address);
@@ -128,7 +156,15 @@ if (command === 'create') {
     console.log(`Balance  ${formatPearl(wallet.balance().confirmed, 'PRL')} confirmed\n`);
     console.log('A payment that confirms cannot be taken back.');
     if ((await ask(`Type the amount again to send it (${text}): `)) !== text) throw new Error('not sent');
-    await wallet.unlock(await ask('Passphrase: ', { hidden: true }));
+    for (let tries = 1; ; tries++) {
+      try {
+        await wallet.unlock(await ask('Passphrase: ', { hidden: true }));
+        break;
+      } catch (error) {
+        if (error?.code !== 'KEYSTORE_BAD_PASSPHRASE' || tries === 3) throw error;
+        console.log('That is not the passphrase this wallet was made with. Try again.');
+      }
+    }
     const sent = await wallet.send({ recipients, label: 'scripts/mainnet/send.mjs' });
     wallet.lock();
     console.log(`\nsent ${sent.txid}\nfee ${formatPearl(sent.fee, 'PRL')}, ${sent.vsize} vbytes, change ${formatPearl(sent.change, 'PRL')}`);
@@ -145,7 +181,7 @@ if (command === 'create') {
   console.log(entry === undefined ? 'the wallet does not know that transaction' : `${entry.status}${entry.block === null ? '' : ` in block ${entry.block.height}, ${wallet.tip.height - entry.block.height + 1} confirmations`}`);
   await wallet.close();
 } else {
-  console.log('usage: send.mjs create | address | balance | send <address> <PRL> | status <txid>');
+  console.log('usage: send.mjs create | restore | address | balance | send <address> <PRL> | status <txid>');
   process.exitCode = 1;
 }
 rl?.close();
