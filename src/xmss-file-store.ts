@@ -30,12 +30,12 @@
  * @module
  */
 
-import { existsSync, readFileSync, readdirSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { XMSS_LAST_INDEX, XMSS_MAX_SIGNATURES, XMSS_PUBLIC_KEY_LENGTH } from './xmss.js';
 import type { XmssIndexStore } from './xmss.js';
 import { toHex } from './internal/bytes.js';
-import { LockHeldError, acquireLock, errnoOf, removeQuietly, syncDirectory, writeDurably } from './internal/node-files.js';
+import { LockHeldError, acquireLock, errnoOf, removeQuietly, renameSteady, syncDirectory, writeDurably } from './internal/node-files.js';
 import type { FileLockOptions, HeldLock } from './internal/node-files.js';
 
 export type { FileLockOptions } from './internal/node-files.js';
@@ -184,7 +184,7 @@ export function createFileXmssIndexStore(path: string, options: FileXmssIndexSto
       const temporary = `${path}.tmp`;
       try {
         writeDurably(temporary, text, 'w');
-        renameSync(temporary, path);
+        renameSteady(temporary, path);
       } catch (error) {
         removeQuietly(temporary);
         throw error;

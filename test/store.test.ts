@@ -11,6 +11,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, u
 import { hostname } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { buildSync } from 'esbuild';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PearlWallet, createMemoryStore, parsePearl } from '../src/index.js';
@@ -343,7 +344,7 @@ fs.linkSync = (from, to) => {
   return link(from, to);
 };
 syncBuiltinESMExports();
-const { createFileStore } = await import(${JSON.stringify(bundle)});
+const { createFileStore } = await import(${JSON.stringify(pathToFileURL(bundle).href)});
 const store = createFileStore(${JSON.stringify(path)}, ${options.open ?? '{}'});
 ${body}
 `,
@@ -367,7 +368,9 @@ ${body}
 
     const script = child(path, `await store.batch([{ type: 'delete', key: 'meta' }, { type: 'set', key: 'account:0', value: 'half written' }]);`, { crashAtLink: true, open: '{ staleLockAfter: 200 }' });
     const result = spawnSync(process.execPath, [script]);
-    expect(result.signal).toBe('SIGKILL');
+    // Windows has no signals: the process is ended with exit code 1.
+    if (process.platform === 'win32') expect(result.status).toBe(1);
+    else expect(result.signal).toBe('SIGKILL');
     expect(temporaries(path)).toHaveLength(1);
     expect(newest(path)).toBe(before);
 

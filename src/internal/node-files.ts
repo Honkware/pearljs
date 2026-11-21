@@ -126,6 +126,31 @@ export function syncDirectory(directory: string): void {
   }
 }
 
+// Windows refuses to replace a file another process has open, for as long as it is open.
+const WINDOWS_IN_USE = ['EPERM', 'EACCES', 'EBUSY'];
+const pause = new Int32Array(new SharedArrayBuffer(4));
+
+/** Whether a rename failed because Windows found the file in use, after renameSteady's retries. */
+export function inUse(error: unknown): boolean {
+  return process.platform === 'win32' && WINDOWS_IN_USE.includes(errnoOf(error) ?? '');
+}
+
+/**
+ * renameSync, tried again for a quarter of a second while Windows reports
+ * either file in use: a reader holds a file for the moment it reads it.
+ */
+export function renameSteady(from: string, to: string): void {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (error) {
+      if (!inUse(error) || attempt === 9) throw error;
+      Atomics.wait(pause, 0, 0, 5 * (attempt + 1));
+    }
+  }
+}
+
 export function removeQuietly(path: string): void {
   try {
     unlinkSync(path);
@@ -206,7 +231,13 @@ export function acquireLock(lockPath: string, options: FileLockOptions = {}): He
         age > Math.max(staleMs, 5 * owner.heartbeatMs);
       if (options.breakLock !== true && !(stale && options.breakStaleLock === true)) throw new LockHeldError(owner, stale);
       // One step replaces the old lock; of two takers the later rename stands, and the other reads its id below.
-      renameSync(candidate, lockPath);
+      try {
+        renameSteady(candidate, lockPath);
+      } catch (error) {
+        // Still in use: another taker is at the same lock, and this one does not have it.
+        if (inUse(error)) throw new LockHeldError(readOwner(lockPath), false);
+        throw error;
+      }
       if (readOwner(lockPath)?.id !== id) throw new LockHeldError(readOwner(lockPath), false);
       break;
     }
@@ -232,11 +263,14 @@ export function acquireLock(lockPath: string, options: FileLockOptions = {}): He
     held = false;
     clearInterval(timer);
     process.removeListener('exit', release);
+    // A lock that already names someone else is left where it is: moving it would leave its holder without one for a moment.
+    const current = readOwner(lockPath);
+    if (current !== null && current.id !== id) return;
     // Moved aside in one step and only then read, so a look and a removal cannot straddle a takeover;
     // a lock someone took over is theirs now and goes back, unless a newer one is already in its place.
     const aside = `${lockPath}.${randomId()}.tmp`;
     try {
-      renameSync(lockPath, aside);
+      renameSteady(lockPath, aside);
     } catch {
       return;
     }
