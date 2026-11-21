@@ -76,11 +76,11 @@ npm run test:browser
 
 ## Not covered
 
-The vectors and the live tests do not cover the following. The larger gaps, such as the missing audit, are in [Known limits](limits.md).
+The vectors and the live regtest tests leave the following out, because they run on a private chain. Where one of the other runs covers an item, the item says so. The larger gaps, such as the missing audit, are in [Known limits](limits.md).
 
 Chains and nodes:
 
-- Mainnet or testnet chain parameters.
+- Mainnet and testnet chain parameters, such as fork heights and difficulty limits. The [testnet2](verification-networks.md#testnet2) and [mainnet](verification-networks.md#mainnet) runs check those against the real chains.
 - P2P relay between nodes of anything but blocks.
 - `estimatefee` under real fee competition.
 - `rescanprogress`, which pearld sends from a ten-second ticker that no rescan of a regtest chain reaches.
