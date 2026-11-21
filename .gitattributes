@@ -1,0 +1,6 @@
+# Vectors and fixtures are compared byte for byte and the shell scripts run
+# under sh, so a checkout keeps LF on every platform.
+* text=auto eol=lf
+*.wasm binary
+*.bin binary
+*.gz binary
