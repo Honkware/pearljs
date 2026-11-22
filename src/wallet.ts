@@ -1109,7 +1109,7 @@ export class PearlWallet {
    * worker). Needs the wallet unlocked with allowSessionExport. A session
    * opens this wallet's secrets until the passphrase changes, whether the
    * wallet is locked or not: delete the stored copy on lock. See
-   * docs/browsers-and-bundlers.md and docs/security.md.
+   * docs/guides/browsers-and-bundlers.md and docs/concepts/security.md.
    */
   async exportSession(options?: { keyFormat?: 'cryptokey' }): Promise<KeystoreSession<CryptoKey>>;
   async exportSession(options: { keyFormat: 'bytes' }): Promise<KeystoreSession<Uint8Array>>;

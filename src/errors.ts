@@ -12,7 +12,7 @@
  * @module
  */
 
-/** Every code a PearlError can carry. docs/errors.md says when each is thrown. */
+/** Every code a PearlError can carry. docs/reference/errors.md says when each is thrown. */
 export type PearlErrorCode =
   // Addresses
   | 'ADDRESS_MALFORMED'

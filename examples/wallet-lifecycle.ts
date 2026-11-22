@@ -4,8 +4,9 @@
  *
  * The chain is pearljs/testing's SimulatedChain, a chain and node held in
  * memory that checks every transaction as pearld's mempool does. Against
- * pearld, replace it with connectPearld as docs/wallet.md shows, and the
- * in-memory store with createFileStore from pearljs/store-file.
+ * pearld, replace it with connectPearld as docs/guides/wallet-create.md
+ * shows, and the in-memory store with createFileStore from
+ * pearljs/store-file.
  */
 import { PearlWallet, createMemoryStore, formatPearl, parsePearl } from 'pearljs';
 import { SimulatedChain } from 'pearljs/testing';

@@ -6,7 +6,7 @@
  * Runs offline against the simulated chain of pearljs/testing, which also
  * plays the part of the outside world here: it pays, mines and reorganizes.
  * Against pearld, pass a PearldClient to followChain and resolvePrevouts
- * where this passes chain.rpc; docs/explorer.md says which flags it needs.
+ * where this passes chain.rpc; docs/guides/explorer.md says which flags it needs.
  */
 import { blockSubsidy, customNetwork, followChain, formatPearl, inspectTransaction, networks, parsePearl, payFromAccount, resolvePrevouts } from 'pearljs';
 import type { Transaction } from 'pearljs';

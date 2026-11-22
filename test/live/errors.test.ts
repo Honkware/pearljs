@@ -1,4 +1,4 @@
-// The error classes and stable codes of docs/errors.md, raised by a real
+// The error classes and stable codes of docs/reference/errors.md, raised by a real
 // pearld and a real Oyster: every kind of PearlRpcError over HTTPS and over
 // the websocket with the number pearld sends, and the codes that leave a
 // process as JSON. Oyster's are in wallet-errors.test.ts. Policy, replacement, backend and wallet codes are

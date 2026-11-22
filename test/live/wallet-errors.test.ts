@@ -1,4 +1,4 @@
-// The error classes and stable codes of docs/errors.md, raised by a real
+// The error classes and stable codes of docs/reference/errors.md, raised by a real
 // Oyster: its wallet codes, a wrong password, a TLS version it refuses and
 // the batch it answers with one error. Runs after oyster.test.ts, which needs a
 // wallet nobody has asked for an address yet.

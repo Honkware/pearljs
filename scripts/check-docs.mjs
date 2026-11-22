@@ -139,7 +139,7 @@ const result = spawnSync(process.execPath, [tsc, '-p', join(out, 'tsconfig.json'
 const report = (result.stdout + result.stderr)
   .split('\n')
   .filter((line) => line.trim() !== '')
-  // .check-docs/docs/payments.md.2.ts(41,7): error ... -> docs/payments.md:41:7: error ...
+  // .check-docs/docs/guides/payments.md.2.ts(41,7): error ... -> docs/guides/payments.md:41:7: error ...
   .map((line) => {
     const match = /^(.*?\.check-docs[\w-]*[\\/])?(.+?\.md)\.\d+\.ts\((\d+),(\d+)\): (.*)$/.exec(line);
     return match ? `${match[2]}:${match[3]}:${match[4]}: ${match[5]}` : line;
