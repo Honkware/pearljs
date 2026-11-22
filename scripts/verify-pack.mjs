@@ -38,7 +38,7 @@ for (const m of modules) {
 }
 const { dir: packDir, tarball, files } = pack();
 // The guides and examples ship, since the README links to them; the generated API reference does not.
-const allowed = /^(dist\/.+|docs\/([\w-]+\/)?[\w-]+\.md|examples\/.+\.ts|package\.json|README\.md|CHANGELOG\.md|CONTRIBUTING\.md|SECURITY\.md|LICENSE|NOTICE)$/;
+const allowed = /^(dist\/.+|docs\/([\w-]+\/)?[\w-]+\.md|examples\/(.+\.ts|README\.md)|package\.json|README\.md|CHANGELOG\.md|CONTRIBUTING\.md|SECURITY\.md|LICENSE|NOTICE)$/;
 for (const f of files) if (!allowed.test(f)) fail(`unexpected file in package: ${f}`);
 for (const f of ['README.md', 'LICENSE', 'NOTICE', 'CHANGELOG.md', 'docs/README.md', 'dist/index.js', 'dist/index.d.ts']) {
   if (!files.includes(f)) fail(`missing from package: ${f}`);
