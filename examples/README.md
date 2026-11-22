@@ -6,7 +6,7 @@ In a checkout, `npm run build` followed by `npm run examples` compiles all of th
 
 ## Without a node
 
-| Program                                          | What it shows                                                                    |
+| Program                                          | Description                                                                      |
 | ------------------------------------------------ | -------------------------------------------------------------------------------- |
 | [derive-addresses.ts](derive-addresses.ts)       | Receive and change addresses from a mnemonic, and a watch-only account           |
 | [build-payment.ts](build-payment.ts)             | A signed payment with change, then a send of everything that is left             |
@@ -27,7 +27,7 @@ In a checkout, `npm run build` followed by `npm run examples` compiles all of th
 
 These four are compiled by `npm run examples` and run by hand. `send-payment.ts` sends a real transaction on the network it is pointed at, and `wallet-node.ts` does when `PAY_TO` is set, so start with regtest, which is the default.
 
-| Program                                  | What it shows                                                  |
+| Program                                  | Description                                                    |
 | ---------------------------------------- | -------------------------------------------------------------- |
 | [send-payment.ts](send-payment.ts)       | Finding an account's coins, paying an address and broadcasting |
 | [wallet-node.ts](wallet-node.ts)         | A wallet kept in a directory on disk and synced on every run   |

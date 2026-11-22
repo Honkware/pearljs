@@ -49,7 +49,7 @@ An `oyster pq` address is the BIP86 key tweaked with a one-leaf tree, `<xmss_pub
 
 The options set how far and how wide the scan goes:
 
-| Option | Default | What it sets |
+| Option | Default | Description |
 | --- | --- | --- |
 | `gap` | 1000 (`DEFAULT_RECOVERY_GAP`) | Consecutive unused addresses that end a chain's scan, four times Oyster's window |
 | `accounts` | 3 | Accounts scanned, from 0 |

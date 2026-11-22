@@ -18,7 +18,7 @@ Start with [Create a wallet and receive](../guides/wallet-create.md). The other 
 
 A wallet is put together from three parts, and any one of them can be swapped without changing the other two:
 
-| Part | What it is | Choices |
+| Part | Description | Choices |
 | --- | --- | --- |
 | Store | A `WalletStore`, where the wallet keeps its records: addresses and labels, transactions, locked outputs, prepared sends and the index state of XMSS keys | memory, a directory of files, IndexedDB, or a store of your own ([Wallet storage](../reference/wallet-storage.md)) |
 | Keystore | The encrypted record inside the store that holds the recovery phrase, the seed, imported keys and XMSS seeds | absent in a watch-only wallet |
