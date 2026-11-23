@@ -1099,6 +1099,25 @@ describe('transport options', () => {
     expect(attempts).toBe(1);
   });
 
+  it('retries a read that a public endpoint rate limited with a JSON error body', async () => {
+    let attempts = 0;
+    const limited = (async (_url: string, init: RequestInit) => {
+      attempts++;
+      const { id } = JSON.parse(init.body as string) as { id: number };
+      if (attempts === 1) {
+        return new Response(JSON.stringify({ result: null, error: { code: -32029, message: 'rate limited: slow down' }, id }), { status: 429 });
+      }
+      return new Response(fixture('getblockcount').body.replace(/"id":\d+}/, `"id":${id}}`));
+    }) as unknown as typeof fetch;
+    const client = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: limited, retry: { retries: 2, delay: 1 } });
+    expect(await client.getBlockCount()).toBe(321);
+    expect(attempts).toBe(2);
+
+    attempts = 0;
+    const plain = new PearldClient({ url: 'https://127.0.0.1:18334', fetch: limited });
+    expect(await rejection(plain.getBlockCount())).toMatchObject({ kind: 'http', status: 429 });
+  });
+
   it('sends again after a connection that timed out before it opened, and not after one that was reset', async () => {
     let attempts = 0;
     const failing = (cause: object) =>

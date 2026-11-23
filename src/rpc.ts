@@ -364,8 +364,9 @@ export function httpTransport(options: HttpTransportOptions): RpcTransport {
           const notSent = !timedOut && !controller.signal.aborted && (inCauses(err, markedNotSent) || (ownFetch && inCauses(err, connectTimeout)));
           throw new PearlRpcError('network', method, message, { cause: err, notSent });
         }
-        // A server that answers an RPC error with an HTTP error status still gets its error read.
-        if (!response.ok && !holdsErrorReply(text)) {
+        // A server that answers an RPC error with an HTTP error status still gets its error read. A 429 or 503 turned
+        // the request away unread, as public endpoints do with a JSON error body, so it stays an HTTP error to retry.
+        if (!response.ok && (response.status === 429 || response.status === 503 || !holdsErrorReply(text))) {
           throw new PearlRpcError('http', method, httpMessage(response, text, origin), { status: response.status });
         }
         return text;
@@ -2242,7 +2243,8 @@ function httpMessage(response: Response, text: string, origin: string): string {
     return `${origin} serves TLS; use an https:// URL (HTTP 400)`;
   }
   if (status === 413) return `request too large for ${origin} (HTTP 413)`;
-  if (status === 429 || status === 503) return `${origin} has too many RPC clients connected (HTTP ${status})`;
+  if (status === 429) return `${origin} is limiting the rate of requests (HTTP 429)`;
+  if (status === 503) return `${origin} has too many RPC clients connected (HTTP 503)`;
   const detail = text.trim().split('\n')[0] || response.statusText;
   return `HTTP ${status} from ${origin}${detail ? `: ${detail.slice(0, 120)}` : ''}`;
 }
