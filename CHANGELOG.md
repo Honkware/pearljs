@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2 (2026-11-23)
+
+- The package description names the Pearl blockchain, the keywords cover it, and the homepage is the docs at pearljs.gitbook.io.
+
 ## 0.1.1 (2026-11-22)
 
 - `PearldClient` retries a read that a server rate limited with HTTP 429 or turned away with 503 when the reply carries a JSON-RPC error body, as public endpoints send. Before, such a reply was an RPC error and was never retried.
