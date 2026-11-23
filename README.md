@@ -57,7 +57,7 @@ console.log(await node.getBlockCount());
 - [Troubleshooting](docs/reference/troubleshooting.md)
 - [API reference](docs/reference/api.md), generated with `npm run docs`
 
-The [documentation index](docs/README.md) lists every page, and the same docs are online at [nacre.gitbook.io/pearljs](https://nacre.gitbook.io/pearljs).
+The [documentation index](docs/README.md) lists every page, and the same docs are online at [pearljs.gitbook.io/pearljs](https://pearljs.gitbook.io/pearljs).
 
 ## Examples
 
