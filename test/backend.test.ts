@@ -535,4 +535,12 @@ describe('the limited RPC user', () => {
     expect(unspent.sent.filter((s) => s.body.method === 'gettxspendingprevout')).toHaveLength(1);
     expect(sent.filter((s) => s.body.method === 'gettxspendingprevout')).toHaveLength(1);
   });
+
+  it('finds a mempool spend from the address index when the server does not know gettxspendingprevout', async () => {
+    const { client, sent } = indexedPearld({ gettxout: 'backend-gettxout-a1', gettxspendingprevout: 'method-not-found' });
+    const backend = pearldBackend(client, { network });
+    expect(await backend.getSpendStatus({ txid: txids.a1, vout: 0 })).toEqual({ status: 'spent', spender: txids.m1, confirmed: false });
+    expect(await backend.getSpendStatus({ txid: txids.a1, vout: 0 })).toEqual({ status: 'spent', spender: txids.m1, confirmed: false });
+    expect(sent.filter((s) => s.body.method === 'gettxspendingprevout')).toHaveLength(1);
+  });
 });

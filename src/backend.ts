@@ -895,8 +895,9 @@ async function nodeSpendStatus(
 // when pearld will not say.
 type MempoolSpender = (outpoint: OutPointParam) => Promise<string | null | undefined>;
 
-// gettxspendingprevout until pearld refuses it to a limited user; then
-// undefined without asking again.
+// gettxspendingprevout until the server refuses it, as pearld does to a
+// limited user and public endpoints do to everyone; then undefined without
+// asking again.
 function mempoolSpends(node: PearldRpc): MempoolSpender {
   let allowed = true;
   return async ({ txid, vout }) => {
@@ -905,7 +906,7 @@ function mempoolSpends(node: PearldRpc): MempoolSpender {
       const spender = (await node.getTxSpendingPrevOut([{ txid, vout }]))[0]?.spendingtxid;
       return spender === undefined || spender === '' ? null : spender;
     } catch (err) {
-      if (!isLimitedUserRefusal(err)) throw err;
+      if (!isLimitedUserRefusal(err) && !(err instanceof PearlRpcError && err.rpcCode === RPC_ERROR_CODES.METHOD_NOT_FOUND)) throw err;
       allowed = false;
       return undefined;
     }
