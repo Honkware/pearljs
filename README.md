@@ -1,6 +1,6 @@
 # pearljs
 
-A TypeScript library for [Pearl](https://github.com/pearl-research-labs/pearl), for Node.js and browsers.
+A TypeScript library for the [Pearl](https://github.com/pearl-research-labs/pearl) blockchain (PRL), for Node.js and browsers.
 
 ## Features
 

@@ -1,7 +1,7 @@
 {
   "name": "pearljs",
   "version": "0.1.1",
-  "description": "A TypeScript library for Pearl: keys and addresses, payments, P2MR and XMSS, PSBT, and clients for the pearld node and the Oyster wallet",
+  "description": "A TypeScript library for the Pearl blockchain (PRL): keys and addresses, payments, P2MR and XMSS, PSBT, and clients for the pearld node and the Oyster wallet",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -251,6 +251,14 @@
   },
   "keywords": [
     "pearl",
+    "pearl-blockchain",
+    "prl",
+    "pearld",
+    "oyster",
+    "bitcoin",
+    "utxo",
+    "wallet",
+    "sdk",
     "taproot",
     "psbt",
     "p2mr",
