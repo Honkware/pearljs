@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 (2026-11-22)
+
+- `PearldClient` retries a read that a server rate limited with HTTP 429 or turned away with 503 when the reply carries a JSON-RPC error body, as public endpoints send. Before, such a reply was an RPC error and was never retried.
+- `pearldBackend` finds an unconfirmed spend from the address index when the server does not know `gettxspendingprevout`, as it already did for pearld's limited user.
+- The docs describe reading mainnet through a public RPC endpoint, with the settings its rate limit needs. [Choosing a backend](docs/start/choosing-a-backend.md#use-a-public-rpc-endpoint)
+
 ## 0.1.0 (2026-11-21)
 
 The first version. This lists what the library does.
